@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Posts Collection
+    match /posts/{postId} {
+      allow read, write: if true;
+    }
+
+    // Comments Collection
+    match /comments/{commentId} {
+      allow read, write: if true;
+    }
+
+    // Marketplace Listings
+    match /marketplace_approved/{itemId} {
+      allow read, write: if true;
+    }
+
+    match /marketplace_pending/{itemId} {
+      allow read, write: if true;
+    }
+
+    match /marketplace_items/{itemId} {
+      allow read, write: if true;
+    }
+
+    // Verification Requests & Candidates
+    match /verification_requests/{requestId} {
+      allow read, write: if true;
+    }
+
+    match /verif_candidates/{candidateId} {
+      allow read, write: if true;
+    }
+
+    // Reports Collection
+    match /reports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // Direct Messages & Admin Inquiries
+    match /direct_messages/{messageId} {
+      allow read, write: if true;
+    }
+
+    // Chat Reports
+    match /chat_reports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // Chat Restrictions
+    match /chat_restrictions/{restrictionId} {
+      allow read, write: if true;
+    }
+
+    // Chat Conversations
+    match /chat_conversations/{convId} {
+      allow read, write: if true;
+    }
+
+    // Follows Collection
+    match /follows/{followId} {
+      allow read, write: if true;
+    }
+
+    // Admins Collection
+    match /admins/{adminId} {
+      allow read, write: if true;
+    }
+
+    // Chat Groups Collection
+    match /chat_groups/{groupId} {
+      allow read, write: if true;
+    }
+
+    // Global document fallback to prevent unhandled listener exceptions
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
+

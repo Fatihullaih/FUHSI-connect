@@ -1,0 +1,215 @@
+{
+  "entities": {
+    "users": {
+      "title": "users",
+      "description": "Registered FUHSI Connect student and admin accounts",
+      "properties": {
+        "id": { "type": "string" },
+        "nickname": { "type": "string" },
+        "realName": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "matricNumber": { "type": "string" },
+        "department": { "type": "string" },
+        "level": { "type": "string" },
+        "gender": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "emergencyHomePhone": { "type": "string" },
+        "emergencyContactName": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "isApproved": { "type": "boolean" },
+        "isVerified": { "type": "boolean" },
+        "isDeclined": { "type": "boolean" },
+        "isAdmin": { "type": "boolean" },
+        "reputationScore": { "type": "number" },
+        "badgeType": { "type": "string" },
+        "badgeTitle": { "type": "string" },
+        "savedPassword": { "type": "string" }
+      },
+      "required": ["id", "nickname"]
+    },
+    "posts": {
+      "title": "posts",
+      "description": "Feed community posts, polls, and announcements",
+      "properties": {
+        "id": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorNickname": { "type": "string" },
+        "authorAvatar": { "type": "string" },
+        "authorIsVerified": { "type": "boolean" },
+        "content": { "type": "string" },
+        "category": { "type": "string" },
+        "likes": { "type": "array", "items": { "type": "string" } },
+        "bookmarks": { "type": "array", "items": { "type": "string" } },
+        "commentsCount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "content"]
+    },
+    "comments": {
+      "title": "comments",
+      "description": "Post replies and comments",
+      "properties": {
+        "id": { "type": "string" },
+        "postId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorNickname": { "type": "string" },
+        "authorAvatar": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "postId", "content"]
+    },
+    "marketplace_approved": {
+      "title": "marketplace_approved",
+      "description": "Approved Marketplace campus trade listings",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "price": { "type": "number" },
+        "sellerName": { "type": "string" },
+        "sellerNickname": { "type": "string" },
+        "sellerPhone": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "price"]
+    },
+    "marketplace_pending": {
+      "title": "marketplace_pending",
+      "description": "Pending marketplace item submissions awaiting trade desk approval",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "price": { "type": "number" },
+        "sellerName": { "type": "string" },
+        "sellerNickname": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "title"]
+    },
+    "marketplace_items": {
+      "title": "marketplace_items",
+      "description": "Marketplace campus items",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "price": { "type": "number" },
+        "sellerName": { "type": "string" },
+        "sellerNickname": { "type": "string" },
+        "sellerPhone": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "price"]
+    },
+    "reports": {
+      "title": "reports",
+      "description": "Moderation reports submitted by students",
+      "properties": {
+        "id": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetId": { "type": "string" },
+        "reason": { "type": "string" },
+        "reporterNickname": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "targetId", "reason"]
+    },
+    "verif_candidates": {
+      "title": "verif_candidates",
+      "description": "Verification candidates pending admin approval",
+      "properties": {
+        "id": { "type": "string" },
+        "userNickname": { "type": "string" },
+        "badgeType": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "userNickname"]
+    },
+    "verification_requests": {
+      "title": "verification_requests",
+      "description": "Student badge verification requests",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userNickname": { "type": "string" },
+        "badgeType": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userNickname", "status"]
+    },
+    "direct_messages": {
+      "title": "direct_messages",
+      "description": "Real-time direct chat messages and student conversations filtered by conversationId",
+      "properties": {
+        "id": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "senderNickname": { "type": "string" },
+        "receiverNickname": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "itemId": { "type": "string" },
+        "itemTitle": { "type": "string" },
+        "itemPrice": { "type": "number" },
+        "meetupPoint": { "type": "string" },
+        "isSafetyWarning": { "type": "boolean" },
+        "violationNotice": { "type": "string" }
+      },
+      "required": ["id", "conversationId", "senderNickname", "receiverNickname", "text"]
+    },
+    "chat_reports": {
+      "title": "chat_reports",
+      "description": "Moderation reports submitted by students for chat conversations",
+      "properties": {
+        "id": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "reportedNickname": { "type": "string" },
+        "reporterNickname": { "type": "string" },
+        "reason": { "type": "string" },
+        "notes": { "type": "string" },
+        "messageSnippet": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "conversationId", "reportedNickname", "reporterNickname", "reason"]
+    },
+    "chat_restrictions": {
+      "title": "chat_restrictions",
+      "description": "Active temporary chat restrictions applied to rule-violating accounts",
+      "properties": {
+        "userNickname": { "type": "string" },
+        "isRestricted": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "restrictedAt": { "type": "string" },
+        "restrictedUntil": { "type": "string" },
+        "durationDays": { "type": "number" }
+      },
+      "required": ["userNickname", "isRestricted"]
+    },
+    "chat_groups": {
+      "title": "chat_groups",
+      "description": "Student peer and study chat groups with admin roles, member lists, and group settings",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "avatarKey": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "adminNicknames": { "type": "array", "items": { "type": "string" } },
+        "memberNicknames": { "type": "array", "items": { "type": "string" } },
+        "lastMessage": { "type": "string" },
+        "lastMessageSender": { "type": "string" },
+        "lastTimestamp": { "type": "string" },
+        "unreadCount": { "type": "number" },
+        "isDeleted": { "type": "boolean" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "createdBy", "adminNicknames", "memberNicknames"]
+    }
+  }
+}

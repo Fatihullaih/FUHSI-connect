@@ -1,0 +1,6 @@
+{
+  "name": "FUHSI Connect",
+  "description": "Campus student network for FUHSI with nickname-only profiles, real-time peer chats with automated privacy filtering, campus hub, and moderation controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
