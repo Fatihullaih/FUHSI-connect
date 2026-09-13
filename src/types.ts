@@ -40,6 +40,8 @@ export interface UserProfile {
   strikes?: number;
   isBanned?: boolean;
   privacyMode?: PrivacyMode;
+  isPrivate?: boolean;
+  defaultPostAudience?: 'everyone' | 'followers';
   password?: string;
   savedPassword?: string;
   lastActiveAt?: string;
@@ -137,6 +139,7 @@ export interface Post {
   flagReason?: string;
   isQuarantined?: boolean;
   status?: PostStatus;
+  audience?: 'everyone' | 'followers';
   updatedAt?: string;
   isEdited?: boolean;
 }

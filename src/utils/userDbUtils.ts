@@ -216,6 +216,45 @@ export function sanitizeModulaProfile<T extends Partial<UserProfile>>(user: T): 
   };
 }
 
+/**
+ * Format the user's join date accurately based on their joinedDate, creation timestamp in id (usr_<timestamp>), or current date.
+ */
+export function formatJoinDate(user?: Partial<UserProfile> | null): string {
+  if (!user) {
+    return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date());
+  }
+
+  // If user has a valid joinedDate that isn't the stale placeholder 'Jul 2026'
+  if (user.joinedDate && user.joinedDate !== 'Jul 2026') {
+    return user.joinedDate;
+  }
+
+  // If user.id contains a timestamp (e.g. usr_17734...)
+  if (user.id && user.id.startsWith('usr_')) {
+    const rawTs = user.id.replace('usr_', '');
+    const ts = parseInt(rawTs, 10);
+    if (!isNaN(ts) && ts > 1600000000000 && ts < 2500000000000) {
+      return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date(ts));
+    }
+  }
+
+  // If user has createdAt
+  if ((user as any).createdAt) {
+    const d = new Date((user as any).createdAt);
+    if (!isNaN(d.getTime())) {
+      return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(d);
+    }
+  }
+
+  // For pre-existing admin account
+  if (user.id === 'usr_admin_modula' || user.nickname === '@modula') {
+    return 'Sep 2024';
+  }
+
+  // Default to current actual date
+  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date());
+}
+
 export const DEFAULT_USERS_LIST: UserProfile[] = [
   {
     id: 'usr_admin_modula',

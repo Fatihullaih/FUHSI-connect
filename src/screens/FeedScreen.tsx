@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Post, Comment, PostCategory, UserProfile } from '../types';
+import { Post, Comment, PostCategory, UserProfile, FollowRecord } from '../types';
 import { PostCard } from '../components/PostCard';
 import { generateMorePosts, isDemoPost } from '../utils/postGenerator';
 import { getTimestampMs } from '../utils/dateUtils';
+import { isUserFollowing, normalizeHandle, getStoredFollows } from '../utils/followUtils';
+import { findUserByNickname } from '../utils/userDbUtils';
 import { 
   Loader2,
   RefreshCw,
@@ -16,6 +18,7 @@ interface FeedScreenProps {
   userProfile?: UserProfile | null;
   user?: UserProfile | null;
   posts: Post[];
+  allFollows?: FollowRecord[];
   selectedFilter?: string;
   onFilterSelect?: (filter: string) => void;
   onLikeClick?: (post: Post) => void;
@@ -41,6 +44,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   userProfile,
   user,
   posts = [],
+  allFollows = [],
   onLikeClick,
   onBookmarkClick,
   onCommentClick,
@@ -144,9 +148,36 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   // Combine initial posts and extra loaded posts (excluding any demo posts)
   const allCombinedPosts = [...posts, ...extraPosts].filter((post) => !isDemoPost(post));
 
-  // Filter removed posts and sort chronologically (newest first)
+  // Filter removed posts, apply audience/privacy rules, and sort chronologically (newest first)
+  const currentUserObj = userProfile || user;
+  const currentNick = currentUserObj?.nickname;
+
   const activePosts = allCombinedPosts
-    .filter((post) => post.status !== 'Removed')
+    .filter((post) => {
+      if (post.status === 'Removed') return false;
+
+      // Author and admins can always see the post
+      const isMyPost = Boolean(
+        currentNick &&
+        post.authorNickname &&
+        normalizeHandle(post.authorNickname) === normalizeHandle(currentNick)
+      );
+      if (isMyPost || currentUserObj?.isAdmin) return true;
+
+      // Check if post author account is private or post audience is followers-only
+      const authorUser = findUserByNickname(post.authorNickname);
+      const isAuthorPrivate = Boolean(authorUser?.isPrivate);
+      const isFollowersOnly = post.audience === 'followers' || isAuthorPrivate;
+
+      if (isFollowersOnly) {
+        if (!currentNick) return false;
+        const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
+        const isFollowing = isUserFollowing(currentNick, post.authorNickname, effectiveFollows);
+        return isFollowing;
+      }
+
+      return true;
+    })
     .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
 
   return (

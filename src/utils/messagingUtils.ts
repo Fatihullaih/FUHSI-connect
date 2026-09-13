@@ -1128,3 +1128,54 @@ export function deleteDirectMessageForEveryone(
 
   return updatedMsg;
 }
+
+/**
+ * Clear all chat history in a conversation or group strictly for the current user.
+ * This marks all matching messages as deleted for this user only, leaving other members' chat history untouched.
+ */
+export function clearConversationHistoryForUser(
+  conversationOrGroupId: string,
+  userNickname: string
+): boolean {
+  if (!conversationOrGroupId || !userNickname) return false;
+  const cleanUser = normalizeNickname(userNickname);
+  if (!cleanUser) return false;
+
+  try {
+    const allMessages = getStoredDirectMessages();
+    let changed = false;
+
+    const updatedMessages = allMessages.map((m) => {
+      const isTarget =
+        m.conversationId === conversationOrGroupId ||
+        m.groupId === conversationOrGroupId ||
+        (m.senderNickname && m.receiverNickname && getConversationId(m.senderNickname, m.receiverNickname) === conversationOrGroupId);
+
+      if (isTarget) {
+        const deletedFor = Array.isArray(m.deletedForUsers) ? [...m.deletedForUsers] : [];
+        if (!deletedFor.some((u) => normalizeNickname(u) === cleanUser)) {
+          deletedFor.push(cleanUser);
+          changed = true;
+          const updatedMsg = { ...m, deletedForUsers: deletedFor };
+          saveDirectMessageToFirestore(updatedMsg).catch(console.error);
+          return updatedMsg;
+        }
+      }
+      return m;
+    });
+
+    if (changed) {
+      localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
+      pushServerDbSync({ directMessages: updatedMessages } as any).catch(console.error);
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated'));
+      }
+    }
+    return true;
+  } catch (err) {
+    console.error('Error clearing chat history for user:', err);
+    return false;
+  }
+}
+

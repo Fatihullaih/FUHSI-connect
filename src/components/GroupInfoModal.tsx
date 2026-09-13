@@ -3,7 +3,8 @@ import { UserProfile, ChatGroup } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { normalizeNickname } from '../utils/messagingUtils';
+import { normalizeNickname, clearConversationHistoryForUser } from '../utils/messagingUtils';
+import { optimizeAvatarImage } from '../utils/imageUtils';
 import { 
   isUserGroupAdmin, 
   isUserGroupCreator, 
@@ -146,24 +147,47 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = reader.result as string;
-      setEditAvatarUrl(result);
-      if (!isEditingInfo) {
-        try {
-          const updated = updateGroupInfo(group.id, { avatarUrl: result }, myNickname);
+      try {
+        const cropped = await optimizeAvatarImage(result, 400, 0.85);
+        setEditAvatarUrl(cropped);
+        if (!isEditingInfo) {
+          const updated = updateGroupInfo(group.id, { avatarUrl: cropped }, myNickname);
           if (updated) {
             onGroupUpdated(updated);
             showToast('Group photo updated', 'success');
           }
-        } catch (err: any) {
-          showToast(err?.message || 'Failed to update photo', 'error');
+        }
+      } catch {
+        setEditAvatarUrl(result);
+        if (!isEditingInfo) {
+          try {
+            const updated = updateGroupInfo(group.id, { avatarUrl: result }, myNickname);
+            if (updated) {
+              onGroupUpdated(updated);
+              showToast('Group photo updated', 'success');
+            }
+          } catch (err: any) {
+            showToast(err?.message || 'Failed to update photo', 'error');
+          }
         }
       }
     };
     reader.readAsDataURL(file);
     if (e.target) {
       e.target.value = '';
+    }
+  };
+
+  // Clear Chat History for current user only
+  const handleClearHistory = () => {
+    if (!confirm('Clear all messages in this group on your device? Other group members will still keep their chat history.')) return;
+    try {
+      clearConversationHistoryForUser(group.id, myNickname);
+      showToast('Group chat history cleared on your device', 'success');
+    } catch (err: any) {
+      showToast('Failed to clear chat history', 'error');
     }
   };
 
@@ -580,8 +604,17 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
             </div>
           </div>
 
-          {/* Group Actions: Leave Group / Delete Group */}
+          {/* Group Actions: Clear History / Leave Group / Delete Group */}
           <div className="pt-2 border-t border-slate-100 space-y-2">
+            <button
+              type="button"
+              onClick={handleClearHistory}
+              className="w-full py-2.5 px-3 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-black flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <Trash2 size={14} className="text-slate-500" />
+              <span>Clear Chat History (My end only)</span>
+            </button>
+
             <button
               type="button"
               onClick={handleLeaveGroup}

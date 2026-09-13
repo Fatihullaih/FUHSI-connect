@@ -35,9 +35,11 @@ import {
   Monitor,
   GraduationCap,
   ChevronRight,
-  RefreshCw
+  RefreshCw,
+  Globe
 } from 'lucide-react';
 import { ThemeMode, getStoredTheme, setStoredTheme } from '../utils/themeUtils';
+import { formatJoinDate } from '../utils/userDbUtils';
 import { AvatarIcon } from '../components/AvatarIcon';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { PostCard } from '../components/PostCard';
@@ -95,6 +97,7 @@ interface ProfileScreenProps {
   onEditPost?: (postId: string, newContent: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onToggleFollow?: (targetNickname: string) => void;
+  onUpdatePrivacySettings?: (isPrivate: boolean, defaultPostAudience: 'everyone' | 'followers') => void;
   onLogout?: () => void;
   onDeleteAccount?: () => Promise<void> | void;
   onClose?: () => void;
@@ -119,6 +122,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onEditPost,
   onDeleteComment,
   onToggleFollow,
+  onUpdatePrivacySettings,
   onLogout,
   onDeleteAccount,
   onClose,
@@ -160,6 +164,38 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   // Theme Mode State (Persisted in Local Storage)
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredTheme());
+
+  // Privacy & Audience Settings State
+  const [isAccountPrivate, setIsAccountPrivate] = useState<boolean>(Boolean(userProfile?.isPrivate));
+  const [defaultPostAudience, setDefaultPostAudience] = useState<'everyone' | 'followers'>(
+    userProfile?.defaultPostAudience || 'everyone'
+  );
+  const [privacySavedNotice, setPrivacySavedNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (userProfile) {
+      setIsAccountPrivate(Boolean(userProfile.isPrivate));
+      setDefaultPostAudience(userProfile.defaultPostAudience || 'everyone');
+    }
+  }, [userProfile?.isPrivate, userProfile?.defaultPostAudience]);
+
+  const handleToggleAccountPrivacy = (newVal: boolean) => {
+    setIsAccountPrivate(newVal);
+    if (onUpdatePrivacySettings) {
+      onUpdatePrivacySettings(newVal, defaultPostAudience);
+    }
+    setPrivacySavedNotice(newVal ? 'Account is now Private (followers only).' : 'Account is now Public (visible to all).');
+    setTimeout(() => setPrivacySavedNotice(null), 3000);
+  };
+
+  const handleSetDefaultAudience = (audience: 'everyone' | 'followers') => {
+    setDefaultPostAudience(audience);
+    if (onUpdatePrivacySettings) {
+      onUpdatePrivacySettings(isAccountPrivate, audience);
+    }
+    setPrivacySavedNotice(audience === 'followers' ? 'Default post audience set to Followers Only.' : 'Default post audience set to Everyone.');
+    setTimeout(() => setPrivacySavedNotice(null), 3000);
+  };
 
   useEffect(() => {
     const handleThemeEvent = (e: any) => {
@@ -282,7 +318,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
 
   const pointsEarned = calculateUserPoints(myNickname, userProfile, allPosts, allComments);
-  const joinedDate = userProfile?.joinedDate || 'Jul 2026';
+  const joinedDate = formatJoinDate(userProfile);
 
   // Dynamic real Following & Followers counts (Calculated from actual stored accounts)
   const myFollowersCount = useMemo(() => getFollowersCount(normMyNick, allFollows), [normMyNick, allFollows]);
@@ -839,6 +875,119 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     </div>
                   </div>
 
+                  {/* 🛡️ Privacy & Audience Restrictions */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3.5">
+                        <div className="w-11 h-11 rounded-2xl bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 flex items-center justify-center text-lg shrink-0 border border-teal-200/60 dark:border-teal-800/60">
+                          <Lock size={19} className="text-teal-600 dark:text-teal-400" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            Privacy & Visibility
+                          </h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                            Control who can view your profile and posts
+                          </p>
+                        </div>
+                      </div>
+                      {isAccountPrivate ? (
+                        <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                          <Lock size={11} />
+                          <span>Private</span>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                          Public
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Private Account Toggle */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                            Private Account
+                          </span>
+                          <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1.5 py-0.2 rounded font-semibold">
+                            TikTok / IG style
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                          When turned on, only your followers can view your threads, replies, and activities.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={isAccountPrivate}
+                        onClick={() => handleToggleAccountPrivacy(!isAccountPrivate)}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                          isAccountPrivate ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-600'
+                        }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                            isAccountPrivate ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Default Post Audience */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                          Default Post Audience
+                        </span>
+                        <span className="text-[11px] text-teal-700 dark:text-teal-400 font-bold capitalize">
+                          {defaultPostAudience === 'followers' ? 'Followers Only' : 'Everyone'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Choose who sees your new posts by default. You can also customize this on every new thread.
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleSetDefaultAudience('everyone')}
+                          className={`py-2 px-3 rounded-xl border flex items-center justify-center gap-2 transition-all text-xs font-bold cursor-pointer ${
+                            defaultPostAudience === 'everyone'
+                              ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
+                              : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <Globe size={14} className={defaultPostAudience === 'everyone' ? 'text-teal-600 dark:text-teal-400' : 'text-slate-400'} />
+                          <span>Everyone</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSetDefaultAudience('followers')}
+                          className={`py-2 px-3 rounded-xl border flex items-center justify-center gap-2 transition-all text-xs font-bold cursor-pointer ${
+                            defaultPostAudience === 'followers'
+                              ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
+                              : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <Users size={14} className={defaultPostAudience === 'followers' ? 'text-teal-600 dark:text-teal-400' : 'text-slate-400'} />
+                          <span>Followers Only</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {privacySavedNotice && (
+                      <div className="p-2.5 rounded-xl bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-200">
+                        <CheckCircle2 size={15} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                        <span>{privacySavedNotice}</span>
+                      </div>
+                    )}
+                  </div>
+
                   {/* 🔐 Get Verified (Student) OR 🎓 Subscribe to Student Account (Guest) */}
                   {/* Only ONE appears depending on account type */}
                   {!isGuest ? (
@@ -1070,7 +1219,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                         <div className="flex items-center gap-2">
                           <label className={`py-2 px-3 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors ${isProcessingAvatar ? 'bg-teal-400 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700 active:bg-teal-800'}`}>
                             {isProcessingAvatar ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
-                            <span>{isProcessingAvatar ? 'Uploading...' : 'Upload Photo'}</span>
+                            <span>{isProcessingAvatar ? 'Uploading...' : 'Upload'}</span>
                             <input 
                               type="file" 
                               accept="image/*" 

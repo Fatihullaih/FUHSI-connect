@@ -331,6 +331,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         isBanned: false,
         savedPassword: password.trim(),
         password: password.trim(),
+        joinedDate: new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date()),
+        createdAt: new Date().toISOString(),
       };
 
       // Clear any tombstone if user is registering afresh
@@ -370,6 +372,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
+    setIsSubmitting(true);
+
     const searchKey = loginIdentifier.trim().toLowerCase();
 
     // 1. Executive Admin account handle (@modula) with password (ibraheem)
@@ -396,38 +400,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       };
 
       try {
-        // Query latest central database to ensure admin record is fresh
-        const serverDb = await fetchServerDb();
-        if (serverDb && Array.isArray(serverDb.users)) {
-          const stored = localStorage.getItem('fuhsi_users_db');
-          const localUsers = stored ? JSON.parse(stored) : [];
-          const merged = mergeUsers(localUsers, serverDb.users);
-          localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
-
-          const found = merged.find((u) => u.nickname?.toLowerCase() === '@modula' || u.id === 'usr_admin_modula');
-          if (found) {
-            modulaAdmin = sanitizeModulaProfile({ ...modulaAdmin, ...found });
-          }
-        }
-        // Check if there is an approved verification request in fuhsi_verifications_db
-        const verifStr = localStorage.getItem('fuhsi_verifications_db');
-        if (verifStr) {
-          const verifs: any[] = JSON.parse(verifStr);
-          const appVerif = verifs.find(
-            (v) =>
-              v.status === 'APPROVED' &&
-              (v.applicantNickname?.toLowerCase().replace(/^@/, '') === 'modula' ||
-                v.applicantNickname?.toLowerCase() === '@modula')
-          );
-          if (appVerif) {
-            modulaAdmin = {
-              ...modulaAdmin,
-              isVerified: true,
-              verificationStatus: 'approved' as const,
-              badgeType: appVerif.assignedBadgeType || modulaAdmin.badgeType || 'GOLD',
-              badgeTitle: appVerif.assignedBadgeTitle || modulaAdmin.badgeTitle || 'Official Admin',
-            };
-          }
+        const stored = localStorage.getItem('fuhsi_users_db');
+        const localUsers = stored ? JSON.parse(stored) : [];
+        const found = localUsers.find((u: any) => u.nickname?.toLowerCase() === '@modula' || u.id === 'usr_admin_modula');
+        if (found) {
+          modulaAdmin = sanitizeModulaProfile({ ...modulaAdmin, ...found });
         }
       } catch (err) {
         console.error(err);
@@ -435,17 +412,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       modulaAdmin = sanitizeModulaProfile(modulaAdmin);
       localStorage.setItem('fuhsi_active_user', JSON.stringify(modulaAdmin));
+      setIsSubmitting(false);
       onLoginSuccess(modulaAdmin);
       onClose();
       return;
     }
 
     if (searchKey === '@modula' || searchKey === 'modula') {
+      setIsSubmitting(false);
       setErrorMessage('Incorrect password for Executive Admin (@modula).');
       return;
     }
 
-    // 2. Search saved users database first
+    // 2. Search local users database first for instantaneous login
     let matchedUser: any = null;
     try {
       const stored = localStorage.getItem('fuhsi_users_db');
@@ -466,49 +445,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       matchedUser = null;
     }
 
-    // Always fetch latest authoritative central database data during login to guarantee freshest profile info across all devices & browsers
-    try {
-      const [serverDb, firestoreUsers] = await Promise.all([
-        fetchServerDb().catch(() => null),
-        fetchUsersFromFirestore().catch(() => []),
-      ]);
+    // If not found locally, query central DB with a fast timeout
+    if (!matchedUser) {
+      try {
+        const fetchTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
+        const [serverDb, firestoreUsers] = await Promise.race([
+          Promise.all([
+            fetchServerDb().catch(() => null),
+            fetchUsersFromFirestore().catch(() => []),
+          ]),
+          fetchTimeout.then(() => [null, []]),
+        ]) as any;
 
-      const incomingCentralUsers = [
-        ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
-        ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
-      ];
+        const incomingCentralUsers = [
+          ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
+          ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
+        ];
 
-      if (incomingCentralUsers.length > 0) {
-        const stored = localStorage.getItem('fuhsi_users_db');
-        const localUsers = stored ? JSON.parse(stored) : [];
-        const merged = mergeUsers(localUsers, incomingCentralUsers);
-        localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
+        if (incomingCentralUsers.length > 0) {
+          const stored = localStorage.getItem('fuhsi_users_db');
+          const localUsers = stored ? JSON.parse(stored) : [];
+          const merged = mergeUsers(localUsers, incomingCentralUsers);
+          localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
 
-        const refreshedUser = merged.find(
-          (u) =>
-            u.nickname?.toLowerCase() === searchKey ||
-            u.nickname?.toLowerCase() === `@${searchKey}` ||
-            `@${u.nickname?.toLowerCase()}` === searchKey ||
-            (u.studentEmail && u.studentEmail.toLowerCase() === searchKey) ||
-            (matchedUser?.id && u.id === matchedUser.id)
-        );
-        if (refreshedUser && !isUserPermanentlyDeleted(refreshedUser)) {
-          matchedUser = refreshedUser;
+          const refreshedUser = merged.find(
+            (u) =>
+              u.nickname?.toLowerCase() === searchKey ||
+              u.nickname?.toLowerCase() === `@${searchKey}` ||
+              `@${u.nickname?.toLowerCase()}` === searchKey ||
+              (u.studentEmail && u.studentEmail.toLowerCase() === searchKey)
+          );
+          if (refreshedUser && !isUserPermanentlyDeleted(refreshedUser)) {
+            matchedUser = refreshedUser;
+          }
         }
+      } catch (err) {
+        console.error('Central DB query during login error:', err);
       }
-    } catch (err) {
-      console.error('Failed to query central DB during login:', err);
     }
 
     if (matchedUser) {
       // Validate password strictly against stored account password
       const expectedPassword = matchedUser.savedPassword || matchedUser.password || 'password123';
       if (loginPassword.trim() !== expectedPassword) {
+        setIsSubmitting(false);
         setErrorMessage('Incorrect password. Please enter the exact password created during registration.');
         return;
       }
 
       if (matchedUser.isApproved === false && !matchedUser.isAdmin) {
+        setIsSubmitting(false);
         setAccountNoticeType('PENDING');
         setErrorMessage('Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.');
         return;
@@ -533,6 +519,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         verificationStatus: matchedUser.verificationStatus || (matchedUser.isVerified ? 'approved' : 'none'),
         isApproved: matchedUser.isApproved !== false,
         isAdmin: Boolean(matchedUser.isAdmin),
+        isPrivate: matchedUser.isPrivate,
+        defaultPostAudience: matchedUser.defaultPostAudience,
       };
 
       if (isModulaAccount(userToLogin)) {
@@ -565,9 +553,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       localStorage.setItem('fuhsi_active_user', JSON.stringify(userToLogin));
+      setIsSubmitting(false);
       onLoginSuccess(userToLogin);
       onClose();
+
+      // Refresh authoritative central database in background without blocking login
+      Promise.all([
+        fetchServerDb().catch(() => null),
+        fetchUsersFromFirestore().catch(() => []),
+      ]).then(([serverDb, firestoreUsers]) => {
+        const incoming = [
+          ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
+          ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
+        ];
+        if (incoming.length > 0) {
+          const stored = localStorage.getItem('fuhsi_users_db');
+          const local = stored ? JSON.parse(stored) : [];
+          localStorage.setItem('fuhsi_users_db', JSON.stringify(mergeUsers(local, incoming)));
+        }
+      }).catch(() => {});
     } else {
+      setIsSubmitting(false);
       setErrorMessage('Account does not exist. No account was found for this username or email. Please click "Sign Up" below to create an account.');
       return;
     }
@@ -1184,14 +1190,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
               <button
                 type="submit"
-                className={`w-full py-3 px-4 font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-white cursor-pointer ${
+                disabled={isSubmitting}
+                className={`w-full py-3 px-4 font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-white active:scale-[0.98] ${
+                  isSubmitting ? 'opacity-80 cursor-wait' : 'cursor-pointer'
+                } ${
                   isAdminPortal
                     ? 'bg-amber-600 hover:bg-amber-700'
                     : 'bg-teal-600 hover:bg-teal-700'
                 }`}
               >
-                <LogIn size={16} />
-                <span>Sign In</span>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Signing In...</span>
+                  </>
+                ) : (
+                  <>
+                    <LogIn size={16} />
+                    <span>Sign In</span>
+                  </>
+                )}
               </button>
 
               <div className="text-center pt-2 border-t border-slate-100 space-y-2">

@@ -10,7 +10,7 @@ import {
 } from './data/initialData';
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
-import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile } from './utils/userDbUtils';
+import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile, formatJoinDate } from './utils/userDbUtils';
 import {
   fetchServerDb,
   pushServerDbSync,
@@ -2198,6 +2198,40 @@ export const App: React.FC = () => {
     return null;
   };
 
+  const handleUpdatePrivacySettings = useCallback((isPrivate: boolean, defaultPostAudience: 'everyone' | 'followers') => {
+    if (!userProfile) return;
+    const updated: UserProfile = sanitizeModulaProfile({
+      ...userProfile,
+      isPrivate,
+      defaultPostAudience,
+      updatedAt: new Date().toISOString(),
+    });
+
+    setUserProfile(updated);
+
+    try {
+      localStorage.setItem('fuhsi_active_user', JSON.stringify(updated));
+    } catch (e) {
+      console.error('Error persisting active user privacy:', e);
+    }
+
+    try {
+      upsertUser(updated);
+      saveUserToFirestore(updated).catch((err) => {
+        console.error('Error persisting user privacy to Firestore:', err);
+      });
+      pushServerDbSync({ users: [updated] }).catch((err) => {
+        console.error('Error syncing user privacy to server DB:', err);
+      });
+    } catch (e) {
+      console.error('Error updating user privacy settings:', e);
+    }
+
+    try {
+      window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: updated }));
+    } catch (e) {}
+  }, [userProfile]);
+
   // Memoized all stored registered users for follower profile information
   const allUsers = useMemo(() => {
     return getStoredUsers();
@@ -2359,6 +2393,7 @@ export const App: React.FC = () => {
           <FeedScreen
             posts={posts}
             userProfile={userProfile}
+            allFollows={allFollows}
             selectedFilter={selectedFilter}
             onFilterSelect={setSelectedFilter}
             onLikeClick={handleLikeClick}
@@ -2740,7 +2775,7 @@ export const App: React.FC = () => {
                 authorBadgeType={item.post.authorBadgeType as BadgeType}
                 authorBadgeTitle={item.post.authorBadgeTitle}
                 authorPoints={item.post.authorPoints}
-                authorJoinedDate="Jul 2026"
+                authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (item.post.authorNickname || '').toLowerCase().replace(/^@/, '')))}
                 currentUserNickname={userProfile?.nickname || ''}
                 userProfile={userProfile}
                 allPosts={posts}
@@ -2824,6 +2859,7 @@ export const App: React.FC = () => {
                       onEditPost={handleEditPost}
                       onDeleteComment={handleDeleteComment}
                       onToggleFollow={handleToggleFollow}
+                      onUpdatePrivacySettings={handleUpdatePrivacySettings}
                       onClose={closeModalUI}
                     />
                   </div>
@@ -2938,6 +2974,7 @@ export const App: React.FC = () => {
                     onEditPost={handleEditPost}
                     onDeleteComment={handleDeleteComment}
                     onToggleFollow={handleToggleFollow}
+                    onUpdatePrivacySettings={handleUpdatePrivacySettings}
                     onClose={closeModalUI}
                   />
                 </div>
@@ -2954,7 +2991,7 @@ export const App: React.FC = () => {
               authorBadgeType={selectedAuthorPost.authorBadgeType as BadgeType}
               authorBadgeTitle={selectedAuthorPost.authorBadgeTitle}
               authorPoints={selectedAuthorPost.authorPoints}
-              authorJoinedDate="Jul 2026"
+              authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || '').toLowerCase().replace(/^@/, '')))}
               currentUserNickname={userProfile?.nickname || ''}
               userProfile={userProfile}
               allPosts={posts}

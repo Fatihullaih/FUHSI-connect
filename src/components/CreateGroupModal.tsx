@@ -7,6 +7,7 @@ import { isGuestAccount } from '../utils/userDbUtils';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { normalizeNickname } from '../utils/messagingUtils';
 import { createChatGroup } from '../utils/groupUtils';
+import { optimizeAvatarImage } from '../utils/imageUtils';
 import { 
   Users, 
   Camera, 
@@ -16,7 +17,8 @@ import {
   ShieldCheck, 
   Sparkles,
   Info,
-  UserPlus
+  UserPlus,
+  Upload
 } from 'lucide-react';
 
 interface CreateGroupModalProps {
@@ -88,9 +90,14 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
 
     setErrorMessage('');
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = reader.result as string;
-      setAvatarUrl(result);
+      try {
+        const cropped = await optimizeAvatarImage(result, 400, 0.85);
+        setAvatarUrl(cropped);
+      } catch {
+        setAvatarUrl(result);
+      }
     };
     reader.readAsDataURL(file);
     if (e.target) {
@@ -212,8 +219,16 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
 
             <div className="flex-1 min-w-0 space-y-2 text-center sm:text-left">
               <div>
-                <div className="flex items-center justify-center sm:justify-start gap-2">
+                <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap">
                   <span className="text-xs font-black text-slate-800">Group Picture</span>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="py-1 px-2.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200/80 text-[11px] font-black flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                  >
+                    <Upload size={12} />
+                    <span>Upload</span>
+                  </button>
                   {avatarUrl && (
                     <button
                       type="button"

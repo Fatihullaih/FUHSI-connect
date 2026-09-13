@@ -371,18 +371,8 @@ const ChatMessageItemComponent: React.FC<ChatMessageItemProps> = ({
                         </span>
                       );
                     }
-                    return (
-                      <span
-                        key={idx}
-                        className={`font-bold mx-0.5 ${
-                          isMe
-                            ? 'text-teal-100 underline decoration-teal-300/50'
-                            : 'text-teal-700 hover:underline decoration-teal-500/50'
-                        }`}
-                      >
-                        {part}
-                      </span>
-                    );
+                    // If not mentioned, display as clean standard text without any mention styling or sign
+                    return <span key={idx}>{part}</span>;
                   }
                   return part;
                 });

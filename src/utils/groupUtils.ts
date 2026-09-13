@@ -4,6 +4,7 @@ import {
   formatMessageTime, 
   sendDirectMessage, 
   getStoredDirectMessages, 
+  clearConversationHistoryForUser,
   DIRECT_MESSAGES_KEY 
 } from './messagingUtils';
 import { 
@@ -187,10 +188,16 @@ export function getGroupUnreadStats(groupId: string, userNickname: string): { co
 
       count++;
 
-      // Check if this unread message mentioned this user
-      const isMentioned =
-        (Array.isArray(m.mentionedNicknames) && m.mentionedNicknames.some((u) => normalizeNickname(u) === cleanMe)) ||
-        (m.text && (m.text.includes(`@${cleanMe}`) || (cleanMe && m.text.toLowerCase().includes(`@${cleanMe.toLowerCase()}`))));
+      // Check if this unread message mentioned this user (strict check so other members do not see it)
+      const isMentioned = (() => {
+        if (!cleanMe) return false;
+        if (Array.isArray(m.mentionedNicknames) && m.mentionedNicknames.length > 0) {
+          return m.mentionedNicknames.some((u) => normalizeNickname(u) === cleanMe);
+        }
+        if (!m.text) return false;
+        const escaped = cleanMe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`@${escaped}\\b`, 'i').test(m.text);
+      })();
 
       if (isMentioned) {
         hasMention = true;
@@ -305,16 +312,28 @@ export function mergeFirestoreGroupsIntoStorage(firestoreGroups: ChatGroup[]): v
 
 /**
  * Get groups for a specific user (either a member, creator, or admin)
- * Includes calculated unreadCount for this specific user
+ * Includes calculated unreadCount for this specific user, and dynamically computes
+ * the ACTUAL latest message from group history so preview always shows the genuine latest message!
  */
 export function getUserGroups(userNickname: string): ChatGroup[] {
   if (!userNickname) return [];
   const cleanMe = normalizeNickname(userNickname);
   const allGroups = getStoredChatGroups();
 
+  // Check if user has explicitly left any group so they never see it again
+  let leftGroups: string[] = [];
+  try {
+    const leftRaw = localStorage.getItem(`fuhsi_left_groups_${cleanMe}`);
+    if (leftRaw) leftGroups = JSON.parse(leftRaw);
+  } catch (e) {}
+
+  const allMessages = getStoredDirectMessages();
+
   return allGroups
     .filter((group) => {
-      if (group.isDeleted || isSampleGroup(group)) return false;
+      if (!group || group.isDeleted || isSampleGroup(group)) return false;
+      if (leftGroups.includes(group.id)) return false;
+
       const isMember = (group.memberNicknames || []).some(
         (m) => normalizeNickname(m) === cleanMe
       );
@@ -326,15 +345,57 @@ export function getUserGroups(userNickname: string): ChatGroup[] {
     })
     .map((group) => {
       const stats = getGroupUnreadStats(group.id, cleanMe);
+
+      // Find all non-deleted messages for this group for this user
+      const groupMsgs = allMessages.filter((m) => {
+        if (!m) return false;
+        const isThisGroup = m.groupId === group.id || m.conversationId === group.id;
+        if (!isThisGroup) return false;
+        if (m.isDeletedForEveryone) return false;
+        if (m.deletedForUsers && m.deletedForUsers.some((u) => normalizeNickname(u) === cleanMe)) {
+          return false;
+        }
+        return true;
+      });
+
+      // Sort chronological ascending
+      groupMsgs.sort((a, b) => {
+        const tA = new Date(a.timestamp || 0).getTime() || 0;
+        const tB = new Date(b.timestamp || 0).getTime() || 0;
+        if (tA !== tB) return tA - tB;
+        return (a.id || '').localeCompare(b.id || '');
+      });
+
+      // The true last message in this group
+      const latestMsg = groupMsgs.length > 0 ? groupMsgs[groupMsgs.length - 1] : null;
+
+      const lastMessageText = latestMsg 
+        ? latestMsg.text 
+        : (group.lastMessage || group.description || 'Tap to start group conversation');
+      
+      const lastSender = latestMsg
+        ? latestMsg.senderNickname
+        : (group.lastMessageSender || '');
+
+      const lastTimeFormatted = latestMsg
+        ? formatMessageTime(latestMsg.timestamp)
+        : (group.lastTimestamp || formatMessageTime(group.createdAt));
+
+      const sortTimestampIso = latestMsg?.timestamp || group.updatedAt || group.createdAt || new Date().toISOString();
+
       return {
         ...group,
+        lastMessage: lastMessageText,
+        lastMessageSender: lastSender,
+        lastTimestamp: lastTimeFormatted,
+        updatedAt: sortTimestampIso,
         unreadCount: stats.count,
         hasUnreadMention: stats.hasMention,
       };
     })
     .sort((a, b) => {
-      const tA = new Date(a.updatedAt || a.lastTimestamp || a.createdAt || 0).getTime() || 0;
-      const tB = new Date(b.updatedAt || b.lastTimestamp || b.createdAt || 0).getTime() || 0;
+      const tA = new Date(a.updatedAt || a.createdAt || 0).getTime() || 0;
+      const tB = new Date(b.updatedAt || b.createdAt || 0).getTime() || 0;
       return tB - tA;
     });
 }
@@ -700,8 +761,26 @@ export function leaveGroup(groupId: string, userNickname: string): ChatGroup | n
   saveStoredChatGroups(stored);
   saveChatGroupToFirestore(updated).catch(console.error);
 
+  // Permanently record that this user left this group so it never resurfaces for them
+  try {
+    const leftKey = `fuhsi_left_groups_${cleanMe}`;
+    const rawLeft = localStorage.getItem(leftKey);
+    const leftList: string[] = rawLeft ? JSON.parse(rawLeft) : [];
+    if (!leftList.includes(groupId)) {
+      leftList.push(groupId);
+      localStorage.setItem(leftKey, JSON.stringify(leftList));
+    }
+  } catch (e) {}
+
+  // Clear messages locally for the leaving user
+  clearConversationHistoryForUser(groupId, userNickname);
+
   const userTag = userNickname.startsWith('@') ? userNickname : `@${userNickname}`;
   sendGroupSystemMessage(groupId, `🚪 ${userTag} left the group`);
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('fuhsi_group_left', { detail: { groupId } }));
+  }
 
   return updated;
 }

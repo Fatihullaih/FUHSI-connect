@@ -8,7 +8,7 @@ import { FollowersListModal } from './FollowersListModal';
 import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { calculateUserPoints } from '../utils/reputationUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount, findUserByNickname, isModulaAccount } from '../utils/userDbUtils';
+import { isGuestAccount, findUserByNickname, isModulaAccount, formatJoinDate } from '../utils/userDbUtils';
 import { isUserFollowing, getFollowersCount, getFollowingCount, normalizeHandle } from '../utils/followUtils';
 import { 
   X, 
@@ -135,11 +135,17 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   const effectiveBio = authorProfileUser?.bio || '';
   const effectiveDepartment = isAuthorModula ? '' : (authorProfileUser?.department || '');
   const effectiveLevel = isAuthorModula ? '' : (authorProfileUser?.level || '');
+  const effectiveJoinedDate = useMemo(() => {
+    return formatJoinDate(authorProfileUser || { joinedDate: authorJoinedDate });
+  }, [authorProfileUser, authorJoinedDate]);
 
   // Real, dynamic Following and Followers calculations
   const isFollowingAuthor = useMemo(() => {
     return isUserFollowing(normCurrentUser, normAuthor, allFollows);
   }, [normCurrentUser, normAuthor, allFollows]);
+
+  const isAuthorPrivate = Boolean(authorProfileUser?.isPrivate);
+  const isPrivateLocked = isAuthorPrivate && !isViewingSelf && !isFollowingAuthor && !userProfile?.isAdmin;
 
   const authorFollowersCount = useMemo(() => {
     return getFollowersCount(normAuthor, allFollows);
@@ -262,6 +268,12 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                     title={badgeInfo.badgeTitle}
                     showTitle 
                   />
+                  {isAuthorPrivate && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-amber-200 bg-black/30 backdrop-blur-xs px-2 py-0.5 rounded-full border border-amber-400/40 shadow-xs">
+                      <Lock size={11} />
+                      <span>Private Account</span>
+                    </span>
+                  )}
                 </div>
 
                 <p className="text-xs text-teal-200 font-bold mt-0.5">{username}</p>
@@ -280,7 +292,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
 
                 <p className="text-xs text-teal-100 font-medium mt-1 flex items-center gap-1.5">
                   <Calendar size={13} className="text-teal-300 shrink-0" />
-                  <span>Joined {authorJoinedDate}</span>
+                  <span>Joined {effectiveJoinedDate}</span>
                 </p>
               </div>
             </div>
@@ -371,8 +383,35 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
           </button>
         </div>
 
-        {/* Tabs Row: Threads & Replies */}
-        <div className="bg-white border-b border-slate-200 flex px-4 gap-2">
+        {/* When account is private and viewer is not a follower or admin */}
+        {isPrivateLocked ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 text-center bg-slate-50/50">
+            <div className="bg-white rounded-3xl p-8 max-w-sm w-full border border-slate-200 shadow-sm space-y-4">
+              <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-3xl flex items-center justify-center mx-auto border border-amber-200 shadow-xs">
+                <Lock size={32} />
+              </div>
+              <div className="space-y-1.5">
+                <h4 className="text-slate-900 font-black text-base">This Account is Private</h4>
+                <p className="text-slate-500 text-xs leading-relaxed">
+                  Follow <span className="font-bold text-slate-800">{authorNickname}</span> to see their campus threads, photos, and discussion replies.
+                </p>
+              </div>
+              {onToggleFollow && !isViewingSelf && (
+                <button
+                  type="button"
+                  onClick={() => onToggleFollow(authorNickname)}
+                  className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <UserPlus size={16} />
+                  <span>Follow to View Posts</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Tabs Row: Threads & Replies */}
+            <div className="bg-white border-b border-slate-200 flex px-4 gap-2">
           <button
             onClick={() => setActiveTab('threads')}
             className={`py-3 px-4 text-xs font-extrabold flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
@@ -500,6 +539,8 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
             )
           )}
         </div>
+          </>
+        )}
 
         {/* Footer */}
         <div className="p-3 bg-white border-t border-slate-200 flex justify-end">

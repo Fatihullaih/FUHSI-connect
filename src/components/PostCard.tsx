@@ -30,7 +30,9 @@ import {
   Lock,
   ShieldCheck,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Globe,
+  Users
 } from 'lucide-react';
 
 interface PostCardProps {
@@ -258,10 +260,28 @@ export const PostCard: React.FC<PostCardProps> = ({
                   showTitle 
                 />
               </div>
-              <p className="text-xs text-slate-400 font-medium flex items-center gap-1">
+              <p className="text-xs text-slate-400 font-medium flex items-center gap-1.5 flex-wrap">
                 <span>{formatRelativeTime(post.timestamp)}</span>
                 {post.isEdited && (
                   <span className="text-[10px] text-slate-400 font-normal italic">(edited)</span>
+                )}
+                {post.audience === 'followers' && (
+                  <>
+                    <span className="text-slate-300">•</span>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/90" title="Only followers can see this post">
+                      <Users size={11} className="text-amber-600" />
+                      <span>Followers</span>
+                    </span>
+                  </>
+                )}
+                {authorUser?.isPrivate && (
+                  <>
+                    <span className="text-slate-300">•</span>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="This user account is private">
+                      <Lock size={10} className="text-slate-500" />
+                      <span>Private</span>
+                    </span>
+                  </>
                 )}
               </p>
             </div>

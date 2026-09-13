@@ -16,7 +16,9 @@ import {
   Upload, 
   Trash2, 
   Lock, 
-  Plus 
+  Plus,
+  Globe,
+  Users
 } from 'lucide-react';
 
 interface CreatePostModalProps {
@@ -37,6 +39,7 @@ interface CreatePostModalProps {
       pollOptions?: string[];
       pollOptA?: string;
       pollOptB?: string;
+      audience?: 'everyone' | 'followers';
     }
   ) => void;
   onCreatePost?: (content: string, category: PostCategory, customNickname?: string) => void;
@@ -96,6 +99,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [hasPoll, setHasPoll] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
+  const [audience, setAudience] = useState<'everyone' | 'followers'>(
+    currentUser?.defaultPostAudience || 'everyone'
+  );
 
   const handleAddPollOption = () => {
     setPollOptions((prev) => [...prev, '']);
@@ -242,6 +248,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         pollOptions: isValidPoll ? validPollOptions : undefined,
         pollOptA: isValidPoll ? validPollOptions[0] : undefined,
         pollOptB: isValidPoll ? validPollOptions[1] : undefined,
+        audience,
       });
     } else if (onCreatePost) {
       onCreatePost(content.trim(), 'General');
@@ -527,6 +534,47 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Post Audience / Privacy Selector */}
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
+                {audience === 'everyone' ? <Globe size={16} /> : <Users size={16} />}
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-800">Audience</p>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  {audience === 'everyone' ? 'Anyone can see this post' : 'Only your followers can see this'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200 self-start sm:self-auto shadow-xs">
+              <button
+                type="button"
+                onClick={() => setAudience('everyone')}
+                className={`px-3 py-1.5 rounded-md text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  audience === 'everyone'
+                    ? 'bg-teal-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Globe size={13} />
+                <span>Everyone</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAudience('followers')}
+                className={`px-3 py-1.5 rounded-md text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  audience === 'followers'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Users size={13} />
+                <span>Followers only</span>
+              </button>
+            </div>
           </div>
 
           {/* Footer Actions: Cancel | Publish Post */}
