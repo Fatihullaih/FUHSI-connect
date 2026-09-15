@@ -55,14 +55,12 @@ export const compressImageFile = (
  * Uses center-cropping to focus on faces and subjects, producing a high-quality ~20KB-30KB JPEG.
  */
 export const optimizeAvatarImage = (
-  file: File,
+  fileOrDataUrl: File | string,
   targetSize = 400,
   quality = 0.82
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = (err) => reject(err);
-    reader.onload = (event) => {
+    const processImageSource = (src: string) => {
       const img = new Image();
       img.onerror = (err) => reject(err);
       img.onload = () => {
@@ -77,7 +75,7 @@ export const optimizeAvatarImage = (
 
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          resolve(event.target?.result as string);
+          resolve(src);
           return;
         }
 
@@ -89,8 +87,18 @@ export const optimizeAvatarImage = (
         const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
         resolve(compressedDataUrl);
       };
-      img.src = event.target?.result as string;
+      img.src = src;
     };
-    reader.readAsDataURL(file);
+
+    if (typeof fileOrDataUrl === 'string') {
+      processImageSource(fileOrDataUrl);
+    } else {
+      const reader = new FileReader();
+      reader.onerror = (err) => reject(err);
+      reader.onload = (event) => {
+        processImageSource(event.target?.result as string);
+      };
+      reader.readAsDataURL(fileOrDataUrl);
+    }
   });
 };

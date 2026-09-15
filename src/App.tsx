@@ -1988,6 +1988,317 @@ export const App: React.FC = () => {
     }
   };
 
+  // Handler for Admin approving or reassigning verification badge and title
+  const handleApproveVerification = (
+    reqIdOrNick: string,
+    badgeType: BadgeType = 'BLUE',
+    badgeTitle: string = ''
+  ) => {
+    const cleanInput = reqIdOrNick.toLowerCase().replace(/^@/, '');
+    const assignedTitle = (badgeTitle || '').trim();
+
+    // Find the target applicant nickname
+    let targetApplicantNick = reqIdOrNick;
+    const existingReq = verificationRequests.find(
+      (v) =>
+        v.id === reqIdOrNick ||
+        (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanInput
+    );
+    if (existingReq) {
+      targetApplicantNick = existingReq.applicantNickname;
+    }
+    const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
+
+    // 1. Update verification requests list
+    setVerificationRequests((prev) => {
+      const updatedList = prev.map((v) => {
+        const isMatch =
+          v.id === reqIdOrNick ||
+          (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanTarget;
+        if (isMatch) {
+          const approvedReq: VerificationRequest = {
+            ...v,
+            status: 'APPROVED' as const,
+            assignedBadgeType: badgeType,
+            assignedBadgeTitle: assignedTitle,
+          };
+          saveVerificationRequestToFirestore(approvedReq).catch((err) =>
+            console.error('Error saving approved verification to Firestore:', err)
+          );
+          return approvedReq;
+        }
+        return v;
+      });
+
+      try {
+        localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
+        pushServerDbSync({ verificationRequests: updatedList });
+      } catch (e) {}
+      return updatedList;
+    });
+
+    // 2. Update active user profile if matching
+    if (
+      userProfile &&
+      (userProfile.nickname.toLowerCase() === targetApplicantNick.toLowerCase() ||
+        userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget ||
+        userProfile.id === targetApplicantNick)
+    ) {
+      const updated = {
+        ...userProfile,
+        isVerified: true,
+        verificationStatus: 'approved' as const,
+        badgeType: badgeType,
+        badgeTitle: assignedTitle,
+      };
+      setUserProfile(updated);
+      saveUserToFirestore(updated).catch((err) => console.error(err));
+      try {
+        localStorage.setItem('fuhsi_active_user', JSON.stringify(updated));
+      } catch (e) {}
+    }
+
+    // 3. Update user in fuhsi_users_db and Firestore
+    try {
+      const storedUsers = localStorage.getItem('fuhsi_users_db');
+      let usersList: UserProfile[] = storedUsers ? JSON.parse(storedUsers) : [];
+      let matched = false;
+      usersList = usersList.map((u) => {
+        const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
+        if (uNick === cleanTarget || u.id === targetApplicantNick) {
+          matched = true;
+          const updatedUserRecord: UserProfile = {
+            ...u,
+            isVerified: true,
+            verificationStatus: 'approved' as const,
+            badgeType: badgeType,
+            badgeTitle: assignedTitle,
+          };
+          saveUserToFirestore(updatedUserRecord).catch((err) => console.error(err));
+          return updatedUserRecord;
+        }
+        return u;
+      });
+
+      if (!matched && userProfile && userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget) {
+        const newUserRecord: UserProfile = {
+          ...userProfile,
+          isVerified: true,
+          verificationStatus: 'approved' as const,
+          badgeType: badgeType,
+          badgeTitle: assignedTitle,
+        };
+        usersList.push(newUserRecord);
+        saveUserToFirestore(newUserRecord).catch((err) => console.error(err));
+      }
+      localStorage.setItem('fuhsi_users_db', JSON.stringify(usersList));
+      setNotifTrigger((prev) => prev + 1);
+      pushServerDbSync({ users: usersList });
+    } catch (e) {
+      console.error(e);
+    }
+
+    // 4. Update all posts in state, localStorage & Firestore
+    setPosts((prevPosts) => {
+      const updatedPosts = prevPosts.map((p) => {
+        const pNick = (p.authorNickname || '').toLowerCase().replace(/^@/, '');
+        if (pNick === cleanTarget || p.authorNickname === targetApplicantNick) {
+          const updatedPost = {
+            ...p,
+            isVerified: true,
+            authorBadgeType: badgeType,
+            authorBadgeTitle: assignedTitle,
+            authorIsVerified: true,
+          };
+          savePostToFirestore(updatedPost).catch((err) => console.error(err));
+          return updatedPost;
+        }
+        return p;
+      });
+      try {
+        localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
+      } catch (e) {}
+      return updatedPosts;
+    });
+
+    // 5. Update all comments in state, localStorage & Firestore
+    setComments((prevComments) => {
+      const updatedComments = prevComments.map((c) => {
+        const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
+        if (cNick === cleanTarget || c.authorNickname === targetApplicantNick) {
+          const updatedComment = {
+            ...c,
+            isVerified: true,
+            authorIsVerified: true,
+            authorBadgeType: badgeType,
+            authorBadgeTitle: assignedTitle,
+          };
+          saveCommentToFirestore(updatedComment).catch((err) => console.error(err));
+          return updatedComment;
+        }
+        return c;
+      });
+      try {
+        localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
+      } catch (e) {}
+      return updatedComments;
+    });
+
+    // 6. Send in-app notification
+    try {
+      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+      const verifNotif = {
+        id: `verif_appr_${Date.now()}`,
+        type: 'VERIFICATION',
+        title: '🎉 Account Verified!',
+        message: `Congratulations! Your verification details have been updated. Your profile now displays your verified checkmark badge (${assignedTitle || badgeType}) across FUHSI Connect.`,
+        timestamp: 'Just now',
+        isRead: false,
+      };
+      let existingNotifs = [];
+      const storedNotifs = localStorage.getItem(notifKey);
+      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
+      localStorage.setItem(notifKey, JSON.stringify([verifNotif, ...existingNotifs]));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Handler for Admin cancelling or revoking verification badge & title totally
+  const handleRevokeVerification = (reqIdOrNick: string) => {
+    const cleanInput = reqIdOrNick.toLowerCase().replace(/^@/, '');
+    let targetApplicantNick = reqIdOrNick;
+    const existingReq = verificationRequests.find(
+      (v) =>
+        v.id === reqIdOrNick ||
+        (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanInput
+    );
+    if (existingReq) {
+      targetApplicantNick = existingReq.applicantNickname;
+    }
+    const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
+
+    // 1. Update verification requests list
+    setVerificationRequests((prev) => {
+      const updatedList = prev.map((v) => {
+        const isMatch =
+          v.id === reqIdOrNick ||
+          (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanTarget;
+        if (isMatch) {
+          const revokedReq: VerificationRequest = {
+            ...v,
+            status: 'REJECTED' as const,
+            assignedBadgeType: 'NONE',
+            assignedBadgeTitle: '',
+          };
+          saveVerificationRequestToFirestore(revokedReq).catch((err) =>
+            console.error('Error revoking verification in Firestore:', err)
+          );
+          return revokedReq;
+        }
+        return v;
+      });
+      try {
+        localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
+        pushServerDbSync({ verificationRequests: updatedList });
+      } catch (e) {}
+      return updatedList;
+    });
+
+    // 2. Update active user profile if matching
+    if (
+      userProfile &&
+      (userProfile.nickname.toLowerCase() === targetApplicantNick.toLowerCase() ||
+        userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget ||
+        userProfile.id === targetApplicantNick)
+    ) {
+      const updatedUser: UserProfile = {
+        ...userProfile,
+        isVerified: false,
+        verificationStatus: 'rejected' as const,
+        badgeType: 'NONE' as const,
+        badgeTitle: '',
+      };
+      setUserProfile(updatedUser);
+      saveUserToFirestore(updatedUser).catch((err) => console.error(err));
+      try {
+        localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedUser));
+      } catch (e) {}
+    }
+
+    // 3. Update user in fuhsi_users_db, allUsers state and Firestore
+    try {
+      const storedUsers = localStorage.getItem('fuhsi_users_db');
+      let usersList: UserProfile[] = storedUsers ? JSON.parse(storedUsers) : [];
+      usersList = usersList.map((u) => {
+        const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
+        if (uNick === cleanTarget || u.id === targetApplicantNick) {
+          const updatedRecord: UserProfile = {
+            ...u,
+            isVerified: false,
+            verificationStatus: 'rejected' as const,
+            badgeType: 'NONE' as const,
+            badgeTitle: '',
+          };
+          saveUserToFirestore(updatedRecord).catch((err) => console.error(err));
+          return updatedRecord;
+        }
+        return u;
+      });
+      localStorage.setItem('fuhsi_users_db', JSON.stringify(usersList));
+      setNotifTrigger((prev) => prev + 1);
+      pushServerDbSync({ users: usersList });
+    } catch (e) {
+      console.error(e);
+    }
+
+    // 4. Update all posts by user in state, localStorage & Firestore
+    setPosts((prevPosts) => {
+      const updatedPosts = prevPosts.map((p) => {
+        const pNick = (p.authorNickname || '').toLowerCase().replace(/^@/, '');
+        if (pNick === cleanTarget || p.authorNickname === targetApplicantNick) {
+          const updatedPost = {
+            ...p,
+            isVerified: false,
+            authorBadgeType: 'NONE' as const,
+            authorBadgeTitle: '',
+            authorIsVerified: false,
+          };
+          savePostToFirestore(updatedPost).catch((err) => console.error(err));
+          return updatedPost;
+        }
+        return p;
+      });
+      try {
+        localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
+      } catch (e) {}
+      return updatedPosts;
+    });
+
+    // 5. Update all comments by user in state, localStorage & Firestore
+    setComments((prevComments) => {
+      const updatedComments = prevComments.map((c) => {
+        const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
+        if (cNick === cleanTarget || c.authorNickname === targetApplicantNick) {
+          const updatedComment = {
+            ...c,
+            isVerified: false,
+            authorIsVerified: false,
+            authorBadgeType: 'NONE' as const,
+            authorBadgeTitle: '',
+          };
+          saveCommentToFirestore(updatedComment).catch((err) => console.error(err));
+          return updatedComment;
+        }
+        return c;
+      });
+      try {
+        localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
+      } catch (e) {}
+      return updatedComments;
+    });
+  };
+
   // Admin Handlers
   const handleAdminApproveMarketplaceItem = (id: string, approvedPrice: number, note: string) => {
     const item = pendingMarketplaceItems.find((i) => i.id === id);
@@ -2507,178 +2818,10 @@ export const App: React.FC = () => {
               onAdminRejectMarketplaceItem={handleAdminRejectMarketplaceItem}
               onDeleteMarketplaceItem={handleDeleteMarketplaceItem}
               onResolveReport={(repId: string) => setReports((prev) => prev.filter((r) => r.id !== repId))}
-            onApproveVerification={(reqId, badgeType = 'BLUE', badgeTitle = '') => {
-              setVerificationRequests((prev) => {
-                const updatedList = prev.map((v) => {
-                  if (v.id === reqId) {
-                    const targetApplicantNick = v.applicantNickname;
-                    const assignedTitle = (badgeTitle || '').trim();
-                    const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
-
-                    const approvedReq: VerificationRequest = {
-                      ...v,
-                      status: 'APPROVED' as const,
-                      assignedBadgeType: badgeType,
-                      assignedBadgeTitle: assignedTitle,
-                    };
-
-                    // Persist approved verification request to Firestore
-                    saveVerificationRequestToFirestore(approvedReq).catch((err) => console.error('Error saving approved verification to Firestore:', err));
-
-                    // 1. Update active user profile if matching
-                    if (userProfile && (
-                      userProfile.nickname.toLowerCase() === targetApplicantNick.toLowerCase() ||
-                      userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget ||
-                      userProfile.id === targetApplicantNick
-                    )) {
-                      const updated = { 
-                        ...userProfile, 
-                        isVerified: true, 
-                        verificationStatus: 'approved' as const, 
-                        badgeType: badgeType, 
-                        badgeTitle: assignedTitle
-                      };
-                      setUserProfile(updated);
-                      saveUserToFirestore(updated).catch((err) => console.error(err));
-                      try {
-                        localStorage.setItem('fuhsi_active_user', JSON.stringify(updated));
-                      } catch (e) {}
-                    }
-
-                    // 2. Update user in fuhsi_users_db and Firestore
-                    try {
-                      const storedUsers = localStorage.getItem('fuhsi_users_db');
-                      let usersList: UserProfile[] = storedUsers ? JSON.parse(storedUsers) : [];
-                      let matched = false;
-                      usersList = usersList.map((u) => {
-                        const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
-                        if (uNick === cleanTarget || u.id === targetApplicantNick) {
-                          matched = true;
-                          const updatedUserRecord: UserProfile = {
-                            ...u,
-                            isVerified: true,
-                            verificationStatus: 'approved' as const,
-                            badgeType: badgeType,
-                            badgeTitle: assignedTitle
-                          };
-                          saveUserToFirestore(updatedUserRecord).catch((err) => console.error(err));
-                          return updatedUserRecord;
-                        }
-                        return u;
-                      });
-
-                      if (!matched && userProfile && (userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget)) {
-                        const newUserRecord: UserProfile = {
-                          ...userProfile,
-                          isVerified: true,
-                          verificationStatus: 'approved' as const,
-                          badgeType: badgeType,
-                          badgeTitle: assignedTitle
-                        };
-                        usersList.push(newUserRecord);
-                        saveUserToFirestore(newUserRecord).catch((err) => console.error(err));
-                      }
-                      localStorage.setItem('fuhsi_users_db', JSON.stringify(usersList));
-                      pushServerDbSync({ users: usersList });
-                    } catch (e) {
-                      console.error(e);
-                    }
-
-                    // 3. Update all posts in state, localStorage & Firestore
-                    setPosts((prevPosts) => {
-                      const updatedPosts = prevPosts.map((p) => {
-                        const pNick = (p.authorNickname || '').toLowerCase().replace(/^@/, '');
-                        if (pNick === cleanTarget || p.authorNickname === targetApplicantNick) {
-                          const updatedPost = {
-                            ...p,
-                            isVerified: true,
-                            authorBadgeType: badgeType,
-                            authorBadgeTitle: assignedTitle,
-                            authorIsVerified: true
-                          };
-                          savePostToFirestore(updatedPost).catch((err) => console.error(err));
-                          return updatedPost;
-                        }
-                        return p;
-                      });
-                      try {
-                        localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
-                      } catch (e) {}
-                      return updatedPosts;
-                    });
-
-                    // 4. Update all comments in state, localStorage & Firestore
-                    setComments((prevComments) => {
-                      const updatedComments = prevComments.map((c) => {
-                        const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
-                        if (cNick === cleanTarget || c.authorNickname === targetApplicantNick) {
-                          const updatedComment = {
-                            ...c,
-                            isVerified: true,
-                            authorIsVerified: true,
-                            authorBadgeType: badgeType,
-                            authorBadgeTitle: assignedTitle
-                          };
-                          saveCommentToFirestore(updatedComment).catch((err) => console.error(err));
-                          return updatedComment;
-                        }
-                        return c;
-                      });
-                      try {
-                        localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
-                      } catch (e) {}
-                      return updatedComments;
-                    });
-
-                    // 5. Send in-app notification
-                    try {
-                      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-                      const verifNotif = {
-                        id: `verif_appr_${Date.now()}`,
-                        type: 'VERIFICATION',
-                        title: '🎉 Account Verified!',
-                        message: `Congratulations! Your verification application has been approved. Your profile now displays your verified checkmark badge (${assignedTitle}) across FUHSI Connect.`,
-                        timestamp: 'Just now',
-                        isRead: false,
-                      };
-                      let existingNotifs = [];
-                      const storedNotifs = localStorage.getItem(notifKey);
-                      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-                      localStorage.setItem(notifKey, JSON.stringify([verifNotif, ...existingNotifs]));
-                    } catch (e) {
-                      console.error(e);
-                    }
-
-                    return approvedReq;
-                  }
-                  return v;
-                });
-
-                try {
-                  localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
-                  pushServerDbSync({ verificationRequests: updatedList });
-                } catch (e) {}
-                return updatedList;
-              });
-            }}
-            onRejectVerification={(reqId) => {
-              setVerificationRequests((prev) => {
-                const updated = prev.map((v) => {
-                  if (v.id === reqId) {
-                    const rejectedReq = { ...v, status: 'REJECTED' as const };
-                    saveVerificationRequestToFirestore(rejectedReq).catch((err) => console.error(err));
-                    return rejectedReq;
-                  }
-                  return v;
-                });
-                try {
-                  localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updated));
-                  pushServerDbSync({ verificationRequests: updated });
-                } catch (e) {}
-                return updated;
-              });
-            }}
-            onApproveStudentConversion={handleApproveStudentConversion}
+              onApproveVerification={handleApproveVerification}
+              onRejectVerification={handleRevokeVerification}
+              onRevokeVerification={handleRevokeVerification}
+              onApproveStudentConversion={handleApproveStudentConversion}
             onRejectStudentConversion={handleRejectStudentConversion}
             onDeletePost={(postId) => setPosts((prev) => prev.filter((p) => p.id !== postId))}
             onUpdateBadge={(badgeType, badgeTitle) => {

@@ -23,6 +23,7 @@ export interface UserProfile {
   avatarId?: string;
   avatarUrl?: string;
   joinedDate?: string;
+  createdAt?: string;
   badgeType?: BadgeType;
   badgeTitle?: string;
   badge?: string;

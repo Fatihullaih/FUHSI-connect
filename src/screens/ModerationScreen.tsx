@@ -27,6 +27,7 @@ interface ModerationScreenProps {
   onUpdateVerificationRequestStatus?: (id: string, status: 'APPROVED' | 'REJECTED') => void;
   onApproveVerification?: (id: string, badgeType?: BadgeType, badgeTitle?: string) => void;
   onRejectVerification?: (id: string) => void;
+  onRevokeVerification?: (id: string) => void;
   onApproveStudentConversion?: (reqId: string, applicantNickname: string, fullName: string, matricNumber: string, department: string, level: string) => void;
   onRejectStudentConversion?: (reqId: string, applicantNickname: string) => void;
   onResolveReport?: (reportId: string) => void;
@@ -53,6 +54,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   onUpdateVerificationRequestStatus = () => {},
   onApproveVerification = () => {},
   onRejectVerification = () => {},
+  onRevokeVerification = () => {},
   onApproveStudentConversion = () => {},
   onRejectStudentConversion = () => {},
   onResolveReport = () => {},
@@ -156,6 +158,8 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   // Per-request color badge & title assignment state
   const [selectedReqColors, setSelectedReqColors] = useState<Record<string, BadgeType>>({});
   const [selectedReqTitles, setSelectedReqTitles] = useState<Record<string, string>>({});
+  const [reassignSuccessMsg, setReassignSuccessMsg] = useState<Record<string, string>>({});
+  const [verifFilterTab, setVerifFilterTab] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
 
   // Pending Student Registrations Approval State
   const [allUsersList, setAllUsersList] = useState<UserProfile[]>([]);
@@ -889,17 +893,95 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
           </div>
         )}
 
+        {/* Filter Tabs for Verification Queue */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-bold border-b border-slate-100">
+          <button
+            type="button"
+            onClick={() => setVerifFilterTab('ALL')}
+            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+              verifFilterTab === 'ALL'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            All Subscriptions ({verificationRequests.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setVerifFilterTab('PENDING')}
+            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+              verifFilterTab === 'PENDING'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
+            }`}
+          >
+            <span>⏳ Pending Review</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20">
+              {verificationRequests.filter((r) => r.status === 'PENDING').length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setVerifFilterTab('APPROVED')}
+            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+              verifFilterTab === 'APPROVED'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+            }`}
+          >
+            <span>✔️ Approved & Active</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20">
+              {verificationRequests.filter((r) => r.status === 'APPROVED').length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setVerifFilterTab('REJECTED')}
+            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+              verifFilterTab === 'REJECTED'
+                ? 'bg-rose-600 text-white shadow-xs'
+                : 'bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100'
+            }`}
+          >
+            <span>✖️ Declined / Cancelled</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20">
+              {verificationRequests.filter((r) => r.status === 'REJECTED').length}
+            </span>
+          </button>
+        </div>
+
         {/* Requests Queue */}
         <div className="space-y-3 pt-1">
-          {verificationRequests.length === 0 ? (
-            <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
-              No verification subscription requests submitted yet.
-            </div>
-          ) : (
-            verificationRequests.map((req) => {
+          {(() => {
+            const filteredRequests = verificationRequests.filter((req) => {
+              if (verifFilterTab === 'PENDING') return req.status === 'PENDING';
+              if (verifFilterTab === 'APPROVED') return req.status === 'APPROVED';
+              if (verifFilterTab === 'REJECTED') return req.status === 'REJECTED';
+              return true;
+            });
+
+            if (filteredRequests.length === 0) {
+              return (
+                <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
+                  {verifFilterTab === 'PENDING'
+                    ? 'No pending verification subscription requests awaiting review.'
+                    : verifFilterTab === 'APPROVED'
+                    ? 'No approved active verified users yet.'
+                    : verifFilterTab === 'REJECTED'
+                    ? 'No declined or cancelled requests.'
+                    : 'No verification subscription requests found.'}
+                </div>
+              );
+            }
+
+            return filteredRequests.map((req) => {
               const isConversion = req.requestType === 'STUDENT_CONVERSION';
               const currentBadgeColor = selectedReqColors[req.id] || req.assignedBadgeType || 'BLUE';
-              const currentBadgeTitle = selectedReqTitles[req.id] !== undefined ? selectedReqTitles[req.id] : (req.assignedBadgeTitle || '');
+              const currentBadgeTitle = selectedReqTitles[req.id] !== undefined
+                ? selectedReqTitles[req.id]
+                : (req.assignedBadgeTitle !== undefined && req.assignedBadgeTitle !== ''
+                    ? req.assignedBadgeTitle
+                    : (req.positionTitle || ''));
 
               return (
                 <div 
@@ -927,7 +1009,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
 
                         {req.positionTitle && !isConversion && (
                           <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-teal-100 text-teal-900 border border-teal-200">
-                            Requested Title / Note: {req.positionTitle}
+                            Requested Position/Title: {req.positionTitle}
                           </span>
                         )}
 
@@ -958,7 +1040,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                         req.status === 'REJECTED' ? 'bg-rose-100 text-rose-900 border-rose-300' : 'bg-amber-100 text-amber-900 border-amber-300'
                       }`}>
                         {req.status === 'APPROVED' ? (isConversion ? '✔️ APPROVED & CONVERTED TO STUDENT' : '✔️ APPROVED & VERIFIED') :
-                         req.status === 'REJECTED' ? (isConversion ? 'DECLINED (REMAINS GUEST)' : 'REVISION REQUESTED') : '⏳ PENDING ADMIN REVIEW'}
+                         req.status === 'REJECTED' ? (isConversion ? 'DECLINED (REMAINS GUEST)' : 'REVISION REQUESTED / REVOKED') : '⏳ PENDING ADMIN REVIEW'}
                       </span>
                     </div>
                   </div>
@@ -1002,9 +1084,9 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                     </div>
                   )}
 
-                  {/* Badge Assignment Controls (for regular verification requests) */}
+                  {/* Badge Assignment Controls (for regular verification requests - PENDING) */}
                   {!isConversion && req.status === 'PENDING' && (
-                    <div className="bg-white p-3 rounded-xl border border-slate-200/90 space-y-3 text-xs">
+                    <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 space-y-3 text-xs">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] font-bold text-slate-700 mb-1">
@@ -1069,12 +1151,16 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                             className="w-full text-xs rounded-xl border border-slate-300 p-2 text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-slate-900 placeholder:text-slate-400 placeholder:font-normal"
                           />
                           <p className="text-[10px] text-slate-500 mt-1">
-                            If left blank, user gets only the verified badge with no title text.
+                            {req.positionTitle ? (
+                              <span>Applicant included title/position: <strong className="text-slate-800 font-mono">"{req.positionTitle}"</strong> (pre-filled above)</span>
+                            ) : (
+                              <span>If left blank, user gets only the verified badge with no title text.</span>
+                            )}
                           </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 flex-wrap">
                         <div className="flex items-center gap-2">
                           <span className="text-[11px] font-medium text-slate-500">Live Preview:</span>
                           <VerificationBadge isVerified badgeType={currentBadgeColor} title={currentBadgeTitle.trim()} showTitle={Boolean(currentBadgeTitle.trim())} />
@@ -1095,7 +1181,11 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              onRejectVerification(req.id);
+                              if (onRevokeVerification) {
+                                onRevokeVerification(req.id);
+                              } else {
+                                onRejectVerification(req.id);
+                              }
                               onUpdateVerificationRequestStatus(req.id, 'REJECTED');
                             }}
                             className="px-3 py-2 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded-xl font-extrabold text-xs transition-colors cursor-pointer"
@@ -1106,10 +1196,200 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {/* Reassign or Revoke Badge Controls (for approved verification requests) */}
+                  {!isConversion && req.status === 'APPROVED' && (
+                    <div className="bg-white p-3.5 rounded-xl border border-emerald-300 shadow-xs space-y-3 text-xs">
+                      <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <Award size={16} className="text-emerald-600" />
+                          <span className="font-extrabold text-slate-900 text-xs">
+                            Active Verification • Reassign Badge / Title or Revoke
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
+                          <span>Current Badge:</span>
+                          <VerificationBadge 
+                            isVerified 
+                            badgeType={req.assignedBadgeType || currentBadgeColor} 
+                            title={req.assignedBadgeTitle || currentBadgeTitle.trim()} 
+                            showTitle={Boolean(req.assignedBadgeTitle || currentBadgeTitle.trim())} 
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Reassign Badge Colour
+                          </label>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedReqColors((prev) => ({ ...prev, [req.id]: 'BLUE' }))}
+                              className={`py-1.5 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                                currentBadgeColor === 'BLUE' ? 'bg-sky-50 text-sky-800 border-sky-400 ring-2 ring-sky-400/30' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="w-2.5 h-2.5 rounded-full bg-sky-500" />
+                              <span>Blue</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedReqColors((prev) => ({ ...prev, [req.id]: 'GREEN' }))}
+                              className={`py-1.5 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                                currentBadgeColor === 'GREEN' ? 'bg-emerald-50 text-emerald-800 border-emerald-400 ring-2 ring-emerald-400/30' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                              <span>Green</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedReqColors((prev) => ({ ...prev, [req.id]: 'ORANGE' }))}
+                              className={`py-1.5 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                                currentBadgeColor === 'ORANGE' || currentBadgeColor === 'GOLD' ? 'bg-orange-50 text-orange-900 border-orange-400 ring-2 ring-orange-400/30' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="w-2.5 h-2.5 rounded-full bg-orange-500" />
+                              <span>Orange</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedReqColors((prev) => ({ ...prev, [req.id]: 'PURPLE' }))}
+                              className={`py-1.5 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                                currentBadgeColor === 'PURPLE' ? 'bg-purple-50 text-purple-900 border-purple-400 ring-2 ring-purple-400/30' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+                              <span>Purple</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Reassign / Edit Title (or position)
+                          </label>
+                          <input
+                            type="text"
+                            value={currentBadgeTitle}
+                            onChange={(e) => setSelectedReqTitles((prev) => ({ ...prev, [req.id]: e.target.value }))}
+                            placeholder="e.g. SUG President, Class Rep, Tutor (or blank)"
+                            className="w-full text-xs rounded-xl border border-slate-300 p-2 text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-slate-900 placeholder:text-slate-400 placeholder:font-normal"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            {req.positionTitle ? (
+                              <span>Applicant included position: <strong className="text-slate-800 font-mono">"{req.positionTitle}"</strong></span>
+                            ) : (
+                              <span>Leave blank if you prefer badge icon only with no title text.</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      {reassignSuccessMsg[req.id] && (
+                        <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-800 text-xs font-bold flex items-center gap-2 border border-emerald-200 animate-in fade-in">
+                          <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                          <span>{reassignSuccessMsg[req.id]}</span>
+                        </div>
+                      )}
+
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-medium text-slate-500">Live Preview:</span>
+                          <VerificationBadge 
+                            isVerified 
+                            badgeType={currentBadgeColor} 
+                            title={currentBadgeTitle.trim()} 
+                            showTitle={Boolean(currentBadgeTitle.trim())} 
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                              setReassignSuccessMsg((prev) => ({
+                                ...prev,
+                                [req.id]: `✓ Badge re-assigned as ${currentBadgeColor}${currentBadgeTitle.trim() ? ` with title "${currentBadgeTitle.trim()}"` : ''}! Synchronized across the entire platform.`,
+                              }));
+                              setTimeout(() => {
+                                setReassignSuccessMsg((prev) => {
+                                  const copy = { ...prev };
+                                  delete copy[req.id];
+                                  return copy;
+                                });
+                              }, 4000);
+                            }}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold text-xs transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+                          >
+                            <CheckCircle2 size={14} />
+                            <span>Save Reassigned Badge / Title</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to completely cancel and remove the verification badge and title for ${req.applicantNickname}?`)) {
+                                if (onRevokeVerification) {
+                                  onRevokeVerification(req.id);
+                                } else {
+                                  onRejectVerification(req.id);
+                                }
+                                onUpdateVerificationRequestStatus(req.id, 'REJECTED');
+                                setReassignSuccessMsg((prev) => ({
+                                  ...prev,
+                                  [req.id]: `✓ Verification badge & title removed totally from ${req.applicantNickname}.`,
+                                }));
+                                setTimeout(() => {
+                                  setReassignSuccessMsg((prev) => {
+                                    const copy = { ...prev };
+                                    delete copy[req.id];
+                                    return copy;
+                                  });
+                                }, 4000);
+                              }
+                            }}
+                            className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl font-extrabold text-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                          >
+                            <XCircle size={14} />
+                            <span>Cancel & Remove Badge Totally</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Re-evaluate / Restore controls (for rejected or cancelled verification requests) */}
+                  {!isConversion && req.status === 'REJECTED' && (
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2 text-xs">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <span className="text-slate-600 text-[11px]">
+                          This verification was declined or cancelled. You can re-assign a badge and re-approve this applicant at any time.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                            onUpdateVerificationRequestStatus(req.id, 'APPROVED');
+                          }}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold text-xs transition-colors cursor-pointer flex items-center gap-1.5 shrink-0"
+                        >
+                          <CheckCircle2 size={13} />
+                          <span>Re-Approve & Assign Badge</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
-            })
-          )}
+            });
+          })()}
         </div>
       </div>
       {/* Marketplace Price Review & Benchmark Queue */}
