@@ -43,7 +43,8 @@ import {
   getStoredChatGroups,
   mergeFirestoreGroupsIntoStorage,
   markGroupMessagesAsRead,
-  setGroupLastReadTime
+  setGroupLastReadTime,
+  formatGroupSystemMessage
 } from '../utils/groupUtils';
 import { ChatMessageItem } from '../components/ChatMessageItem';
 import { ChatMessageActionsModal } from '../components/ChatMessageActionsModal';
@@ -1108,9 +1109,19 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                   const hasUnread = (group.unreadCount || 0) > 0;
                   const isCreator = normalizeNickname(group.createdBy) === cleanMyNickname;
 
+                  // Check if last message is an automated group system event
+                  const isSystemMsg = Boolean(
+                    group.lastMessageSender === 'FUHSI Group System' ||
+                    group.lastMessageSender === 'System' ||
+                    !group.lastMessageSender ||
+                    (group.lastMessage && /^(🚪|👋|🎯|👤|⭐|🛡️|✏️)/.test(group.lastMessage.trim()))
+                  );
+
                   // Format last message for display
                   let lastMsgText = group.lastMessage || group.description || 'Tap to start group conversation';
-                  if (lastMsgText.includes('@')) {
+                  if (isSystemMsg && group.lastMessage) {
+                    lastMsgText = formatGroupSystemMessage(group.lastMessage, cleanMyNickname);
+                  } else if (lastMsgText.includes('@')) {
                     lastMsgText = lastMsgText.replace(/@([a-zA-Z0-9_]+)/g, (fullMatch, nick) => {
                       const cleanMentioned = normalizeNickname(nick);
                       if (cleanMentioned === cleanMyNickname) {
@@ -1120,10 +1131,13 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                       return nick;
                     });
                   }
-                  const senderPrefix = group.lastMessageSender && normalizeNickname(group.lastMessageSender) !== cleanMyNickname
-                    ? `${group.lastMessageSender}: `
+
+                  const senderPrefix = isSystemMsg
+                    ? ''
                     : group.lastMessageSender && normalizeNickname(group.lastMessageSender) === cleanMyNickname
                     ? 'You: '
+                    : group.lastMessageSender
+                    ? `${group.lastMessageSender}: `
                     : '';
 
                   return (

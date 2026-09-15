@@ -1,6 +1,7 @@
 import React, { useState, useRef, memo } from 'react';
 import { DirectMessage } from '../types';
 import { normalizeNickname, formatMessageTime } from '../utils/messagingUtils';
+import { formatGroupSystemMessage } from '../utils/groupUtils';
 import { 
   AlertTriangle, 
   CheckCheck, 
@@ -46,12 +47,20 @@ const ChatMessageItemComponent: React.FC<ChatMessageItemProps> = ({
   const isSafetyBlocked = msg.isSafetyWarning || msg.text.includes('Contact information cannot be shared');
   const isDeleted = Boolean(msg.isDeletedForEveryone || msg.text === '🚫 This message was deleted');
 
-  // Render centered system notification messages (e.g. group creation, members added/removed)
-  if (msg.isSystemMessage) {
+  // Render centered system notification messages (e.g. group creation, members added/removed, leaving group)
+  const isSystem = Boolean(
+    msg.isSystemMessage ||
+    msg.senderNickname === 'FUHSI Group System' ||
+    msg.senderNickname === 'System' ||
+    (msg.isGroupMessage && /^(🚪|👋|🎯|👤|⭐|🛡️|✏️)/.test(msg.text.trim()))
+  );
+
+  if (isSystem) {
+    const formattedText = formatGroupSystemMessage(msg.text, myNickname);
     return (
       <div id={`msg-${msg.id}`} className="flex justify-center my-2 select-none px-4">
         <div className="px-3.5 py-1 bg-slate-200/90 border border-slate-300/80 rounded-full text-[11px] font-bold text-slate-700 shadow-2xs flex items-center gap-1.5 max-w-[90%] text-center leading-tight">
-          <span>{msg.text}</span>
+          <span>{formattedText}</span>
           <span className="text-[9px] text-slate-500 font-medium whitespace-nowrap">({formatMessageTime(msg.timestamp)})</span>
         </div>
       </div>

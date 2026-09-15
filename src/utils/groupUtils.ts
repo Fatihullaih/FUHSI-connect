@@ -379,9 +379,13 @@ export function getUserGroups(userNickname: string): ChatGroup[] {
         ? latestMsg.text
         : (group.lastMessage || (latestMsg ? latestMsg.text : (group.description || 'Tap to start group conversation')));
 
-      const lastSender = (!useStoredGroupMsg && latestMsg)
-        ? latestMsg.senderNickname
-        : (group.lastMessageSender || (latestMsg ? latestMsg.senderNickname : ''));
+      let lastSender = (!useStoredGroupMsg && latestMsg)
+        ? (latestMsg.isSystemMessage ? '' : latestMsg.senderNickname)
+        : (group.lastMessageSender || (latestMsg && !latestMsg.isSystemMessage ? latestMsg.senderNickname : ''));
+
+      if (lastSender === 'FUHSI Group System' || lastSender === 'System') {
+        lastSender = '';
+      }
 
       const lastTimeFormatted = (!useStoredGroupMsg && latestMsg)
         ? formatMessageTime(latestMsg.timestamp)
@@ -430,6 +434,171 @@ export function isUserGroupCreator(group: ChatGroup, userNickname: string): bool
 }
 
 /**
+ * Formats a group system message to ensure clean, concise presentation:
+ * - Omits "FUHSI Group System" or "System" headers/captions.
+ * - Shows the main body directly (e.g., "🚪 modula left the group", "👋 modula was removed by @you", "🎯 Group created by @you").
+ * - Displays @you for the current viewer if they performed or received the action, and clean handles without leading '@' for other members.
+ */
+export function formatGroupSystemMessage(rawText: string, viewerNickname?: string): string {
+  if (!rawText) return '';
+  let text = rawText.trim();
+
+  // Strip any legacy or stray "FUHSI Group System: " or "System: " prefix
+  text = text.replace(/^FUHSI\s+Group\s+System:\s*/i, '').replace(/^System:\s*/i, '');
+
+  const cleanViewer = viewerNickname ? normalizeNickname(viewerNickname) : '';
+
+  // 1. Leave group: 🚪 <user> left the group
+  const leaveMatch = text.match(/^🚪\s*@?([a-zA-Z0-9_]+)\s+left\s+the\s+group/i);
+  if (leaveMatch) {
+    const leaver = normalizeNickname(leaveMatch[1]);
+    if (cleanViewer && leaver === cleanViewer) {
+      return '🚪 You left the group';
+    }
+    return `🚪 ${leaver} left the group`;
+  }
+
+  // 2. Member removed: 👋 <target> was removed by <actor>
+  const removeMatch = text.match(/^👋\s*@?([a-zA-Z0-9_]+)\s+was\s+removed\s+by\s+@?([a-zA-Z0-9_]+)/i);
+  if (removeMatch) {
+    const target = normalizeNickname(removeMatch[1]);
+    const actor = normalizeNickname(removeMatch[2]);
+    if (cleanViewer && target === cleanViewer && actor === cleanViewer) {
+      return '🚪 You left the group';
+    }
+    if (cleanViewer && target === cleanViewer) {
+      return `👋 You were removed by ${actor}`;
+    }
+    if (cleanViewer && actor === cleanViewer) {
+      return `👋 ${target} was removed by @you`;
+    }
+    return `👋 ${target} was removed by ${actor}`;
+  }
+
+  // 3. Group created:
+  // e.g. 🎯 Group created by <creator> [· Added ...] OR 🎯 @creator created the group "..."
+  if (text.startsWith('🎯')) {
+    const legacyMatch = text.match(/^🎯\s*@?([a-zA-Z0-9_]+)\s+created\s+the\s+group(?:\s+"([^"]*)")?(?:\s+and\s+added\s+(.*))?/i);
+    if (legacyMatch) {
+      const creator = normalizeNickname(legacyMatch[1]);
+      const rawAdded = legacyMatch[3] || '';
+      const addedList = rawAdded
+        .split(',')
+        .map((s) => normalizeNickname(s))
+        .filter(Boolean);
+
+      const isCreatorMe = cleanViewer && creator === cleanViewer;
+      const creatorText = isCreatorMe ? '@you' : creator;
+
+      let addedText = '';
+      if (addedList.length > 0) {
+        const cleanedAdded = addedList
+          .map((m) => (cleanViewer && m === cleanViewer ? 'you' : m))
+          .join(', ');
+        addedText = ` · Added ${cleanedAdded}`;
+      }
+      return `🎯 Group created by ${creatorText}${addedText}`;
+    }
+
+    const modernMatch = text.match(/^🎯\s*Group\s+created\s+by\s+@?([a-zA-Z0-9_]+)(?:\s*·\s*Added\s*(.*))?/i);
+    if (modernMatch) {
+      const creator = normalizeNickname(modernMatch[1]);
+      const rawAdded = modernMatch[2] || '';
+      const addedList = rawAdded
+        .split(',')
+        .map((s) => normalizeNickname(s))
+        .filter(Boolean);
+
+      const isCreatorMe = cleanViewer && creator === cleanViewer;
+      const creatorText = isCreatorMe ? '@you' : creator;
+
+      let addedText = '';
+      if (addedList.length > 0) {
+        const cleanedAdded = addedList
+          .map((m) => (cleanViewer && m === cleanViewer ? 'you' : m))
+          .join(', ');
+        addedText = ` · Added ${cleanedAdded}`;
+      }
+      return `🎯 Group created by ${creatorText}${addedText}`;
+    }
+  }
+
+  // 4. Added members: 👤 <actor> added <members> to the group
+  const addMatch = text.match(/^👤\s*@?([a-zA-Z0-9_]+)\s+added\s+(.*?)\s+to\s+the\s+group/i);
+  if (addMatch) {
+    const actor = normalizeNickname(addMatch[1]);
+    const rawMembers = addMatch[2] || '';
+    const memberList = rawMembers
+      .split(',')
+      .map((s) => normalizeNickname(s))
+      .filter(Boolean);
+
+    const isActorMe = cleanViewer && actor === cleanViewer;
+    const actorText = isActorMe ? '@you' : actor;
+
+    const viewerInMembers = cleanViewer && memberList.includes(cleanViewer);
+    let membersDisplay = '';
+    if (viewerInMembers) {
+      const others = memberList.filter((m) => m !== cleanViewer);
+      membersDisplay = others.length > 0 ? `you and ${others.join(', ')}` : 'you';
+    } else {
+      membersDisplay = memberList.join(', ');
+    }
+
+    return `👤 ${actorText} added ${membersDisplay} to the group`;
+  }
+
+  // 5. Promoted to Admin: ⭐ <actor> promoted <target> to Group Admin
+  const promoteMatch = text.match(/^⭐\s*@?([a-zA-Z0-9_]+)\s+promoted\s+@?([a-zA-Z0-9_]+)\s+to\s+Group\s+Admin/i);
+  if (promoteMatch) {
+    const actor = normalizeNickname(promoteMatch[1]);
+    const target = normalizeNickname(promoteMatch[2]);
+    if (cleanViewer && actor === cleanViewer) {
+      return `⭐ @you promoted ${target} to Group Admin`;
+    }
+    if (cleanViewer && target === cleanViewer) {
+      return `⭐ ${actor} promoted you to Group Admin`;
+    }
+    return `⭐ ${actor} promoted ${target} to Group Admin`;
+  }
+
+  // 6. Removed as Admin: 🛡️ <actor> removed <target> as Group Admin
+  const demoteMatch = text.match(/^🛡️\s*@?([a-zA-Z0-9_]+)\s+removed\s+@?([a-zA-Z0-9_]+)\s+as\s+Group\s+Admin/i);
+  if (demoteMatch) {
+    const actor = normalizeNickname(demoteMatch[1]);
+    const target = normalizeNickname(demoteMatch[2]);
+    if (cleanViewer && actor === cleanViewer) {
+      return `🛡️ @you removed ${target} as Group Admin`;
+    }
+    if (cleanViewer && target === cleanViewer) {
+      return `🛡️ ${actor} removed you as Group Admin`;
+    }
+    return `🛡️ ${actor} removed ${target} as Group Admin`;
+  }
+
+  // 7. Updated group profile: ✏️ <actor> updated the group profile
+  const updateMatch = text.match(/^✏️\s*@?([a-zA-Z0-9_]+)\s+updated\s+the\s+group\s+profile/i);
+  if (updateMatch) {
+    const actor = normalizeNickname(updateMatch[1]);
+    if (cleanViewer && actor === cleanViewer) {
+      return `✏️ @you updated the group profile`;
+    }
+    return `✏️ ${actor} updated the group profile`;
+  }
+
+  // Generic fallback: format @mentions
+  if (cleanViewer) {
+    text = text.replace(/@([a-zA-Z0-9_]+)/g, (_, nick) => {
+      const clean = normalizeNickname(nick);
+      if (clean === cleanViewer) return '@you';
+      return clean;
+    });
+  }
+
+  return text;
+}
+
+/**
  * Send an automated group system notification message into the chat stream
  */
 export function sendGroupSystemMessage(
@@ -441,7 +610,7 @@ export function sendGroupSystemMessage(
   const sysMsg: DirectMessage = {
     id: `sys_group_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     conversationId: groupId,
-    senderNickname: 'FUHSI Group System',
+    senderNickname: 'System',
     receiverNickname: 'group',
     text,
     timestamp: new Date().toISOString(),
@@ -466,25 +635,24 @@ export function createChatGroup(params: {
   creatorNickname: string;
   initialMemberNicknames: string[];
 }): ChatGroup {
-  const creatorDisplay = params.creatorNickname.startsWith('@')
-    ? params.creatorNickname
-    : `@${params.creatorNickname}`;
+  const cleanCreator = normalizeNickname(params.creatorNickname);
+  const creatorDisplay = `@${cleanCreator}`;
 
   const cleanMembers = new Set<string>();
   cleanMembers.add(creatorDisplay);
 
   const addedMembersList: string[] = [];
   (params.initialMemberNicknames || []).forEach((m) => {
-    const formatted = m.startsWith('@') ? m : `@${m}`;
-    cleanMembers.add(formatted);
-    if (normalizeNickname(m) !== normalizeNickname(creatorDisplay)) {
-      addedMembersList.push(formatted);
+    const cleanM = normalizeNickname(m);
+    if (cleanM && cleanM !== cleanCreator) {
+      cleanMembers.add(`@${cleanM}`);
+      addedMembersList.push(cleanM);
     }
   });
 
   const creationMsg = addedMembersList.length > 0
-    ? `🎯 ${creatorDisplay} created the group "${params.name.trim()}" and added ${addedMembersList.join(', ')}`
-    : `🎯 ${creatorDisplay} created the group "${params.name.trim()}"`;
+    ? `🎯 Group created by ${cleanCreator} · Added ${addedMembersList.join(', ')}`
+    : `🎯 Group created by ${cleanCreator}`;
 
   const newGroup: ChatGroup = {
     id: `group_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -497,7 +665,7 @@ export function createChatGroup(params: {
     adminNicknames: [creatorDisplay],
     memberNicknames: Array.from(cleanMembers),
     lastMessage: creationMsg,
-    lastMessageSender: creatorDisplay,
+    lastMessageSender: cleanCreator,
     lastTimestamp: formatMessageTime(new Date()),
     unreadCount: 0,
     updatedAt: new Date().toISOString(),
@@ -516,7 +684,7 @@ export function createChatGroup(params: {
   setGroupLastReadTime(newGroup.id, creatorDisplay, new Date().toISOString());
 
   // Send system message into chat stream (marked read for creator, unread for all added members)
-  sendGroupSystemMessage(newGroup.id, creationMsg, creatorDisplay);
+  sendGroupSystemMessage(newGroup.id, creationMsg, cleanCreator);
 
   return newGroup;
 }
@@ -538,9 +706,15 @@ export function updateGroupInfo(
     throw new Error('Only group admins can update group information');
   }
 
+  const cleanActor = normalizeNickname(actorNickname);
+  const sysText = `✏️ ${cleanActor} updated the group profile`;
+
   const updated: ChatGroup = {
     ...current,
     ...updates,
+    lastMessage: sysText,
+    lastMessageSender: cleanActor,
+    lastTimestamp: formatMessageTime(new Date()),
     updatedAt: new Date().toISOString(),
   };
 
@@ -548,8 +722,7 @@ export function updateGroupInfo(
   saveStoredChatGroups(stored);
   saveChatGroupToFirestore(updated).catch(console.error);
 
-  const actorTag = actorNickname.startsWith('@') ? actorNickname : `@${actorNickname}`;
-  sendGroupSystemMessage(groupId, `✏️ ${actorTag} updated the group profile`);
+  sendGroupSystemMessage(groupId, sysText, cleanActor);
 
   return updated;
 }
@@ -571,28 +744,29 @@ export function addGroupMembers(
     throw new Error('Only group admins can add new members');
   }
 
+  const cleanActor = normalizeNickname(actorNickname);
   const currentMembers = new Set(current.memberNicknames || []);
   const added: string[] = [];
 
   newMemberNicknames.forEach((m) => {
-    const formatted = m.startsWith('@') ? m : `@${m}`;
-    if (!currentMembers.has(formatted)) {
+    const cleanM = normalizeNickname(m);
+    const formatted = `@${cleanM}`;
+    if (!Array.from(currentMembers).some((cm) => normalizeNickname(cm) === cleanM)) {
       currentMembers.add(formatted);
-      added.push(formatted);
+      added.push(cleanM);
     }
   });
 
   if (added.length === 0) return current;
 
-  const actorTag = actorNickname.startsWith('@') ? actorNickname : `@${actorNickname}`;
   const addedList = added.join(', ');
-  const systemMsgText = `👤 ${actorTag} added ${addedList} to the group`;
+  const systemMsgText = `👤 ${cleanActor} added ${addedList} to the group`;
 
   const updated: ChatGroup = {
     ...current,
     memberNicknames: Array.from(currentMembers),
     lastMessage: systemMsgText,
-    lastMessageSender: actorTag,
+    lastMessageSender: cleanActor,
     lastTimestamp: formatMessageTime(new Date()),
     updatedAt: new Date().toISOString(),
   };
@@ -601,7 +775,7 @@ export function addGroupMembers(
   saveStoredChatGroups(stored);
   saveChatGroupToFirestore(updated).catch(console.error);
 
-  sendGroupSystemMessage(groupId, systemMsgText, actorNickname);
+  sendGroupSystemMessage(groupId, systemMsgText, cleanActor);
 
   return updated;
 }
@@ -646,10 +820,15 @@ export function removeGroupMember(
     (a) => normalizeNickname(a) !== cleanTarget
   );
 
+  const systemMsgText = `👋 ${cleanTarget} was removed by ${cleanActor}`;
+
   const updated: ChatGroup = {
     ...current,
     memberNicknames: updatedMembers,
     adminNicknames: updatedAdmins,
+    lastMessage: systemMsgText,
+    lastMessageSender: cleanActor,
+    lastTimestamp: formatMessageTime(new Date()),
     updatedAt: new Date().toISOString(),
   };
 
@@ -657,9 +836,7 @@ export function removeGroupMember(
   saveStoredChatGroups(stored);
   saveChatGroupToFirestore(updated).catch(console.error);
 
-  const actorTag = actorNickname.startsWith('@') ? actorNickname : `@${actorNickname}`;
-  const targetTag = targetNickname.startsWith('@') ? targetNickname : `@${targetNickname}`;
-  sendGroupSystemMessage(groupId, `👋 ${targetTag} was removed by ${actorTag}`);
+  sendGroupSystemMessage(groupId, systemMsgText, cleanActor);
 
   return updated;
 }
@@ -696,8 +873,7 @@ export function toggleGroupAdmin(
     throw new Error('Only the group creator can dismiss other admins');
   }
 
-  const targetTag = targetNickname.startsWith('@') ? targetNickname : `@${targetNickname}`;
-  const actorTag = actorNickname.startsWith('@') ? actorNickname : `@${actorNickname}`;
+  const targetTag = `@${cleanTarget}`;
 
   let updatedAdmins = [...(current.adminNicknames || [])];
 
@@ -709,9 +885,16 @@ export function toggleGroupAdmin(
     updatedAdmins = updatedAdmins.filter((a) => normalizeNickname(a) !== cleanTarget);
   }
 
+  const systemMsgText = makeAdmin
+    ? `⭐ ${cleanActor} promoted ${cleanTarget} to Group Admin`
+    : `🛡️ ${cleanActor} removed ${cleanTarget} as Group Admin`;
+
   const updated: ChatGroup = {
     ...current,
     adminNicknames: updatedAdmins,
+    lastMessage: systemMsgText,
+    lastMessageSender: cleanActor,
+    lastTimestamp: formatMessageTime(new Date()),
     updatedAt: new Date().toISOString(),
   };
 
@@ -719,11 +902,7 @@ export function toggleGroupAdmin(
   saveStoredChatGroups(stored);
   saveChatGroupToFirestore(updated).catch(console.error);
 
-  if (makeAdmin) {
-    sendGroupSystemMessage(groupId, `⭐ ${actorTag} promoted ${targetTag} to Group Admin`);
-  } else {
-    sendGroupSystemMessage(groupId, `🛡️ ${actorTag} removed ${targetTag} as Group Admin`);
-  }
+  sendGroupSystemMessage(groupId, systemMsgText, cleanActor);
 
   return updated;
 }
@@ -757,11 +936,16 @@ export function leaveGroup(groupId: string, userNickname: string): ChatGroup | n
     }
   }
 
+  const systemMsgText = `🚪 ${cleanMe} left the group`;
+
   const updated: ChatGroup = {
     ...current,
     createdBy: newCreator,
     memberNicknames: updatedMembers,
     adminNicknames: updatedAdmins,
+    lastMessage: systemMsgText,
+    lastMessageSender: cleanMe,
+    lastTimestamp: formatMessageTime(new Date()),
     updatedAt: new Date().toISOString(),
   };
 
@@ -783,8 +967,7 @@ export function leaveGroup(groupId: string, userNickname: string): ChatGroup | n
   // Clear messages locally for the leaving user
   clearConversationHistoryForUser(groupId, userNickname);
 
-  const userTag = userNickname.startsWith('@') ? userNickname : `@${userNickname}`;
-  sendGroupSystemMessage(groupId, `🚪 ${userTag} left the group`);
+  sendGroupSystemMessage(groupId, systemMsgText, cleanMe);
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('fuhsi_group_left', { detail: { groupId } }));
