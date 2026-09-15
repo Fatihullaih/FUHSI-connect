@@ -8,6 +8,7 @@ import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { normalizeNickname } from '../utils/messagingUtils';
 import { createChatGroup } from '../utils/groupUtils';
 import { optimizeAvatarImage } from '../utils/imageUtils';
+import { ImageCropModal } from './ImageCropModal';
 import { 
   Users, 
   Camera, 
@@ -51,6 +52,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
   const [selectedNicknames, setSelectedNicknames] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [cropImageSource, setCropImageSource] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cleanMyNickname = normalizeNickname(myNickname);
@@ -73,7 +75,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
     }).slice(0, 30);
   }, [allUsers, memberSearch, cleanMyNickname]);
 
-  // Handle local image selection directly (upload picture only, no cropping)
+  // Handle local image selection from device media
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -90,13 +92,10 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
 
     setErrorMessage('');
     const reader = new FileReader();
-    reader.onload = async () => {
+    reader.onload = () => {
       const result = reader.result as string;
-      try {
-        const cropped = await optimizeAvatarImage(result, 400, 0.85);
-        setAvatarUrl(cropped);
-      } catch {
-        setAvatarUrl(result);
+      if (result) {
+        setCropImageSource(result);
       }
     };
     reader.readAsDataURL(file);
@@ -437,6 +436,18 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
           </div>
         </form>
       </div>
+
+      {cropImageSource && (
+        <ImageCropModal
+          imageSrc={cropImageSource}
+          title="Crop Group Picture"
+          onClose={() => setCropImageSource(null)}
+          onCropComplete={(croppedDataUrl) => {
+            setAvatarUrl(croppedDataUrl);
+            setCropImageSource(null);
+          }}
+        />
+      )}
     </div>
   );
 };

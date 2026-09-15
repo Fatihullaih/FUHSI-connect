@@ -61,7 +61,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     authorBadgeTitle = '',
     authorIsVerified = false,
     authorPoints,
-    authorJoinedDate = 'Jul 2026',
+    authorJoinedDate,
     currentUserNickname,
     userProfile,
     allPosts = [],

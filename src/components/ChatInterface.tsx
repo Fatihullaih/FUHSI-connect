@@ -158,7 +158,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       senderNickname: isAdminUser ? `${myNickname} (Admin)` : myNickname,
       receiverNickname: recipientNickname,
       text: textToSend,
-      timestamp: formatMessageTime(),
+      timestamp: new Date().toISOString(),
       itemId: contextItem?.id,
       itemTitle: contextItem?.title,
       itemPrice: contextItem?.price,

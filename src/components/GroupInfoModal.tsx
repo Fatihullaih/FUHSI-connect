@@ -5,6 +5,7 @@ import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { normalizeNickname, clearConversationHistoryForUser } from '../utils/messagingUtils';
 import { optimizeAvatarImage } from '../utils/imageUtils';
+import { ImageCropModal } from './ImageCropModal';
 import { 
   isUserGroupAdmin, 
   isUserGroupCreator, 
@@ -63,6 +64,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
   const [newMembersSelected, setNewMembersSelected] = useState<string[]>([]);
   const [addMembersSearch, setAddMembersSearch] = useState('');
   const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [cropImageSource, setCropImageSource] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cleanMyNickname = normalizeNickname(myNickname);
@@ -131,7 +133,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
     }).slice(0, 25);
   }, [allUsers, group.memberNicknames, addMembersSearch]);
 
-  // Photo change handler
+  // Photo change handler (Upload picture from device media)
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -147,36 +149,31 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
     }
 
     const reader = new FileReader();
-    reader.onload = async () => {
+    reader.onload = () => {
       const result = reader.result as string;
-      try {
-        const cropped = await optimizeAvatarImage(result, 400, 0.85);
-        setEditAvatarUrl(cropped);
-        if (!isEditingInfo) {
-          const updated = updateGroupInfo(group.id, { avatarUrl: cropped }, myNickname);
-          if (updated) {
-            onGroupUpdated(updated);
-            showToast('Group photo updated', 'success');
-          }
-        }
-      } catch {
-        setEditAvatarUrl(result);
-        if (!isEditingInfo) {
-          try {
-            const updated = updateGroupInfo(group.id, { avatarUrl: result }, myNickname);
-            if (updated) {
-              onGroupUpdated(updated);
-              showToast('Group photo updated', 'success');
-            }
-          } catch (err: any) {
-            showToast(err?.message || 'Failed to update photo', 'error');
-          }
-        }
+      if (result) {
+        setCropImageSource(result);
       }
     };
     reader.readAsDataURL(file);
     if (e.target) {
       e.target.value = '';
+    }
+  };
+
+  const handleCropComplete = (croppedDataUrl: string) => {
+    setEditAvatarUrl(croppedDataUrl);
+    setCropImageSource(null);
+    if (!isEditingInfo) {
+      try {
+        const updated = updateGroupInfo(group.id, { avatarUrl: croppedDataUrl }, myNickname);
+        if (updated) {
+          onGroupUpdated(updated);
+          showToast('Group photo updated', 'success');
+        }
+      } catch (err: any) {
+        showToast(err?.message || 'Failed to update photo', 'error');
+      }
     }
   };
 
@@ -274,10 +271,11 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
 
   // Leave Group
   const handleLeaveGroup = () => {
-    if (!confirm('Are you sure you want to leave this group? You will no longer receive its messages.')) return;
+    if (!confirm('Are you sure you want to leave this group? This will remove the group and all its messages from your chats.')) return;
 
     try {
       leaveGroup(group.id, myNickname);
+      clearConversationHistoryForUser(group.id, myNickname);
       onGroupLeftOrDeleted(group.id);
       onClose();
     } catch (err: any) {
@@ -291,6 +289,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
 
     try {
       deleteChatGroup(group.id, myNickname);
+      clearConversationHistoryForUser(group.id, myNickname);
       onGroupLeftOrDeleted(group.id);
       onClose();
     } catch (err: any) {
@@ -769,6 +768,16 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
           </div>
         )}
       </div>
+
+      {/* Image Crop Modal for Group Picture */}
+      {cropImageSource && (
+        <ImageCropModal
+          imageSrc={cropImageSource}
+          title="Crop Group Picture"
+          onClose={() => setCropImageSource(null)}
+          onCropComplete={handleCropComplete}
+        />
+      )}
     </div>
   );
 };

@@ -220,39 +220,51 @@ export function sanitizeModulaProfile<T extends Partial<UserProfile>>(user: T): 
  * Format the user's join date accurately based on their joinedDate, creation timestamp in id (usr_<timestamp>), or current date.
  */
 export function formatJoinDate(user?: Partial<UserProfile> | null): string {
+  const now = new Date();
+  const fallbackDate = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(now);
+
   if (!user) {
-    return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date());
+    return fallbackDate;
   }
 
-  // If user has a valid joinedDate that isn't the stale placeholder 'Jul 2026'
-  if (user.joinedDate && user.joinedDate !== 'Jul 2026') {
-    return user.joinedDate;
+  // Pre-existing administrator account
+  if (user.id === 'usr_admin_modula' || user.nickname === '@modula' || user.nickname === 'modula') {
+    return 'Sep 2024';
   }
 
-  // If user.id contains a timestamp (e.g. usr_17734...)
-  if (user.id && user.id.startsWith('usr_')) {
-    const rawTs = user.id.replace('usr_', '');
-    const ts = parseInt(rawTs, 10);
-    if (!isNaN(ts) && ts > 1600000000000 && ts < 2500000000000) {
-      return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date(ts));
-    }
-  }
-
-  // If user has createdAt
+  // 1. Check createdAt first if available and valid
   if ((user as any).createdAt) {
     const d = new Date((user as any).createdAt);
-    if (!isNaN(d.getTime())) {
+    if (!isNaN(d.getTime()) && d.getTime() <= now.getTime() + 86400000) {
       return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(d);
     }
   }
 
-  // For pre-existing admin account
-  if (user.id === 'usr_admin_modula' || user.nickname === '@modula') {
-    return 'Sep 2024';
+  // 2. If user has a valid joinedDate that isn't empty, placeholder, or invalid future date
+  if (user.joinedDate && typeof user.joinedDate === 'string') {
+    const trimmed = user.joinedDate.trim();
+    if (
+      trimmed &&
+      trimmed !== 'Jul 2026' &&
+      !trimmed.includes('2026') &&
+      !trimmed.toLowerCase().includes('undefined') &&
+      !trimmed.toLowerCase().includes('null')
+    ) {
+      return trimmed;
+    }
   }
 
-  // Default to current actual date
-  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date());
+  // 3. If user.id contains a numeric timestamp (e.g. usr_17...)
+  if (user.id && user.id.startsWith('usr_')) {
+    const rawTs = user.id.replace('usr_', '');
+    const ts = parseInt(rawTs, 10);
+    if (!isNaN(ts) && ts > 1600000000000 && ts <= now.getTime() + 86400000) {
+      return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date(ts));
+    }
+  }
+
+  // 4. Fallback to valid current month and year
+  return fallbackDate;
 }
 
 export const DEFAULT_USERS_LIST: UserProfile[] = [

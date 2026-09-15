@@ -82,6 +82,66 @@ export const normalizeNickname = (nick: string): string => {
 };
 
 /**
+ * Robustly parses any message timestamp (ISO string, epoch ms, Date, or formatted time) into epoch milliseconds.
+ * Guaranteed never to return NaN.
+ */
+export function parseMessageTimestampMs(msg?: { timestamp?: string | number | Date; id?: string; createdAt?: string } | null): number {
+  if (!msg) return 0;
+  if (typeof msg.timestamp === 'number' && !isNaN(msg.timestamp)) return msg.timestamp;
+  if (msg.timestamp instanceof Date && !isNaN(msg.timestamp.getTime())) return msg.timestamp.getTime();
+  if (typeof msg.timestamp === 'string') {
+    const t = Date.parse(msg.timestamp);
+    if (!isNaN(t)) return t;
+    const timeMatch = msg.timestamp.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (timeMatch) {
+      const now = new Date();
+      let hrs = parseInt(timeMatch[1], 10);
+      const mins = parseInt(timeMatch[2], 10);
+      if (/PM/i.test(timeMatch[3]) && hrs < 12) hrs += 12;
+      if (/AM/i.test(timeMatch[3]) && hrs === 12) hrs = 0;
+      now.setHours(hrs, mins, 0, 0);
+      return now.getTime();
+    }
+  }
+  if (typeof msg.id === 'string') {
+    const m = msg.id.match(/(?:dm|msg|sys_group)_(\d{10,14})/);
+    if (m && m[1]) {
+      const parsed = parseInt(m[1], 10);
+      if (!isNaN(parsed) && parsed > 1600000000000) return parsed;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Format a human-friendly date divider banner between chat messages (e.g. 'Today', 'Yesterday', 'Oct 15, 2024')
+ */
+export function formatMessageDateDivider(dateInput?: string | number | Date): string {
+  if (!dateInput) return 'Today';
+  const ms = parseMessageTimestampMs({ timestamp: dateInput });
+  if (!ms) return 'Today';
+  const date = new Date(ms);
+  const now = new Date();
+  
+  const isSameDay = (d1: Date, d2: Date) =>
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate();
+
+  if (isSameDay(date, now)) return 'Today';
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (isSameDay(date, yesterday)) return 'Yesterday';
+
+  const isCurrentYear = date.getFullYear() === now.getFullYear();
+  if (isCurrentYear) {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/**
  * Cleanly extracts a pure student nickname (e.g. '@deji', '@ayo', '@fadlullah') from any raw nickname,
  * user ID, or conversation ID string (e.g. 'deji', '@deji', 'conv_admin_deji', 'conv_deji_admin', 'conv_fatih_deji', '@conv_admin_deji').
  */
@@ -574,13 +634,41 @@ export function sendDirectMessage(msg: DirectMessage): {
     console.error('Error saving direct message to Firestore:', err);
   });
 
-  // Update conversations ONLY for direct 1-on-1 messages, never for groups
-  if (
-    !safeMsg.isGroupMessage &&
-    !safeMsg.groupId &&
-    !safeMsg.conversationId?.startsWith('group_') &&
-    safeMsg.receiverNickname !== 'group'
-  ) {
+  // Update conversations or groups preview
+  const isGroupMsg = Boolean(
+    safeMsg.isGroupMessage ||
+    safeMsg.groupId ||
+    (safeMsg.conversationId && safeMsg.conversationId.startsWith('group_')) ||
+    safeMsg.receiverNickname === 'group'
+  );
+
+  if (isGroupMsg) {
+    const targetGroupId = safeMsg.groupId || (safeMsg.conversationId?.startsWith('group_') ? safeMsg.conversationId : undefined);
+    if (targetGroupId) {
+      try {
+        const groupsRaw = localStorage.getItem('fuhsi_chat_groups_db');
+        if (groupsRaw) {
+          const groups = JSON.parse(groupsRaw);
+          if (Array.isArray(groups)) {
+            const idx = groups.findIndex((g: any) => g.id === targetGroupId);
+            if (idx >= 0) {
+              groups[idx] = {
+                ...groups[idx],
+                lastMessage: safeMsg.text,
+                lastMessageSender: safeMsg.senderNickname,
+                lastTimestamp: formatMessageTime(safeMsg.timestamp),
+                updatedAt: typeof safeMsg.timestamp === 'string' && safeMsg.timestamp.includes('T') ? safeMsg.timestamp : new Date().toISOString(),
+              };
+              localStorage.setItem('fuhsi_chat_groups_db', JSON.stringify(groups));
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error updating group preview:', e);
+      }
+    }
+  } else {
+    // Update conversations ONLY for direct 1-on-1 messages, never for groups
     updateConversationList(safeMsg);
   }
 

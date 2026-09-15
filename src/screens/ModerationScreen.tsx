@@ -193,7 +193,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       senderNickname: userProfile?.nickname ? userProfile.nickname : 'FUHSI Campus Council',
       receiverNickname: targetNick,
       text: fullMessageText,
-      timestamp: formatMessageTime(),
+      timestamp: new Date().toISOString(),
     };
 
     sendDirectMessage(newMsg);

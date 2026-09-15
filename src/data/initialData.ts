@@ -19,6 +19,8 @@ export const INITIAL_USER_PROFILE: UserProfile = {
   isApproved: true,
   isDeclined: false,
   isAdmin: true,
+  joinedDate: 'Sep 2024',
+  createdAt: '2024-09-01T00:00:00.000Z',
 };
 
 export const INITIAL_POSTS: Post[] = [];

@@ -5,6 +5,7 @@ import {
   sendDirectMessage, 
   getStoredDirectMessages, 
   clearConversationHistoryForUser,
+  parseMessageTimestampMs,
   DIRECT_MESSAGES_KEY 
 } from './messagingUtils';
 import { 
@@ -360,28 +361,35 @@ export function getUserGroups(userNickname: string): ChatGroup[] {
 
       // Sort chronological ascending
       groupMsgs.sort((a, b) => {
-        const tA = new Date(a.timestamp || 0).getTime() || 0;
-        const tB = new Date(b.timestamp || 0).getTime() || 0;
+        const tA = parseMessageTimestampMs(a);
+        const tB = parseMessageTimestampMs(b);
         if (tA !== tB) return tA - tB;
         return (a.id || '').localeCompare(b.id || '');
       });
 
       // The true last message in this group
       const latestMsg = groupMsgs.length > 0 ? groupMsgs[groupMsgs.length - 1] : null;
+      const latestMsgTime = latestMsg ? parseMessageTimestampMs(latestMsg) : 0;
+      const groupUpdateTime = new Date(group.updatedAt || group.createdAt || 0).getTime() || 0;
 
-      const lastMessageText = latestMsg 
-        ? latestMsg.text 
-        : (group.lastMessage || group.description || 'Tap to start group conversation');
-      
-      const lastSender = latestMsg
+      // Determine which is genuinely the most recent: latestMsg or group's stored lastMessage
+      const useStoredGroupMsg = !latestMsg || (Boolean(group.lastMessage) && groupUpdateTime > latestMsgTime + 4000);
+
+      const lastMessageText = (!useStoredGroupMsg && latestMsg)
+        ? latestMsg.text
+        : (group.lastMessage || (latestMsg ? latestMsg.text : (group.description || 'Tap to start group conversation')));
+
+      const lastSender = (!useStoredGroupMsg && latestMsg)
         ? latestMsg.senderNickname
-        : (group.lastMessageSender || '');
+        : (group.lastMessageSender || (latestMsg ? latestMsg.senderNickname : ''));
 
-      const lastTimeFormatted = latestMsg
+      const lastTimeFormatted = (!useStoredGroupMsg && latestMsg)
         ? formatMessageTime(latestMsg.timestamp)
-        : (group.lastTimestamp || formatMessageTime(group.createdAt));
+        : (group.lastTimestamp || (latestMsg ? formatMessageTime(latestMsg.timestamp) : formatMessageTime(group.createdAt)));
 
-      const sortTimestampIso = latestMsg?.timestamp || group.updatedAt || group.createdAt || new Date().toISOString();
+      const sortTimestampIso = (!useStoredGroupMsg && latestMsg)
+        ? (typeof latestMsg.timestamp === 'string' && latestMsg.timestamp.includes('T') ? latestMsg.timestamp : new Date(latestMsgTime).toISOString())
+        : (group.updatedAt || group.createdAt || new Date().toISOString());
 
       return {
         ...group,
@@ -394,8 +402,8 @@ export function getUserGroups(userNickname: string): ChatGroup[] {
       };
     })
     .sort((a, b) => {
-      const tA = new Date(a.updatedAt || a.createdAt || 0).getTime() || 0;
-      const tB = new Date(b.updatedAt || b.createdAt || 0).getTime() || 0;
+      const tA = parseMessageTimestampMs({ timestamp: a.updatedAt || a.createdAt });
+      const tB = parseMessageTimestampMs({ timestamp: b.updatedAt || b.createdAt });
       return tB - tA;
     });
 }

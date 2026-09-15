@@ -298,7 +298,7 @@ const ChatMessageItemComponent: React.FC<ChatMessageItemProps> = ({
           }`}
         >
           {/* Group Message Sender Identifier */}
-          {msg.isGroupMessage && !isMe && !isDeleted && (
+          {Boolean(msg.isGroupMessage || msg.groupId || (msg.conversationId && msg.conversationId.startsWith('group_')) || msg.receiverNickname === 'group') && !isMe && !isDeleted && (
             <div className="flex items-center gap-1.5 pb-0.5 border-b border-slate-100/80 mb-1 select-none">
               <span className="text-[11px] font-black text-teal-800 hover:text-teal-950 transition-colors">
                 {msg.senderNickname}
@@ -371,8 +371,12 @@ const ChatMessageItemComponent: React.FC<ChatMessageItemProps> = ({
                         </span>
                       );
                     }
-                    // If not mentioned, display as clean standard text without any mention styling or sign
-                    return <span key={idx}>{part}</span>;
+                    // If the sender wrote it, show it as they typed
+                    if (isMe) {
+                      return <span key={idx}>{part}</span>;
+                    }
+                    // For other members who were NOT mentioned, the mention sign/tag does not appear
+                    return <span key={idx}>{part.replace(/^@/, '')}</span>;
                   }
                   return part;
                 });

@@ -20,6 +20,9 @@ import {
   reactToDirectMessage,
   deleteDirectMessageForMe,
   deleteDirectMessageForEveryone,
+  clearConversationHistoryForUser,
+  parseMessageTimestampMs,
+  formatMessageDateDivider,
   DIRECT_MESSAGES_KEY
 } from '../utils/messagingUtils';
 import { 
@@ -74,7 +77,9 @@ import {
   MoreVertical,
   MessageSquarePlus,
   Plus,
-  Users
+  Users,
+  Eraser,
+  LogOut
 } from 'lucide-react';
 
 interface ChatsScreenProps {
@@ -104,6 +109,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeConvId, setActiveConvId] = useState<string | null>(initialConversationId || null);
   const [activeGroup, setActiveGroup] = useState<ChatGroup | null>(null);
+  const [groupDeleteModalTarget, setGroupDeleteModalTarget] = useState<ChatGroup | null>(null);
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
   const [activeRecipient, setActiveRecipient] = useState<{
@@ -384,12 +390,14 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 
     // 1. Populate cached local messages
     const localMsgs = getStoredDirectMessages()
-      .filter(
-        (m) => (m.conversationId || getConversationId(m.senderNickname, m.receiverNickname)) === activeConvId
-      )
+      .filter((m) => {
+        if (!m) return false;
+        const matchesConv = (m.conversationId || getConversationId(m.senderNickname, m.receiverNickname)) === activeConvId || m.groupId === activeConvId;
+        return matchesConv;
+      })
       .sort((a, b) => {
-        const tA = new Date(a.timestamp || 0).getTime() || 0;
-        const tB = new Date(b.timestamp || 0).getTime() || 0;
+        const tA = parseMessageTimestampMs(a);
+        const tB = parseMessageTimestampMs(b);
         if (tA !== tB) return tA - tB;
         return (a.id || '').localeCompare(b.id || '');
       });
@@ -429,8 +437,8 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
             firestoreMsgs.forEach((m) => map.set(m.id, m));
             const list = Array.from(map.values());
             list.sort((a, b) => {
-              const tA = new Date(a.timestamp || 0).getTime() || 0;
-              const tB = new Date(b.timestamp || 0).getTime() || 0;
+              const tA = parseMessageTimestampMs(a);
+              const tB = parseMessageTimestampMs(b);
               if (tA !== tB) return tA - tB;
               return (a.id || '').localeCompare(b.id || '');
             });
@@ -552,17 +560,32 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 
   const handleDeleteOrLeaveGroupClick = (e: React.MouseEvent, group: ChatGroup) => {
     e.stopPropagation();
+    setGroupDeleteModalTarget(group);
+  };
+
+  const handleConfirmExitAndDeleteGroup = (group: ChatGroup) => {
     const isCreator = normalizeNickname(group.createdBy) === cleanMyNickname;
-    const actionLabel = isCreator ? 'delete this group for all members' : 'leave this group';
-    if (window.confirm(`Are you sure you want to ${actionLabel}?`)) {
-      if (isCreator) {
-        deleteChatGroup(group.id, myNickname);
-        showToast(`Group "${group.name}" deleted.`, 'info');
-      } else {
-        leaveGroup(group.id, myNickname);
-        showToast(`Left group "${group.name}".`, 'info');
+    if (isCreator) {
+      deleteChatGroup(group.id, myNickname);
+      showToast(`Group "${group.name}" deleted for all members.`, 'info');
+    } else {
+      leaveGroup(group.id, myNickname);
+      showToast(`Exited and removed group "${group.name}".`, 'info');
+    }
+    clearConversationHistoryForUser(group.id, myNickname);
+    handleLeaveOrDeleteGroup(group.id);
+  };
+
+  const handleConfirmClearGroupHistoryOnly = (group: ChatGroup) => {
+    try {
+      clearConversationHistoryForUser(group.id, myNickname);
+      if (activeConvId === group.id) {
+        setActiveMessages([]);
       }
-      handleLeaveOrDeleteGroup(group.id);
+      refreshConversations();
+      showToast(`Message history for "${group.name}" cleared on your device.`, 'success');
+    } catch (err: any) {
+      showToast('Failed to clear group message history', 'error');
     }
   };
 
@@ -1087,8 +1110,15 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 
                   // Format last message for display
                   let lastMsgText = group.lastMessage || group.description || 'Tap to start group conversation';
-                  if (lastMsgText.includes(myNickname) || lastMsgText.includes(cleanMyNickname)) {
-                    lastMsgText = lastMsgText.replace(new RegExp(`@?${cleanMyNickname}\\b`, 'gi'), 'you');
+                  if (lastMsgText.includes('@')) {
+                    lastMsgText = lastMsgText.replace(/@([a-zA-Z0-9_]+)/g, (fullMatch, nick) => {
+                      const cleanMentioned = normalizeNickname(nick);
+                      if (cleanMentioned === cleanMyNickname) {
+                        return '@you';
+                      }
+                      // For other users they didn't mention, the mention sign does not appear
+                      return nick;
+                    });
                   }
                   const senderPrefix = group.lastMessageSender && normalizeNickname(group.lastMessageSender) !== cleanMyNickname
                     ? `${group.lastMessageSender}: `
@@ -1213,8 +1243,8 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                       {/* Leave / Delete Group Action */}
                       <button
                         onClick={(e) => handleDeleteOrLeaveGroupClick(e, group)}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer shrink-0 ml-1"
-                        title={isCreator ? 'Delete group permanently' : 'Leave group'}
+                        className="opacity-70 sm:opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer shrink-0 ml-1"
+                        title={isCreator ? 'Delete or clear group' : 'Leave or clear group'}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -1532,38 +1562,56 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                     </p>
                   </div>
                 ) : (
-                  visibleMessages.map((msg) => {
+                  visibleMessages.map((msg, idx) => {
                     const isMe = normalizeNickname(msg.senderNickname) === cleanMyNickname;
+                    const prevMsg = idx > 0 ? visibleMessages[idx - 1] : null;
+                    const showDateDivider = !prevMsg || (() => {
+                      const prevTime = parseMessageTimestampMs(prevMsg);
+                      const currTime = parseMessageTimestampMs(msg);
+                      if (!prevTime || !currTime) return false;
+                      const prevDate = new Date(prevTime).toDateString();
+                      const currDate = new Date(currTime).toDateString();
+                      return prevDate !== currDate;
+                    })();
 
                     return (
-                      <ChatMessageItem
-                        key={msg.id}
-                        msg={msg}
-                        isMe={isMe}
-                        myNickname={myNickname}
-                        onReply={(m) => {
-                          setReplyingTo(m);
-                          if (textareaRef.current) {
-                            textareaRef.current.focus();
-                          }
-                        }}
-                        onOpenMenu={(m) => {
-                          setSelectedMessageForAction(m);
-                        }}
-                        onReact={(msgId, emoji) => {
-                          handleReactToMessage(msgId, emoji);
-                        }}
-                        onScrollToMessage={(targetMsgId) => {
-                          const el = document.getElementById(`msg-${targetMsgId}`);
-                          if (el) {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            el.classList.add('ring-2', 'ring-teal-400');
-                            setTimeout(() => {
-                              el.classList.remove('ring-2', 'ring-teal-400');
-                            }, 1500);
-                          }
-                        }}
-                      />
+                      <React.Fragment key={msg.id}>
+                        {showDateDivider && (
+                          <div className="flex justify-center my-3 select-none">
+                            <span className="px-3 py-1 bg-slate-200/90 text-slate-700 text-[10px] font-extrabold rounded-full shadow-2xs">
+                              {formatMessageDateDivider(msg.timestamp)}
+                            </span>
+                          </div>
+                        )}
+                        <ChatMessageItem
+                          key={msg.id}
+                          msg={msg}
+                          isMe={isMe}
+                          myNickname={myNickname}
+                          onReply={(m) => {
+                            setReplyingTo(m);
+                            if (textareaRef.current) {
+                              textareaRef.current.focus();
+                            }
+                          }}
+                          onOpenMenu={(m) => {
+                            setSelectedMessageForAction(m);
+                          }}
+                          onReact={(msgId, emoji) => {
+                            handleReactToMessage(msgId, emoji);
+                          }}
+                          onScrollToMessage={(targetMsgId) => {
+                            const el = document.getElementById(`msg-${targetMsgId}`);
+                            if (el) {
+                              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              el.classList.add('ring-2', 'ring-teal-400');
+                              setTimeout(() => {
+                                el.classList.remove('ring-2', 'ring-teal-400');
+                              }, 1500);
+                            }
+                          }}
+                        />
+                      </React.Fragment>
                     );
                   })
                 )}
@@ -1992,6 +2040,69 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
           onGroupLeftOrDeleted={handleLeaveOrDeleteGroup}
           onOpenProfile={onOpenProfile}
         />
+      )}
+
+      {/* Group Chat Exit / Delete / Clear Confirmation Modal */}
+      {groupDeleteModalTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm sm:max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shrink-0">
+                <Trash2 size={20} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-black text-slate-900 truncate">
+                  Delete Group Chat
+                </h3>
+                <p className="text-xs text-slate-500 font-bold truncate">
+                  "{groupDeleteModalTarget.name}"
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 font-medium leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+              Deleting this group chat will serve as <strong className="text-slate-900 font-black">exiting the group</strong> and removing it from your chat list along with all group messages.
+              <br /><br />
+              Alternatively, you can choose to <strong className="text-slate-900 font-black">Clear Message History</strong> to delete messages on your device only without leaving the group.
+            </p>
+
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const grp = groupDeleteModalTarget;
+                  setGroupDeleteModalTarget(null);
+                  handleConfirmExitAndDeleteGroup(grp);
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-black shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <LogOut size={14} />
+                <span>Exit & Delete Group</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const grp = groupDeleteModalTarget;
+                  setGroupDeleteModalTarget(null);
+                  handleConfirmClearGroupHistoryOnly(grp);
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 hover:border-teal-200 border border-slate-200 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Eraser size={14} />
+                <span>Clear Message History Only (Stay in Group)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setGroupDeleteModalTarget(null)}
+                className="w-full py-2 px-4 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Floating Action Button (FAB) for New Chat (Like Create Post on Feed / Post Item on Marketplace) */}

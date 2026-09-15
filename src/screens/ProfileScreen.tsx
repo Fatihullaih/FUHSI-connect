@@ -49,6 +49,7 @@ import { StudentConversionModal } from '../components/StudentConversionModal';
 import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
+import { ImageCropModal } from '../components/ImageCropModal';
 
 interface ProfileScreenProps {
   userProfile: UserProfile | null;
@@ -161,6 +162,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [showSavedToast, setShowSavedToast] = useState(false);
   const [isAvatarDirty, setIsAvatarDirty] = useState(false);
   const [isProcessingAvatar, setIsProcessingAvatar] = useState(false);
+  const [cropImageSource, setCropImageSource] = useState<string | null>(null);
 
   // Theme Mode State (Persisted in Local Storage)
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredTheme());
@@ -357,54 +359,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       const reader = new FileReader();
       reader.onload = () => {
         const rawResult = reader.result;
+        setIsProcessingAvatar(false);
         if (typeof rawResult !== 'string') {
-          setIsProcessingAvatar(false);
           setSaveErrorMessage('Failed to read image file.');
           return;
         }
-
-        const img = new Image();
-        img.onload = () => {
-          try {
-            // Resize to standard 512x512 square for avatar, optimized JPEG
-            const size = 512;
-            const canvas = document.createElement('canvas');
-            canvas.width = size;
-            canvas.height = size;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-              setAvatarUrl(rawResult);
-              setIsAvatarDirty(true);
-              setIsProcessingAvatar(false);
-              return;
-            }
-
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-
-            // Center-crop to square
-            const minSide = Math.min(img.naturalWidth, img.naturalHeight);
-            const startX = (img.naturalWidth - minSide) / 2;
-            const startY = (img.naturalHeight - minSide) / 2;
-
-            ctx.drawImage(img, startX, startY, minSide, minSide, 0, 0, size, size);
-
-            const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
-            setAvatarUrl(optimizedDataUrl);
-            setIsAvatarDirty(true);
-            setIsProcessingAvatar(false);
-          } catch (err) {
-            console.error('Image processing error:', err);
-            setAvatarUrl(rawResult);
-            setIsAvatarDirty(true);
-            setIsProcessingAvatar(false);
-          }
-        };
-        img.onerror = () => {
-          setIsProcessingAvatar(false);
-          setSaveErrorMessage('Could not load image. Please select a different image.');
-        };
-        img.src = rawResult;
+        setCropImageSource(rawResult);
       };
       reader.onerror = () => {
         setIsProcessingAvatar(false);
@@ -1857,6 +1817,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             }
           }}
           onClose={() => setShowFollowersModal(null)}
+        />
+      )}
+
+      {/* Image Crop Modal for Profile Picture */}
+      {cropImageSource && (
+        <ImageCropModal
+          imageSrc={cropImageSource}
+          title="Crop Profile Picture"
+          onClose={() => setCropImageSource(null)}
+          onCropComplete={(croppedDataUrl) => {
+            setAvatarUrl(croppedDataUrl);
+            setIsAvatarDirty(true);
+            setCropImageSource(null);
+          }}
         />
       )}
     </div>
