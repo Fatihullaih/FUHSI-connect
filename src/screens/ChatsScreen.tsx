@@ -986,17 +986,19 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 {conversations.length} direct • {groups.length} group{groups.length !== 1 ? 's' : ''}
               </p>
             </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                id="chats-header-create-group-btn"
-                onClick={() => setShowCreateGroupModal(true)}
-                className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 active:scale-95 text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                title="Create a Group"
-              >
-                <Users size={14} />
-                <span>+ Group</span>
-              </button>
-            </div>
+            {!isCurrentUserGuest && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  id="chats-header-create-group-btn"
+                  onClick={() => setShowCreateGroupModal(true)}
+                  className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 active:scale-95 text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                  title="Create a Group"
+                >
+                  <Users size={14} />
+                  <span>+ Group</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Chat Category Tabs */}
@@ -1039,6 +1041,19 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
             <Lock size={13} className="text-teal-700 shrink-0" />
             <span>Private & Protected</span>
           </div>
+
+          {/* Guest Account Notice */}
+          {isCurrentUserGuest && (
+            <div className="m-3 p-3 bg-slate-100 border border-slate-200 rounded-2xl text-slate-800 space-y-1">
+              <div className="flex items-center gap-1.5 font-black text-xs text-slate-900">
+                <span>🏷️</span>
+                <span>Guest Account Access</span>
+              </div>
+              <p className="text-[11px] leading-snug font-medium text-slate-600">
+                Direct and group chats with other users are reserved for registered FUHSI Students. As a Guest, you can contact Campus Administration (<span className="font-bold text-teal-800">@modula</span>) for official inquiries.
+              </p>
+            </div>
+          )}
 
           {/* Restriction Banner (If User is Restricted) */}
           {restrictionInfo.isRestricted && (

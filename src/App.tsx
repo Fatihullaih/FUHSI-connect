@@ -1679,7 +1679,7 @@ export const App: React.FC = () => {
 
   // Dedicated Centralized Verification Application Handler with Real-time Firestore & Central Server Sync
   const handleSubmitVerification = async (data?: {
-    accountType?: 'Student' | 'Executive' | 'Organization';
+    accountType?: 'Student' | 'Executive' | 'Organization' | 'Guest' | string;
     positionTitle?: string;
     matricNumber?: string;
     department?: string;
@@ -1692,7 +1692,8 @@ export const App: React.FC = () => {
   }) => {
     if (!userProfile) return;
 
-    const accountType = data?.accountType || 'Student';
+    const isGuest = isGuestAccount(userProfile);
+    const accountType = data?.accountType || (isGuest ? 'Guest' : 'Student');
     const positionTitle = data?.positionTitle || '';
     const updatedUser: UserProfile = {
       ...userProfile,
@@ -1721,20 +1722,20 @@ export const App: React.FC = () => {
 
     const newReq: VerificationRequest = {
       id: `verif_req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      applicantNickname: userProfile.nickname || 'Student',
-      applicantFullName: userProfile.realName || userProfile.nickname || 'Student',
+      applicantNickname: userProfile.nickname || (isGuest ? 'Guest' : 'Student'),
+      applicantFullName: userProfile.realName || userProfile.nickname || (isGuest ? 'Guest' : 'Student'),
       applicantEmail: userProfile.studentEmail || 'N/A',
       applicantPhone: userProfile.emergencyHomePhone || 'N/A',
-      department: userProfile.department || data?.department || 'N/A',
-      level: userProfile.level || data?.level || 'N/A',
-      category: data?.category || `${accountType} Verification`,
-      accountType: accountType,
+      department: userProfile.department || data?.department || (isGuest ? 'General / Guest' : 'N/A'),
+      level: userProfile.level || data?.level || (isGuest ? 'Guest' : 'N/A'),
+      category: data?.category || (isGuest ? 'Guest Verification' : `${accountType} Verification`),
+      accountType: isGuest ? 'Guest' : accountType,
       positionTitle: positionTitle,
       matricNumber: userProfile.matricNumber || data?.matricNumber || 'N/A',
-      proofDetails: data?.proofDetails || (positionTitle ? `Position Held: ${positionTitle}` : 'Standard Verification Request'),
+      proofDetails: data?.proofDetails || (positionTitle ? `Position Held: ${positionTitle}` : (isGuest ? 'Guest Account Verification Request' : 'Standard Verification Request')),
       paymentRef: data?.paymentRef || `SQUADCO-9G4DX4-${Math.floor(100000 + Math.random() * 900000)}`,
       amountPaid: data?.amountPaid || 1500,
-      statement: data?.statement || `Category: ${accountType}${positionTitle ? ` | Position: ${positionTitle}` : ''} | Name: ${userProfile.realName || userProfile.nickname || 'Student'} | Dept: ${userProfile.department || 'FUHSI'} (${userProfile.level || 'N/A'})`,
+      statement: data?.statement || (isGuest ? `Guest Account Verification | Note: ${positionTitle || 'None'}` : `Category: ${accountType}${positionTitle ? ` | Position: ${positionTitle}` : ''} | Name: ${userProfile.realName || userProfile.nickname || 'Student'} | Dept: ${userProfile.department || 'FUHSI'} (${userProfile.level || 'N/A'})`),
       timestamp: new Date().toISOString(),
       status: 'PENDING',
     };
@@ -1763,256 +1764,6 @@ export const App: React.FC = () => {
 
   const handleSubmitVerificationRequest = (category: string, statement: string) => {
     handleSubmitVerification({ category, statement });
-  };
-
-  // Handler for Guest applying to Subscribe to Student Account
-  const handleStudentConversionSubmit = async (data: {
-    fullName: string;
-    matricNumber: string;
-    department: string;
-    level: string;
-    email?: string;
-    phone?: string;
-    fee: number;
-    paymentRef: string;
-  }) => {
-    if (!userProfile) return;
-
-    const updatedUser: UserProfile = {
-      ...userProfile,
-      studentConversionStatus: 'pending',
-    };
-    setUserProfile(updatedUser);
-    try {
-      localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedUser));
-      const storedUsers = localStorage.getItem('fuhsi_users_db');
-      let list: UserProfile[] = storedUsers ? JSON.parse(storedUsers) : [];
-      const idx = list.findIndex(
-        (u) => u.id === updatedUser.id || u.nickname?.toLowerCase() === updatedUser.nickname?.toLowerCase()
-      );
-      if (idx >= 0) {
-        list[idx] = { ...list[idx], ...updatedUser };
-      } else {
-        list.push(updatedUser);
-      }
-      localStorage.setItem('fuhsi_users_db', JSON.stringify(list));
-    } catch (e) {
-      console.error(e);
-    }
-
-    saveUserToFirestore(updatedUser).catch((err) => console.error('Error saving user student conversion status to Firestore:', err));
-
-    const newReq: VerificationRequest = {
-      id: `conv_req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      requestType: 'STUDENT_CONVERSION',
-      applicantNickname: userProfile.nickname || 'Guest',
-      applicantFullName: data.fullName || userProfile.realName || userProfile.nickname || 'Guest',
-      applicantEmail: data.email || userProfile.studentEmail || 'N/A',
-      applicantPhone: data.phone || userProfile.emergencyHomePhone || 'N/A',
-      department: data.department,
-      level: data.level,
-      category: 'Student Conversion Subscription',
-      accountType: 'Guest',
-      matricNumber: data.matricNumber,
-      proofDetails: `Conversion from Guest to Student | Dept: ${data.department} | Matric: ${data.matricNumber}`,
-      paymentRef: data.paymentRef,
-      amountPaid: data.fee,
-      statement: `Student Conversion Subscription: ${data.fullName} (${data.matricNumber}) - Dept: ${data.department} (${data.level})`,
-      timestamp: new Date().toISOString(),
-      status: 'PENDING',
-    };
-
-    await saveVerificationRequestToFirestore(newReq);
-
-    setVerificationRequests((prev) => {
-      const updated = [newReq, ...prev.filter((r) => r.id !== newReq.id)];
-      try {
-        localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
-      return updated;
-    });
-
-    try {
-      pushServerDbSync({ verificationRequests: [newReq], users: [updatedUser] });
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Handler for Admin approving student conversion
-  const handleApproveStudentConversion = (
-    reqId: string,
-    applicantNickname: string,
-    applicantFullName: string,
-    matricNumber: string,
-    department: string,
-    level: string
-  ) => {
-    const cleanTarget = applicantNickname.toLowerCase().replace(/^@/, '');
-
-    // 1. Update verification request status
-    setVerificationRequests((prev) => {
-      const updatedList = prev.map((v) => {
-        if (v.id === reqId) {
-          const approvedReq: VerificationRequest = {
-            ...v,
-            status: 'APPROVED' as const,
-          };
-          saveVerificationRequestToFirestore(approvedReq).catch(console.error);
-          return approvedReq;
-        }
-        return v;
-      });
-      try {
-        localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
-        pushServerDbSync({ verificationRequests: updatedList });
-      } catch (e) {}
-      return updatedList;
-    });
-
-    // 2. Update user in users_db and Firestore to full Student account
-    try {
-      const storedUsers = localStorage.getItem('fuhsi_users_db');
-      let usersList: UserProfile[] = storedUsers ? JSON.parse(storedUsers) : [];
-      let matched = false;
-      usersList = usersList.map((u) => {
-        const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
-        if (uNick === cleanTarget || u.id === applicantNickname) {
-          matched = true;
-          const updatedUserRecord: UserProfile = {
-            ...u,
-            accountType: 'Student',
-            realName: applicantFullName,
-            realNameHidden: applicantFullName,
-            matricNumber: matricNumber,
-            department: department,
-            level: level,
-            badgeType: 'GREEN',
-            badgeTitle: 'FUHSI Student',
-            studentConversionStatus: 'approved',
-            isApproved: true,
-            isVerified: false,
-            verificationStatus: 'none',
-          };
-          saveUserToFirestore(updatedUserRecord).catch(console.error);
-          return updatedUserRecord;
-        }
-        return u;
-      });
-
-      if (!matched && userProfile && userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget) {
-        const updatedUserRecord: UserProfile = {
-          ...userProfile,
-          accountType: 'Student',
-          realName: applicantFullName,
-          realNameHidden: applicantFullName,
-          matricNumber: matricNumber,
-          department: department,
-          level: level,
-          badgeType: 'GREEN',
-          badgeTitle: 'FUHSI Student',
-          studentConversionStatus: 'approved',
-          isApproved: true,
-          isVerified: false,
-          verificationStatus: 'none',
-        };
-        usersList.push(updatedUserRecord);
-        saveUserToFirestore(updatedUserRecord).catch(console.error);
-      }
-
-      localStorage.setItem('fuhsi_users_db', JSON.stringify(usersList));
-      pushServerDbSync({ users: usersList });
-    } catch (e) {
-      console.error(e);
-    }
-
-    // 3. Update active user profile if the converted user is the currently active user
-    if (
-      userProfile &&
-      (userProfile.nickname.toLowerCase() === applicantNickname.toLowerCase() ||
-        userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget ||
-        userProfile.id === applicantNickname)
-    ) {
-      const updatedActive: UserProfile = {
-        ...userProfile,
-        accountType: 'Student',
-        realName: applicantFullName,
-        realNameHidden: applicantFullName,
-        matricNumber: matricNumber,
-        department: department,
-        level: level,
-        badgeType: 'GREEN',
-        badgeTitle: 'FUHSI Student',
-        studentConversionStatus: 'approved',
-        isApproved: true,
-        isVerified: false,
-        verificationStatus: 'none',
-      };
-      setUserProfile(updatedActive);
-      saveUserToFirestore(updatedActive).catch(console.error);
-      try {
-        localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedActive));
-      } catch (e) {}
-    }
-
-    // 4. Send in-app notification to applicant
-    try {
-      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-      const convNotif = {
-        id: `conv_appr_${Date.now()}`,
-        type: 'CONVERSION',
-        title: '🎓 Student Account Activated (Unverified)',
-        message: `Congratulations! Your conversion from Guest to a Student account has been approved. You are now registered as a Student in ${department} (${level}). As a standard Student account, you can access student forums and departmental hubs. Note that conversion does NOT automatically verify your account. To unlock verified student benefits (Verification badge, Marketplace, Edit Post, and Upload Video), please go to Account Settings and click "Get Verified".`,
-        timestamp: 'Just now',
-        isRead: false,
-      };
-      let existingNotifs = [];
-      const storedNotifs = localStorage.getItem(notifKey);
-      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-      localStorage.setItem(notifKey, JSON.stringify([convNotif, ...existingNotifs]));
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Handler for Admin rejecting student conversion
-  const handleRejectStudentConversion = (reqId: string, applicantNickname: string) => {
-    const cleanTarget = applicantNickname.toLowerCase().replace(/^@/, '');
-
-    setVerificationRequests((prev) => {
-      const updated = prev.map((v) => {
-        if (v.id === reqId) {
-          const rejectedReq = { ...v, status: 'REJECTED' as const };
-          saveVerificationRequestToFirestore(rejectedReq).catch(console.error);
-          return rejectedReq;
-        }
-        return v;
-      });
-      try {
-        localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updated));
-        pushServerDbSync({ verificationRequests: updated });
-      } catch (e) {}
-      return updated;
-    });
-
-    if (
-      userProfile &&
-      (userProfile.nickname.toLowerCase() === applicantNickname.toLowerCase() ||
-        userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget ||
-        userProfile.id === applicantNickname)
-    ) {
-      const updatedActive: UserProfile = {
-        ...userProfile,
-        studentConversionStatus: 'rejected',
-      };
-      setUserProfile(updatedActive);
-      saveUserToFirestore(updatedActive).catch(console.error);
-      try {
-        localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedActive));
-      } catch (e) {}
-    }
   };
 
   // Handler for Admin approving or reassigning verification badge and title
@@ -2851,9 +2602,7 @@ export const App: React.FC = () => {
               onApproveVerification={handleApproveVerification}
               onRejectVerification={handleRevokeVerification}
               onRevokeVerification={handleRevokeVerification}
-              onApproveStudentConversion={handleApproveStudentConversion}
-            onRejectStudentConversion={handleRejectStudentConversion}
-            onDeletePost={(postId) => setPosts((prev) => prev.filter((p) => p.id !== postId))}
+              onDeletePost={(postId) => setPosts((prev) => prev.filter((p) => p.id !== postId))}
             onUpdateBadge={(badgeType, badgeTitle) => {
               if (userProfile) {
                 const updated = { ...userProfile, isVerified: true, verificationStatus: 'approved' as const, badgeType: badgeType || 'BLUE', badgeTitle: (badgeTitle || '').trim() };
@@ -3017,7 +2766,6 @@ export const App: React.FC = () => {
                         return handleSaveUserProfile(nickname, department, level, bio, avatarKey, emergencyPhone, avatarUrl, realName, studentEmail);
                       }}
                       onSubmitVerification={handleSubmitVerification}
-                      onSubmitStudentConversion={handleStudentConversionSubmit}
                       onOpenAuthModal={() => {
                         closeModalUI();
                         openAuthModal();
@@ -3132,7 +2880,6 @@ export const App: React.FC = () => {
                       return handleSaveUserProfile(nickname, department, level, bio, avatarKey, emergencyPhone, avatarUrl, realName, studentEmail);
                     }}
                     onSubmitVerification={handleSubmitVerification}
-                    onSubmitStudentConversion={handleStudentConversionSubmit}
                     onOpenAuthModal={() => {
                       closeModalUI();
                       openAuthModal();

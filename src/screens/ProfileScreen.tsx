@@ -45,7 +45,6 @@ import { VerificationBadge } from '../components/VerificationBadge';
 import { PostCard } from '../components/PostCard';
 import { ProfilePictureModal } from '../components/ProfilePictureModal';
 import { VerificationModal } from '../components/VerificationModal';
-import { StudentConversionModal } from '../components/StudentConversionModal';
 import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
@@ -70,7 +69,7 @@ interface ProfileScreenProps {
     studentEmail?: string
   ) => string | null;
   onSubmitVerification?: (data: {
-    accountType?: 'Student' | 'Executive' | 'Organization';
+    accountType?: 'Student' | 'Executive' | 'Organization' | 'Guest' | string;
     positionTitle?: string;
     matricNumber?: string;
     department?: string;
@@ -78,16 +77,6 @@ interface ProfileScreenProps {
     proofDetails?: string;
     paymentRef?: string;
     amountPaid?: number;
-  }) => void;
-  onSubmitStudentConversion?: (data: {
-    fullName: string;
-    matricNumber: string;
-    department: string;
-    level: string;
-    email?: string;
-    phone?: string;
-    fee: number;
-    paymentRef: string;
   }) => void;
   onOpenAuthModal?: () => void;
   onLikeClick?: (post: Post) => void;
@@ -113,7 +102,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   bookmarkedPostIds = [],
   onSaveProfile,
   onSubmitVerification,
-  onSubmitStudentConversion,
   onOpenAuthModal,
   onLikeClick,
   onBookmarkClick,
@@ -130,14 +118,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const isOwnProfile = Boolean(userProfile);
   const isGuest = isGuestAccount(userProfile);
-  const isConversionPending = userProfile?.studentConversionStatus === 'pending';
   const [activeTab, setActiveTab] = useState<'threads' | 'replies' | 'bookmarks'>('threads');
   const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
   const [isEditingSettings, setIsEditingSettings] = useState(false);
   const [isEditingProfileForm, setIsEditingProfileForm] = useState(false);
   const [showPictureModal, setShowPictureModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
-  const [showStudentConversionModal, setShowStudentConversionModal] = useState(false);
   const [showFollowersModal, setShowFollowersModal] = useState<{ open: boolean; tab: 'followers' | 'following' } | null>(null);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [showPointsBreakdown, setShowPointsBreakdown] = useState(false);
@@ -504,14 +490,15 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
                 {userProfile?.nickname || '@Student'}
               </h1>
-              {isGuest ? (
-                <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+              {isGuest && (
+                <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 flex items-center gap-1">
                   <span>🏷️</span>
-                  <span>Account Type: Guest</span>
+                  <span>Guest</span>
                 </span>
-              ) : (
-                (() => {
-                  const badgeInfo = getUserBadgeInfo(userProfile?.nickname, userProfile);
+              )}
+              {(() => {
+                const badgeInfo = getUserBadgeInfo(userProfile?.nickname, userProfile);
+                if (badgeInfo.isVerified) {
                   return (
                     <VerificationBadge
                       isVerified={badgeInfo.isVerified}
@@ -520,8 +507,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       showTitle
                     />
                   );
-                })()
-              )}
+                }
+                return null;
+              })()}
             </div>
           </div>
 
@@ -948,80 +936,47 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     )}
                   </div>
 
-                  {/* 🔐 Get Verified (Student) OR 🎓 Subscribe to Student Account (Guest) */}
-                  {/* Only ONE appears depending on account type */}
-                  {!isGuest ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowVerificationModal(true);
-                      }}
-                      className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-sky-500 dark:hover:border-sky-400 hover:bg-sky-50/40 dark:hover:bg-sky-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-11 h-11 rounded-2xl bg-sky-50 dark:bg-sky-900/40 text-sky-600 dark:text-sky-300 flex items-center justify-center text-lg shrink-0 border border-sky-200/60 dark:border-sky-800/60">
-                          🔐
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 group-hover:text-sky-700 dark:group-hover:text-sky-300 transition-colors">
-                              Get Verified
-                            </h3>
-                            {userProfile?.isVerified && (
-                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 border border-sky-300">
-                                Verified ✓
-                              </span>
-                            )}
-                            {userProfile?.verificationStatus === 'pending' && (
-                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                                Pending
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                            {userProfile?.isVerified
-                              ? 'Account is officially verified with blue checkmark badge'
-                              : userProfile?.verificationStatus === 'pending'
-                              ? 'Verification application is currently pending review'
-                              : 'Apply for official student verification badge & benefits'}
-                          </p>
-                        </div>
+                  {/* 🔐 Get Verified (for both Students and Guests) */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowVerificationModal(true);
+                    }}
+                    className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-sky-500 dark:hover:border-sky-400 hover:bg-sky-50/40 dark:hover:bg-sky-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-11 h-11 rounded-2xl bg-sky-50 dark:bg-sky-900/40 text-sky-600 dark:text-sky-300 flex items-center justify-center text-lg shrink-0 border border-sky-200/60 dark:border-sky-800/60">
+                        🔐
                       </div>
-                      <ChevronRight size={18} className="text-slate-400 group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors shrink-0" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowStudentConversionModal(true);
-                      }}
-                      className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-emerald-500 dark:hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center text-lg shrink-0 border border-emerald-200/60 dark:border-emerald-800/60">
-                          🎓
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 group-hover:text-sky-700 dark:group-hover:text-sky-300 transition-colors">
+                            Get Verified
+                          </h3>
+                          {userProfile?.isVerified && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 border border-sky-300">
+                              Verified ✓
+                            </span>
+                          )}
+                          {userProfile?.verificationStatus === 'pending' && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                              Pending
+                            </span>
+                          )}
                         </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 group-hover:text-emerald-700 dark:group-hover:text-emerald-300 transition-colors">
-                              Subscribe to Student Account
-                            </h3>
-                            {userProfile?.studentConversionStatus === 'pending' && (
-                              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                                Pending
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                            {userProfile?.studentConversionStatus === 'pending'
-                              ? 'Subscription application is currently pending review'
-                              : 'Upgrade guest account to student status (₦2,000)'}
-                          </p>
-                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                          {userProfile?.isVerified
+                            ? 'Account is officially verified with badge & benefits'
+                            : userProfile?.verificationStatus === 'pending'
+                            ? 'Verification application is currently pending review'
+                            : isGuest
+                            ? 'Apply for official Guest verification checkmark badge & benefits'
+                            : 'Apply for official student verification badge & benefits'}
+                        </p>
                       </div>
-                      <ChevronRight size={18} className="text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors shrink-0" />
-                    </button>
-                  )}
+                    </div>
+                    <ChevronRight size={18} className="text-slate-400 group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors shrink-0" />
+                  </button>
 
                   {/* ⚠️ Delete Account */}
                   {onDeleteAccount && (
@@ -1767,18 +1722,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           onClose={() => setShowVerificationModal(false)}
           onSubmitVerification={(data) => {
             onSubmitVerification?.(data);
-          }}
-        />
-      )}
-
-      {/* Guest to Student Conversion Subscription Modal */}
-      {showStudentConversionModal && (
-        <StudentConversionModal
-          userProfile={userProfile}
-          onClose={() => setShowStudentConversionModal(false)}
-          onSubmitConversion={(data) => {
-            onSubmitStudentConversion?.(data);
-            setShowStudentConversionModal(false);
           }}
         />
       )}

@@ -31,7 +31,6 @@ export interface UserProfile {
   reputationPoints?: number;
   isVerified?: boolean;
   verificationStatus?: 'pending' | 'approved' | 'rejected' | string;
-  studentConversionStatus?: 'none' | 'pending' | 'approved' | 'declined' | 'rejected';
   isStudentSubscribed?: boolean;
   isApproved?: boolean;
   isDeclined?: boolean;

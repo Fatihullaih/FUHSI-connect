@@ -28,8 +28,6 @@ interface ModerationScreenProps {
   onApproveVerification?: (id: string, badgeType?: BadgeType, badgeTitle?: string) => void;
   onRejectVerification?: (id: string) => void;
   onRevokeVerification?: (id: string) => void;
-  onApproveStudentConversion?: (reqId: string, applicantNickname: string, fullName: string, matricNumber: string, department: string, level: string) => void;
-  onRejectStudentConversion?: (reqId: string, applicantNickname: string) => void;
   onResolveReport?: (reportId: string) => void;
   onAdminApproveMarketplaceItem?: (id: string, approvedPrice: number, note: string) => void;
   onAdminRejectMarketplaceItem?: (id: string, note: string) => void;
@@ -55,8 +53,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   onApproveVerification = () => {},
   onRejectVerification = () => {},
   onRevokeVerification = () => {},
-  onApproveStudentConversion = () => {},
-  onRejectStudentConversion = () => {},
   onResolveReport = () => {},
   onAdminApproveMarketplaceItem = () => {},
   onAdminRejectMarketplaceItem = () => {},
@@ -975,7 +971,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
             }
 
             return filteredRequests.map((req) => {
-              const isConversion = req.requestType === 'STUDENT_CONVERSION';
               const currentBadgeColor = selectedReqColors[req.id] || req.assignedBadgeType || 'BLUE';
               const currentBadgeTitle = selectedReqTitles[req.id] !== undefined
                 ? selectedReqTitles[req.id]
@@ -996,42 +991,32 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-extrabold text-slate-900 text-sm">{req.applicantNickname}</span>
                         
-                        {isConversion ? (
-                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-purple-100 text-purple-900 border border-purple-300 flex items-center gap-1">
-                            <span>🎓</span>
-                            <span>Guest → Student Conversion</span>
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-slate-900 text-white">
-                            {req.accountType || 'Student'}
-                          </span>
-                        )}
+                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                          req.accountType === 'Guest'
+                            ? 'bg-slate-100 text-slate-800 border border-slate-300'
+                            : 'bg-slate-900 text-white'
+                        }`}>
+                          {req.accountType || 'Student'}
+                        </span>
 
-                        {req.positionTitle && !isConversion && (
+                        {req.positionTitle && (
                           <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-teal-100 text-teal-900 border border-teal-200">
-                            Requested Position/Title: {req.positionTitle}
+                            {req.accountType === 'Guest' ? 'Note / Role' : 'Position'}: {req.positionTitle}
                           </span>
                         )}
 
                         <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-md border border-amber-200">
-                          Ref: {req.paymentRef || 'PAY-FUHSI-OK'} (₦{req.amountPaid ? req.amountPaid.toLocaleString() : (isConversion ? '2,000' : adminVerificationFee.toLocaleString())})
+                          Ref: {req.paymentRef || 'PAY-FUHSI-OK'} (₦{req.amountPaid ? req.amountPaid.toLocaleString() : adminVerificationFee.toLocaleString()})
                         </span>
                       </div>
 
-                      {isConversion ? (
-                        <div className="text-xs text-slate-700 font-medium mt-1.5 space-y-0.5">
-                          <p>
-                            👤 Full Name: <strong className="text-slate-900">{req.applicantFullName || req.applicantNickname}</strong> • Matric: <strong className="text-slate-900 font-mono">{req.matricNumber}</strong>
-                          </p>
-                          <p>
-                            🏛️ Department: <strong className="text-teal-900">{req.department}</strong> ({req.level || '100L'}) • Contact: <span className="text-slate-600">{req.applicantEmail || req.applicantPhone || 'Provided'}</span>
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-slate-600 font-medium mt-1">
-                          Matric / Reg No: <strong className="text-slate-900 font-mono">{req.matricNumber || 'Tendered'}</strong> • Statement: "{req.statement}"
-                        </p>
-                      )}
+                      <p className="text-xs text-slate-600 font-medium mt-1">
+                        {req.accountType === 'Guest' ? (
+                          <span>Guest Account Application • Statement: "{req.statement || 'Guest Verification'}"</span>
+                        ) : (
+                          <span>Matric / Reg No: <strong className="text-slate-900 font-mono">{req.matricNumber || 'Tendered'}</strong> • Dept: <strong>{req.department || 'FUHSI'}</strong> • Statement: "{req.statement}"</span>
+                        )}
+                      </p>
                     </div>
 
                     <div className="shrink-0 flex items-center gap-2">
@@ -1039,53 +1024,14 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                         req.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
                         req.status === 'REJECTED' ? 'bg-rose-100 text-rose-900 border-rose-300' : 'bg-amber-100 text-amber-900 border-amber-300'
                       }`}>
-                        {req.status === 'APPROVED' ? (isConversion ? '✔️ APPROVED & CONVERTED TO STUDENT' : '✔️ APPROVED & VERIFIED') :
-                         req.status === 'REJECTED' ? (isConversion ? 'DECLINED (REMAINS GUEST)' : 'REVISION REQUESTED / REVOKED') : '⏳ PENDING ADMIN REVIEW'}
+                        {req.status === 'APPROVED' ? '✔️ APPROVED & VERIFIED' :
+                         req.status === 'REJECTED' ? 'REVISION REQUESTED / REVOKED' : '⏳ PENDING ADMIN REVIEW'}
                       </span>
                     </div>
                   </div>
 
-                  {/* Student Conversion Approval Actions */}
-                  {isConversion && req.status === 'PENDING' && (
-                    <div className="bg-white p-3.5 rounded-xl border border-purple-200/90 space-y-2.5 text-xs">
-                      <p className="text-slate-600 text-[11px] leading-relaxed">
-                        Applicant submitted full student credentials and paid the <strong>₦2,000</strong> conversion fee. Approving will convert this account from <strong>Guest</strong> to standard <strong>Student</strong> status (Unverified). The account is <strong>NOT</strong> automatically verified. The student must separately apply through <em>Get Verified</em> under Account Settings to gain verified-only benefits.
-                      </p>
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onApproveStudentConversion(
-                              req.id,
-                              req.applicantNickname,
-                              req.applicantFullName || req.applicantNickname,
-                              req.matricNumber || '',
-                              req.department || 'General',
-                              req.level || '100L'
-                            );
-                          }}
-                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold text-xs transition-colors shadow-xs cursor-pointer flex items-center gap-1.5"
-                        >
-                          <CheckCircle2 size={14} />
-                          <span>Approve Student Conversion</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onRejectStudentConversion(req.id, req.applicantNickname);
-                            onUpdateVerificationRequestStatus(req.id, 'REJECTED');
-                          }}
-                          className="px-3 py-2 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded-xl font-extrabold text-xs transition-colors cursor-pointer"
-                        >
-                          Decline (Keep Guest)
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Badge Assignment Controls (for regular verification requests - PENDING) */}
-                  {!isConversion && req.status === 'PENDING' && (
+                  {/* Badge Assignment Controls (for verification requests - PENDING) */}
+                  {req.status === 'PENDING' && (
                     <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 space-y-3 text-xs">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
@@ -1198,7 +1144,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   )}
 
                   {/* Reassign or Revoke Badge Controls (for approved verification requests) */}
-                  {!isConversion && req.status === 'APPROVED' && (
+                  {req.status === 'APPROVED' && (
                     <div className="bg-white p-3.5 rounded-xl border border-emerald-300 shadow-xs space-y-3 text-xs">
                       <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2 flex-wrap">
                         <div className="flex items-center gap-2">
@@ -1366,7 +1312,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   )}
 
                   {/* Re-evaluate / Restore controls (for rejected or cancelled verification requests) */}
-                  {!isConversion && req.status === 'REJECTED' && (
+                  {req.status === 'REJECTED' && (
                     <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2 text-xs">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <span className="text-slate-600 text-[11px]">
