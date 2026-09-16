@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   INITIAL_USER_PROFILE,
   INITIAL_POSTS,
@@ -133,6 +133,7 @@ export const App: React.FC = () => {
 
   // App Core State with Persistent LocalStorage Initialization
   const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER_PROFILE);
+  const lastProfileSaveTimestampRef = useRef<number>(0);
   
   const [posts, setPosts] = useState<Post[]>(() => {
     try {
@@ -345,7 +346,7 @@ export const App: React.FC = () => {
         try {
           const parsed = JSON.parse(activeUserJson);
           const cleanParsedNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
-          const found = validUsers.find(
+          const found = mergedUsers.find(
             (u) => (u.id && parsed.id && u.id === parsed.id) ||
                    (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanParsedNick)
           );
@@ -368,7 +369,8 @@ export const App: React.FC = () => {
                 if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
                 const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
                 const foundTime = found.updatedAt ? new Date(found.updatedAt).getTime() : 0;
-                const preferLocal = prevTime > foundTime;
+                const isRecentlySaved = Date.now() - lastProfileSaveTimestampRef.current < 20000;
+                const preferLocal = isRecentlySaved || prevTime >= foundTime;
 
                 const nextAvatarUrl = preferLocal 
                   ? (prev.avatarUrl !== undefined ? prev.avatarUrl : found.avatarUrl) 
@@ -392,18 +394,18 @@ export const App: React.FC = () => {
 
                 if (
                   prev.id === found.id &&
-                  prev.nickname === found.nickname &&
+                  prev.nickname === (preferLocal ? prev.nickname : (found.nickname || prev.nickname)) &&
                   prev.avatarUrl === nextAvatarUrl &&
                   prev.avatarKey === nextAvatarKey &&
                   prev.bio === nextBio &&
                   (prev.realNameHidden || prev.realName || '') === nextRealName &&
                   (prev.studentEmail || '') === nextEmail &&
                   (prev.emergencyHomePhone || '') === nextPhone &&
-                  prev.level === found.level &&
-                  prev.department === found.department &&
-                  prev.reputationScore === found.reputationScore &&
-                  prev.isVerified === found.isVerified &&
-                  prev.isApproved === found.isApproved &&
+                  prev.level === (preferLocal ? prev.level : (found.level || prev.level)) &&
+                  prev.department === (preferLocal ? prev.department : (found.department || prev.department)) &&
+                  prev.reputationScore === (found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore) &&
+                  prev.isVerified === (found.isVerified !== undefined ? found.isVerified : prev.isVerified) &&
+                  prev.isApproved === (found.isApproved !== undefined ? found.isApproved : prev.isApproved) &&
                   prev.savedPassword === nextPass
                 ) {
                   return prev;
@@ -412,10 +414,13 @@ export const App: React.FC = () => {
                   ? {
                       ...found,
                       ...prev,
+                      nickname: prev.nickname || found.nickname,
                       realName: nextRealName,
                       realNameHidden: nextRealName,
                       studentEmail: nextEmail,
                       emergencyHomePhone: nextPhone,
+                      department: isModulaAccount(prev) ? '' : (prev.department || found.department || ''),
+                      level: isModulaAccount(prev) ? '' : (prev.level || found.level || ''),
                       bio: nextBio,
                       avatarUrl: nextAvatarUrl,
                       avatarKey: nextAvatarKey,
@@ -425,19 +430,28 @@ export const App: React.FC = () => {
                       isDeclined: found.isDeclined !== undefined ? found.isDeclined : prev.isDeclined,
                       isVerified: found.isVerified !== undefined ? found.isVerified : prev.isVerified,
                       reputationScore: found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore,
+                      updatedAt: prev.updatedAt || found.updatedAt || new Date().toISOString(),
                     }
                   : {
                       ...prev,
                       ...found,
+                      nickname: found.nickname || prev.nickname,
                       realName: nextRealName,
                       realNameHidden: nextRealName,
                       studentEmail: nextEmail,
                       emergencyHomePhone: nextPhone,
+                      department: isModulaAccount(found) ? '' : (found.department || prev.department || ''),
+                      level: isModulaAccount(found) ? '' : (found.level || prev.level || ''),
                       bio: nextBio,
                       avatarUrl: nextAvatarUrl,
                       avatarKey: nextAvatarKey,
                       savedPassword: nextPass,
                       password: nextPass,
+                      isApproved: found.isApproved !== undefined ? found.isApproved : prev.isApproved,
+                      isDeclined: found.isDeclined !== undefined ? found.isDeclined : prev.isDeclined,
+                      isVerified: found.isVerified !== undefined ? found.isVerified : prev.isVerified,
+                      reputationScore: found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore,
+                      updatedAt: found.updatedAt || prev.updatedAt || new Date().toISOString(),
                     };
                 const finalUpdated = isModulaAccount(updated) ? sanitizeModulaProfile(updated) : updated;
                 localStorage.setItem('fuhsi_active_user', JSON.stringify(finalUpdated));
@@ -542,7 +556,7 @@ export const App: React.FC = () => {
               const parsed = JSON.parse(activeUserJson);
               const cleanParsedNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
               const cleanParsedEmail = (parsed.studentEmail || '').toLowerCase().trim();
-              const found = validUsers.find(
+              const found = mergedUsers.find(
                 (u) => (u.id && parsed.id && u.id === parsed.id) ||
                        (u.studentEmail && cleanParsedEmail && !cleanParsedEmail.includes('admin@fuhsi.edu.ng') && (u.studentEmail || '').toLowerCase().trim() === cleanParsedEmail) ||
                        (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanParsedNick)
@@ -563,7 +577,8 @@ export const App: React.FC = () => {
                     if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
                     const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
                     const foundTime = found.updatedAt ? new Date(found.updatedAt).getTime() : 0;
-                    const preferLocal = prevTime > foundTime;
+                    const isRecentlySaved = Date.now() - lastProfileSaveTimestampRef.current < 20000;
+                    const preferLocal = isRecentlySaved || prevTime >= foundTime;
 
                     const nextAvatarUrl = preferLocal 
                       ? (prev.avatarUrl !== undefined ? prev.avatarUrl : found.avatarUrl) 
@@ -587,18 +602,18 @@ export const App: React.FC = () => {
 
                     if (
                       prev.id === found.id &&
-                      prev.nickname === found.nickname &&
+                      prev.nickname === (preferLocal ? prev.nickname : (found.nickname || prev.nickname)) &&
                       prev.avatarUrl === nextAvatarUrl &&
                       prev.avatarKey === nextAvatarKey &&
                       prev.bio === nextBio &&
                       (prev.realNameHidden || prev.realName || '') === nextRealName &&
                       (prev.studentEmail || '') === nextEmail &&
                       (prev.emergencyHomePhone || '') === nextPhone &&
-                      prev.level === found.level &&
-                      prev.department === found.department &&
-                      prev.reputationScore === found.reputationScore &&
-                      prev.isVerified === found.isVerified &&
-                      prev.isApproved === found.isApproved &&
+                      prev.level === (preferLocal ? prev.level : (found.level || prev.level)) &&
+                      prev.department === (preferLocal ? prev.department : (found.department || prev.department)) &&
+                      prev.reputationScore === (found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore) &&
+                      prev.isVerified === (found.isVerified !== undefined ? found.isVerified : prev.isVerified) &&
+                      prev.isApproved === (found.isApproved !== undefined ? found.isApproved : prev.isApproved) &&
                       prev.savedPassword === nextPass
                     ) {
                       return prev;
@@ -607,10 +622,13 @@ export const App: React.FC = () => {
                       ? {
                           ...found,
                           ...prev,
+                          nickname: prev.nickname || found.nickname,
                           realName: nextRealName,
                           realNameHidden: nextRealName,
                           studentEmail: nextEmail,
                           emergencyHomePhone: nextPhone,
+                          department: isModulaAccount(prev) ? '' : (prev.department || found.department || ''),
+                          level: isModulaAccount(prev) ? '' : (prev.level || found.level || ''),
                           bio: nextBio,
                           avatarUrl: nextAvatarUrl,
                           avatarKey: nextAvatarKey,
@@ -620,19 +638,28 @@ export const App: React.FC = () => {
                           isDeclined: found.isDeclined !== undefined ? found.isDeclined : prev.isDeclined,
                           isVerified: found.isVerified !== undefined ? found.isVerified : prev.isVerified,
                           reputationScore: found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore,
+                          updatedAt: prev.updatedAt || found.updatedAt || new Date().toISOString(),
                         }
                       : {
                           ...prev,
                           ...found,
+                          nickname: found.nickname || prev.nickname,
                           realName: nextRealName,
                           realNameHidden: nextRealName,
                           studentEmail: nextEmail,
                           emergencyHomePhone: nextPhone,
+                          department: isModulaAccount(found) ? '' : (found.department || prev.department || ''),
+                          level: isModulaAccount(found) ? '' : (found.level || prev.level || ''),
                           bio: nextBio,
                           avatarUrl: nextAvatarUrl,
                           avatarKey: nextAvatarKey,
                           savedPassword: nextPass,
                           password: nextPass,
+                          isApproved: found.isApproved !== undefined ? found.isApproved : prev.isApproved,
+                          isDeclined: found.isDeclined !== undefined ? found.isDeclined : prev.isDeclined,
+                          isVerified: found.isVerified !== undefined ? found.isVerified : prev.isVerified,
+                          reputationScore: found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore,
+                          updatedAt: found.updatedAt || prev.updatedAt || new Date().toISOString(),
                         };
                     const finalUpdated = isModulaAccount(updated) ? sanitizeModulaProfile(updated) : updated;
                     localStorage.setItem('fuhsi_active_user', JSON.stringify(finalUpdated));
@@ -2416,16 +2443,19 @@ export const App: React.FC = () => {
       realNameHidden: realName !== undefined ? realName.trim() : userProfile.realNameHidden,
       studentEmail: studentEmail !== undefined ? studentEmail.trim() : userProfile.studentEmail,
       emergencyHomePhone: emergencyPhone !== undefined ? emergencyPhone.trim() : userProfile.emergencyHomePhone,
-      // Department and Matric Number are permanently attached and immutable for students; empty for @modula
-      department: isModulaAccount(userProfile) ? '' : (userProfile.department || department),
+      // Department and Matric Number for students; empty for @modula
+      department: isModulaAccount(userProfile) ? '' : (department || userProfile.department || ''),
       matricNumber: isModulaAccount(userProfile) ? '' : userProfile.matricNumber,
-      level: isModulaAccount(userProfile) ? '' : (level || userProfile.level),
+      level: isModulaAccount(userProfile) ? '' : (level || userProfile.level || ''),
       accountType: isModulaAccount(userProfile) ? 'Admin' : userProfile.accountType,
       bio: bio !== undefined ? bio.trim() : userProfile.bio,
       avatarKey: newAvatarKey,
       avatarUrl: newAvatarUrl,
       updatedAt: new Date().toISOString(),
     });
+
+    // Mark recent save timestamp to shield local state against stale race-condition server syncs
+    lastProfileSaveTimestampRef.current = Date.now();
 
     // 1. Update React state
     setUserProfile(updated);

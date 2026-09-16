@@ -846,8 +846,8 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     const q = searchQuery.toLowerCase().replace(/^@/, '');
     return conversations.filter(
       (c) =>
-        c.otherUserNickname.toLowerCase().includes(q) ||
-        c.lastMessage.toLowerCase().includes(q)
+        (c.otherUserNickname && c.otherUserNickname.toLowerCase().includes(q)) ||
+        (c.lastMessage && c.lastMessage.toLowerCase().includes(q))
     );
   }, [conversations, searchQuery]);
 
@@ -1113,7 +1113,6 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                   const isSystemMsg = Boolean(
                     group.lastMessageSender === 'FUHSI Group System' ||
                     group.lastMessageSender === 'System' ||
-                    !group.lastMessageSender ||
                     (group.lastMessage && /^(🚪|👋|🎯|👤|⭐|🛡️|✏️)/.test(group.lastMessage.trim()))
                   );
 

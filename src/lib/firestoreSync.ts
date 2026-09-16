@@ -13,6 +13,7 @@ import { db } from './firebase';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup } from '../types';
 import { isDemoUser, isDemoPost, isDemoNickname, isDemoComment, isDemoVerificationRequest, isDemoMarketplaceItem, isDemoDirectMessage } from '../utils/postGenerator';
 import { isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
+import { mergeUsers } from '../utils/apiSync';
 
 // Collection references
 const USERS_COL = 'users';
@@ -65,7 +66,8 @@ export function subscribeUsers(onUpdate: (users: UserProfile[]) => void) {
         list.push(finalUser);
       }
     });
-    onUpdate(list);
+    const deduplicated = mergeUsers([], list);
+    onUpdate(deduplicated);
   }, (err) => {
     console.warn('Firestore users subscription fallback/warning:', err?.message || err);
   });
@@ -113,10 +115,10 @@ export async function saveUserToFirestore(user: UserProfile): Promise<void> {
   });
   try {
     await setDoc(doc(db, USERS_COL, docId), cleanUser, { merge: true });
-    // Also mirror to clean nickname doc ID if distinct to ensure client synchronization consistency
+    // Clean up any stale duplicate nickname-named document if distinct to avoid duplicate records
     const nickDocId = (targetUser.nickname || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
     if (nickDocId && nickDocId !== docId) {
-      await setDoc(doc(db, USERS_COL, nickDocId), cleanUser, { merge: true }).catch(() => {});
+      await deleteDoc(doc(db, USERS_COL, nickDocId)).catch(() => {});
     }
     if (isMod) {
       await cleanupModulaFirestoreDoc().catch(() => {});
@@ -161,10 +163,11 @@ export async function fetchUsersFromFirestore(): Promise<UserProfile[]> {
     snap.forEach((docSnap) => {
       const u = docSnap.data() as UserProfile;
       if (u && (u.id || u.nickname) && !isDemoUser(u) && !isDemoNickname(u.nickname)) {
-        list.push(isModulaAccount(u) ? sanitizeModulaProfile(u) : u);
+        const userObj = { ...u, id: u.id || docSnap.id };
+        list.push(isModulaAccount(userObj) ? sanitizeModulaProfile(userObj) : userObj);
       }
     });
-    return list;
+    return mergeUsers([], list);
   } catch (err) {
     console.error('Error fetching users from Firestore:', err);
     return [];

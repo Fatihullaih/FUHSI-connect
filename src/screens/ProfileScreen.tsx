@@ -425,8 +425,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     const isMod = isModulaAccount(userProfile);
     const error = onSaveProfile(
       trimmedNick,
-      isMod ? '' : (userProfile?.department || department),
-      isMod ? '' : level,
+      isMod ? '' : (department || userProfile?.department || ''),
+      isMod ? '' : (level || userProfile?.level || ''),
       bio.trim(),
       selectedAvatarKey,
       emergencyPhone.trim(),

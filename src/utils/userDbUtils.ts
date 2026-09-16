@@ -501,7 +501,11 @@ export function upsertUser(user: UserProfile): UserProfile[] {
     return false;
   });
 
-  let updatedUser = sanitizeModulaProfile(user);
+  const nowIso = new Date().toISOString();
+  let updatedUser: UserProfile = sanitizeModulaProfile({
+    ...user,
+    updatedAt: user.updatedAt || nowIso,
+  });
   if (index >= 0) {
     const existing = users[index];
     const existingPassword = (existing as any).savedPassword || (existing as any).password;
@@ -512,6 +516,7 @@ export function upsertUser(user: UserProfile): UserProfile[] {
       ...user,
       savedPassword: finalPassword,
       password: finalPassword,
+      updatedAt: user.updatedAt || nowIso,
     });
     updatedUser = users[index];
   } else {
