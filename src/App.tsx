@@ -892,6 +892,10 @@ export const App: React.FC = () => {
 
   // Tab Navigation with History Tracking
   const handleNavChange = useCallback((newIndex: number) => {
+    // Guest accounts do not have access to Campus Hub (Marketplace, 2) or Chats (4)
+    if (isGuestAccount(userProfile) && (newIndex === 2 || newIndex === 4)) {
+      return;
+    }
     setNavIndex((prevNav) => {
       if (prevNav === newIndex) return prevNav;
       setNavHistory((prev) => [...prev, newIndex]);
@@ -900,7 +904,14 @@ export const App: React.FC = () => {
       } catch (e) { console.error(e); }
       return newIndex;
     });
-  }, []);
+  }, [userProfile]);
+
+  // Safety fallback: Ensure guests are never left on Hub&Fund or Chats
+  useEffect(() => {
+    if (isGuestAccount(userProfile) && (navIndex === 2 || navIndex === 4)) {
+      setNavIndex(0);
+    }
+  }, [userProfile, navIndex]);
 
   // Modal Opener Helpers with History Tracking
   const openPostDetail = useCallback((post: Post) => {
@@ -982,6 +993,7 @@ export const App: React.FC = () => {
   }, []);
 
   const handleStartChat = useCallback((recipientNickname: string, avatarKey?: string, avatarUrl?: string) => {
+    if (isGuestAccount(userProfile)) return;
     setActiveChatRecipient({
       nickname: recipientNickname,
       avatarKey,
@@ -996,7 +1008,7 @@ export const App: React.FC = () => {
     setShowPwaModal(false);
     setModalStack([]);
     handleNavChange(4); // Switch to Chats screen
-  }, [handleNavChange]);
+  }, [handleNavChange, userProfile]);
 
   // Close top modal via UI "X" / "Back" button
   const closeModalUI = useCallback(() => {
@@ -2516,7 +2528,7 @@ export const App: React.FC = () => {
           />
         )}
 
-        {navIndex === 2 && (
+        {navIndex === 2 && !isGuestAccount(userProfile) && (
           <CampusHubScreen
             userProfile={userProfile}
             approvedMarketplaceItems={marketplaceItems}
@@ -2542,12 +2554,14 @@ export const App: React.FC = () => {
             allPosts={posts}
             onSelectPost={openPostDetail}
             onOpenTradeChat={(_convId) => {
-              handleNavChange(4);
+              if (!isGuestAccount(userProfile)) {
+                handleNavChange(4);
+              }
             }}
           />
         )}
 
-        {navIndex === 4 && (
+        {navIndex === 4 && !isGuestAccount(userProfile) && (
           <ChatsScreen
             userProfile={userProfile}
             initialRecipient={activeChatRecipient}
@@ -3037,16 +3051,18 @@ export const App: React.FC = () => {
             <span className="text-[10px] sm:text-[11px]">Search</span>
           </button>
 
-          {/* 3. Hub&Fund */}
-          <button
-            onClick={() => handleNavChange(2)}
-            className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer ${
-              navIndex === 2 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
-            }`}
-          >
-            <StorefrontIcon className="w-5 h-5 transition-transform group-hover:scale-105" />
-            <span className="text-[10px] sm:text-[11px]">Hub&Fund</span>
-          </button>
+          {/* 3. Hub&Fund (Only for non-Guest accounts) */}
+          {!isGuestAccount(userProfile) && (
+            <button
+              onClick={() => handleNavChange(2)}
+              className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer ${
+                navIndex === 2 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+              }`}
+            >
+              <StorefrontIcon className="w-5 h-5 transition-transform group-hover:scale-105" />
+              <span className="text-[10px] sm:text-[11px]">Hub&Fund</span>
+            </button>
+          )}
 
           {/* 4. Notification */}
           <button
@@ -3066,23 +3082,25 @@ export const App: React.FC = () => {
             <span className="text-[10px] sm:text-[11px]">Notifications</span>
           </button>
 
-          {/* 5. Chats */}
-          <button
-            onClick={() => handleNavChange(4)}
-            className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer relative ${
-              navIndex === 4 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
-            }`}
-          >
-            <div className="relative">
-              <MessageCircle className="w-5 h-5 transition-transform group-hover:scale-105" />
-              {unreadChatsCount > 0 && (
-                <span className="absolute -top-1 -right-1.5 min-w-3.5 h-3.5 px-1 bg-teal-600 text-white rounded-full text-[8.5px] font-black flex items-center justify-center animate-pulse">
-                  {unreadChatsCount > 99 ? '99+' : unreadChatsCount}
-                </span>
-              )}
-            </div>
-            <span className="text-[10px] sm:text-[11px]">Chats</span>
-          </button>
+          {/* 5. Chats (Only for non-Guest accounts) */}
+          {!isGuestAccount(userProfile) && (
+            <button
+              onClick={() => handleNavChange(4)}
+              className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer relative ${
+                navIndex === 4 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+              }`}
+            >
+              <div className="relative">
+                <MessageCircle className="w-5 h-5 transition-transform group-hover:scale-105" />
+                {unreadChatsCount > 0 && (
+                  <span className="absolute -top-1 -right-1.5 min-w-3.5 h-3.5 px-1 bg-teal-600 text-white rounded-full text-[8.5px] font-black flex items-center justify-center animate-pulse">
+                    {unreadChatsCount > 99 ? '99+' : unreadChatsCount}
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] sm:text-[11px]">Chats</span>
+            </button>
+          )}
 
           {/* 6. Ranking */}
           <button

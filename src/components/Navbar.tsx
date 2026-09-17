@@ -1,5 +1,6 @@
 import React from 'react';
 import { UserProfile, PrivacyMode } from '../types';
+import { isGuestAccount } from '../utils/userDbUtils';
 import { AvatarIcon } from './AvatarIcon';
 import { 
   MessageSquare, 
@@ -93,17 +94,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               Feed
             </button>
 
-            <button
-              onClick={() => setActiveTab('hub')}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transform-gpu transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
-                activeTab === 'hub'
-                  ? 'bg-teal-50 text-teal-700 border border-teal-200/60'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Building2 size={18} />
-              Campus Hub
-            </button>
+            {!isGuestAccount(user) && (
+              <button
+                onClick={() => setActiveTab('hub')}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transform-gpu transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
+                  activeTab === 'hub'
+                    ? 'bg-teal-50 text-teal-700 border border-teal-200/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Building2 size={18} />
+                Campus Hub
+              </button>
+            )}
 
             <button
               onClick={() => setActiveTab('leaderboard')}
@@ -185,15 +188,17 @@ export const Navbar: React.FC<NavbarProps> = ({
           Feed
         </button>
 
-        <button
-          onClick={() => setActiveTab('hub')}
-          className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-medium transform-gpu transition-all duration-150 hover:scale-110 active:scale-95 cursor-pointer ${
-            activeTab === 'hub' ? 'text-teal-700 font-bold scale-105' : 'text-slate-500 hover:text-slate-900'
-          }`}
-        >
-          <Building2 size={20} />
-          Campus Hub
-        </button>
+        {!isGuestAccount(user) && (
+          <button
+            onClick={() => setActiveTab('hub')}
+            className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-medium transform-gpu transition-all duration-150 hover:scale-110 active:scale-95 cursor-pointer ${
+              activeTab === 'hub' ? 'text-teal-700 font-bold scale-105' : 'text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Building2 size={20} />
+            Campus Hub
+          </button>
+        )}
 
         <button
           onClick={() => setActiveTab('leaderboard')}

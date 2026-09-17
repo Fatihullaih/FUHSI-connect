@@ -104,6 +104,10 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 }) => {
   const isCurrentUserGuest = isGuestAccount(userProfile);
 
+  if (isCurrentUserGuest) {
+    return null;
+  }
+
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [groups, setGroups] = useState<ChatGroup[]>([]);
   const [activeTab, setActiveTab] = useState<'all' | 'direct' | 'groups'>('all');
@@ -1041,19 +1045,6 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
             <Lock size={13} className="text-teal-700 shrink-0" />
             <span>Private & Protected</span>
           </div>
-
-          {/* Guest Account Notice */}
-          {isCurrentUserGuest && (
-            <div className="m-3 p-3 bg-slate-100 border border-slate-200 rounded-2xl text-slate-800 space-y-1">
-              <div className="flex items-center gap-1.5 font-black text-xs text-slate-900">
-                <span>🏷️</span>
-                <span>Guest Account Access</span>
-              </div>
-              <p className="text-[11px] leading-snug font-medium text-slate-600">
-                Direct and group chats with other users are reserved for registered FUHSI Students. As a Guest, you can contact Campus Administration (<span className="font-bold text-teal-800">@modula</span>) for official inquiries.
-              </p>
-            </div>
-          )}
 
           {/* Restriction Banner (If User is Restricted) */}
           {restrictionInfo.isRestricted && (

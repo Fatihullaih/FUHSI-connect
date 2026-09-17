@@ -202,13 +202,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
   onAuthorClick,
 }) => {
   if (isGuestAccount(userProfile)) {
-    return (
-      <div className="min-h-[70vh] flex items-center justify-center p-6 text-center">
-        <span className="text-sm font-bold text-slate-400 dark:text-slate-500 tracking-wide select-none">
-          (Restricted)
-        </span>
-      </div>
-    );
+    return null;
   }
 
   // Navigation & filter state

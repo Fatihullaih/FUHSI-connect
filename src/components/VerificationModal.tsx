@@ -133,12 +133,12 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
     // Submit details
     onSubmitVerification({
       accountType: effAccountType,
-      positionTitle: positionTitle.trim(),
+      positionTitle: isGuest ? '' : positionTitle.trim(),
       matricNumber: isGuest ? '' : (userProfile?.matricNumber || 'N/A'),
       department: isGuest ? '' : (userProfile?.department || 'N/A'),
       level: isGuest ? '' : (userProfile?.level || 'N/A'),
       proofDetails: isGuest
-        ? (positionTitle.trim() ? `Guest Affiliation / Note: ${positionTitle.trim()}` : 'Guest Verification Request')
+        ? 'Guest Verification Request'
         : (positionTitle.trim() ? `Position Held: ${positionTitle.trim()}` : 'Standard Verification Request'),
       paymentRef: ref,
       amountPaid: feeAmount,
@@ -166,12 +166,12 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
       onSubmitVerification({
         accountType: effAccountType,
-        positionTitle: positionTitle.trim(),
+        positionTitle: isGuest ? '' : positionTitle.trim(),
         matricNumber: isGuest ? '' : (userProfile?.matricNumber || 'N/A'),
         department: isGuest ? '' : (userProfile?.department || 'N/A'),
         level: isGuest ? '' : (userProfile?.level || 'N/A'),
         proofDetails: isGuest
-          ? (positionTitle.trim() ? `Guest Affiliation / Note: ${positionTitle.trim()}` : 'Guest Verification Request')
+          ? 'Guest Verification Request'
           : (positionTitle.trim() ? `Position Held: ${positionTitle.trim()}` : 'Verified via subscription gateway'),
         paymentRef: ref,
         amountPaid: feeAmount,
@@ -277,11 +277,9 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-800 font-bold">
               {(isGuest
                 ? [
-                    'Official Verification Checkmark',
-                    'Video Posting Access (up to 1m 30s)',
-                    'Edit Your Published Threads',
+                    'Verification Checkmark',
+                    'Editable Threads',
                     'Higher Trust & Credibility',
-                    'Permanent Guest Standing',
                     'Eligibility for Future Features',
                   ]
                 : [
@@ -300,12 +298,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 </div>
               ))}
             </div>
-
-            {isGuest && (
-              <p className="text-[11px] text-slate-500 font-medium px-1 leading-relaxed">
-                * Note: Marketplace listings and Direct Chat remain reserved exclusively for FUHSI Student accounts.
-              </p>
-            )}
           </div>
 
           {/* Form & Fee Section (if not yet verified/pending) */}
@@ -318,30 +310,8 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 </div>
               )}
 
-              {/* Account Category Selector */}
-              {isGuest ? (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    Account Category
-                  </label>
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <span className="w-2.5 h-2.5 rounded-full bg-slate-700" />
-                      <div>
-                        <div className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                          <span>Guest Account</span>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-200 text-slate-700">
-                            Permanent
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                          No matriculation number, department, or student status required
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
+              {/* Verification Category (Student accounts only) */}
+              {!isGuest && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
                     Verification Category
@@ -389,28 +359,24 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 </div>
               )}
 
-              {/* Additional Position / Affiliation (Optional) */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {isGuest ? 'Affiliation or Note (Optional)' : 'Additional Position Held (Optional)'}
-                </label>
-                <input
-                  type="text"
-                  value={positionTitle}
-                  onChange={(e) => setPositionTitle(e.target.value)}
-                  placeholder={
-                    isGuest
-                      ? 'e.g. Aspirant, Prospective Student, Parent, Visitor, Healthcare Professional'
-                      : 'e.g. Class Representative, Departmental President, SUG Executive, Club President'
-                  }
-                  className="w-full text-xs rounded-xl border border-slate-300 p-2.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-slate-900"
-                />
-                <p className="text-[11px] text-slate-500 font-medium mt-1">
-                  {isGuest
-                    ? 'State any affiliation or role if applicable for Admin consideration. Admin determines badge color and title. No student level or department will be assigned.'
-                    : 'If you hold any leadership or official campus position, enter it here. Otherwise, leave this field empty.'}
-                </p>
-              </div>
+              {/* Additional Position (Student accounts only) */}
+              {!isGuest && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Additional Position Held (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={positionTitle}
+                    onChange={(e) => setPositionTitle(e.target.value)}
+                    placeholder="e.g. Class Representative, Departmental President, SUG Executive, Club President"
+                    className="w-full text-xs rounded-xl border border-slate-300 p-2.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  />
+                  <p className="text-[11px] text-slate-500 font-medium mt-1">
+                    If you hold any leadership or official campus position, enter it here. Otherwise, leave this field empty.
+                  </p>
+                </div>
+              )}
 
               {/* Verification Fee Display */}
               <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
@@ -490,7 +456,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Verification Subscription</span>
                 <div className="text-2xl font-black text-slate-900">₦{feeAmount.toLocaleString()}</div>
                 <p className="text-xs text-slate-600 font-medium">
-                  {userProfile?.nickname} • {accountType} {positionTitle ? `(${positionTitle})` : ''}
+                  {userProfile?.nickname} • {isGuest ? 'Guest' : accountType} {!isGuest && positionTitle ? `(${positionTitle})` : ''}
                 </p>
               </div>
 

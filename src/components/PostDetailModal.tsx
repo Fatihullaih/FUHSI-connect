@@ -801,7 +801,11 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 <li className="flex items-center gap-1.5">✓ Live editing of your published threads</li>
                 <li className="flex items-center gap-1.5">✓ Create custom threads with video attachments</li>
                 <li className="flex items-center gap-1.5">✓ Verified checkmark across FUHSI Connect</li>
-                <li className="flex items-center gap-1.5">✓ Marketplace seller access & priority support</li>
+                {!isGuestAccount(userProfile) ? (
+                  <li className="flex items-center gap-1.5">✓ Marketplace seller access & priority support</li>
+                ) : (
+                  <li className="flex items-center gap-1.5">✓ Higher trust & platform credibility</li>
+                )}
               </ul>
             </div>
 

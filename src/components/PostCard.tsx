@@ -7,7 +7,7 @@ import { formatRelativeTime } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { CampusVideoPlayer } from './CampusVideoPlayer';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
-import { findUserByNickname } from '../utils/userDbUtils';
+import { findUserByNickname, isGuestAccount } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
 import { 
   Heart, 
@@ -768,7 +768,11 @@ export const PostCard: React.FC<PostCardProps> = ({
                 <li className="flex items-center gap-1.5">✓ Live editing of your published threads</li>
                 <li className="flex items-center gap-1.5">✓ Create custom threads with video attachments</li>
                 <li className="flex items-center gap-1.5">✓ Verified checkmark across FUHSI Connect</li>
-                <li className="flex items-center gap-1.5">✓ Marketplace seller access & priority support</li>
+                {!isGuestAccount(userProfile) ? (
+                  <li className="flex items-center gap-1.5">✓ Marketplace seller access & priority support</li>
+                ) : (
+                  <li className="flex items-center gap-1.5">✓ Higher trust & platform credibility</li>
+                )}
               </ul>
             </div>
 

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { PostCategory, UserProfile } from '../types';
 import { compressImageFile } from '../utils/imageUtils';
+import { isGuestAccount } from '../utils/userDbUtils';
 import { VerificationModal } from './VerificationModal';
 import { INITIAL_USER_PROFILE } from '../data/initialData';
 import { 
@@ -620,7 +621,11 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               <ul className="space-y-1 text-[11px] text-slate-700 font-medium">
                 <li className="flex items-center gap-1.5">✓ Upload video posts</li>
                 <li className="flex items-center gap-1.5">✓ Verified checkmark across the platform</li>
-                <li className="flex items-center gap-1.5">✓ Higher trust and marketplace credibility</li>
+                {!isGuestAccount(currentUser) ? (
+                  <li className="flex items-center gap-1.5">✓ Higher trust and marketplace credibility</li>
+                ) : (
+                  <li className="flex items-center gap-1.5">✓ Higher trust and credibility</li>
+                )}
               </ul>
             </div>
 

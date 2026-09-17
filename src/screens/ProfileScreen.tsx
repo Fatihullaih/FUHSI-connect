@@ -1380,7 +1380,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <li>Profile details, matric credentials & avatar</li>
                   <li>All your published threads, campus posts & polls</li>
                   <li>All your replies, comments & feedback</li>
-                  <li>Verification applications & marketplace listings</li>
+                  <li>{isGuest ? 'Verification applications & account records' : 'Verification applications & marketplace listings'}</li>
                   <li>Follow records, connections & helpdesk history</li>
                 </ul>
                 <p className="text-[11px] font-bold text-rose-900 dark:text-rose-200 pt-1">

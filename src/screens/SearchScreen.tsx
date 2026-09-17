@@ -385,7 +385,9 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
               <Sparkles size={16} className="text-amber-500 fill-amber-400" />
             </h1>
             <p className="text-xs text-slate-500 font-semibold">
-              Find accounts, posts, discussions, and campus marketplace items
+              {isGuestAccount(userProfile)
+                ? 'Find accounts, posts, discussions, and topics'
+                : 'Find accounts, posts, discussions, and campus marketplace items'}
             </p>
           </div>
         </div>
@@ -397,7 +399,11 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
             type="text"
             value={query}
             onChange={(e) => handleQueryChange(e.target.value)}
-            placeholder="Search users, posts, topics, or marketplace..."
+            placeholder={
+              isGuestAccount(userProfile)
+                ? 'Search users, posts, topics, or tags...'
+                : 'Search users, posts, topics, or marketplace...'
+            }
             className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-600 focus:outline-none transition-all shadow-inner"
           />
           {query && (
@@ -549,8 +555,8 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
             </div>
           )}
 
-          {/* MARKETPLACE HUB ITEMS */}
-          {matchingHubItems.length > 0 && (
+          {/* MARKETPLACE HUB ITEMS (Omitted completely for Guest accounts) */}
+          {matchingHubItems.length > 0 && !isGuestAccount(userProfile) && (
             <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <div className="flex items-center gap-2">
