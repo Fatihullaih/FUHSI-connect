@@ -123,6 +123,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   // Intersection Observer for scroll trigger
   useEffect(() => {
     if (hasReachedEnd) return;
+    if (typeof IntersectionObserver === 'undefined') return;
 
     const observer = new IntersectionObserver(
       (entries) => {

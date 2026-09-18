@@ -218,7 +218,14 @@ export function sanitizeUserProfile<T extends Partial<UserProfile>>(user: T): T 
       isAdmin: true,
     };
   }
-  if (isGuestAccount(user) || user.accountType === 'Guest') {
+  const cleanNick = (user.nickname || '').trim().toLowerCase().replace(/^@/, '');
+  const isGuest =
+    user.accountType === 'Guest' ||
+    user.badgeTitle === 'Guest' ||
+    cleanNick.startsWith('guest_') ||
+    (!user.isAdmin && user.accountType !== 'Student' && !user.matricNumber && (!user.department || user.department === 'General Campus' || user.department === 'FUHSI' || user.department === 'General'));
+
+  if (isGuest) {
     return {
       ...user,
       accountType: 'Guest',
@@ -334,25 +341,21 @@ export const DEFAULT_USERS_LIST: UserProfile[] = [
  */
 export function getStoredUsers(): UserProfile[] {
   try {
-    const stored = localStorage.getItem(USER_DB_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Automatically filter out any demo/mock accounts and permanently deleted users, and sanitize @modula
-        const realUsers = parsed
-          .filter((u) => !isDemoUser(u) && !isUserPermanentlyDeleted(u))
-          .map((u) => sanitizeModulaProfile(u));
-        const filteredDefaults = DEFAULT_USERS_LIST
-          .filter((u) => !isUserPermanentlyDeleted(u))
-          .map((u) => sanitizeModulaProfile(u));
-        const withDefaults = mergeUsers(filteredDefaults, realUsers).map((u) => sanitizeModulaProfile(u));
-        const cleaned = withDefaults.filter((u) => !isUserPermanentlyDeleted(u));
-        try {
-          localStorage.setItem(USER_DB_KEY, JSON.stringify(cleaned));
-        } catch (e) {
-          console.error('Error auto-cleaning user database:', e);
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem(USER_DB_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Automatically filter out any demo/mock accounts and permanently deleted users, and sanitize @modula
+          const realUsers = parsed
+            .filter((u) => !isDemoUser(u) && !isUserPermanentlyDeleted(u))
+            .map((u) => sanitizeModulaProfile(u));
+          const filteredDefaults = DEFAULT_USERS_LIST
+            .filter((u) => !isUserPermanentlyDeleted(u))
+            .map((u) => sanitizeModulaProfile(u));
+          const withDefaults = mergeUsers(filteredDefaults, realUsers).map((u) => sanitizeModulaProfile(u));
+          return withDefaults.filter((u) => !isUserPermanentlyDeleted(u));
         }
-        return cleaned;
       }
     }
   } catch (err) {
@@ -364,7 +367,9 @@ export function getStoredUsers(): UserProfile[] {
     .filter((u) => !isUserPermanentlyDeleted(u))
     .map((u) => sanitizeModulaProfile(u));
   try {
-    localStorage.setItem(USER_DB_KEY, JSON.stringify(initialDefaults));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(USER_DB_KEY, JSON.stringify(initialDefaults));
+    }
   } catch (e) {
     console.error('Error initializing user database:', e);
   }
@@ -385,7 +390,9 @@ export function saveStoredUsers(users: UserProfile[]): void {
     .map((u) => sanitizeModulaProfile(u))
     .filter((u) => !isUserPermanentlyDeleted(u));
   try {
-    localStorage.setItem(USER_DB_KEY, JSON.stringify(cleaned));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(USER_DB_KEY, JSON.stringify(cleaned));
+    }
   } catch (e) {
     console.error('Error saving user database:', e);
   }
@@ -401,27 +408,36 @@ export function saveStoredUsers(users: UserProfile[]): void {
 
 
 /**
- * Find user by nickname
+ * Find user by nickname (safe, non-recursive)
  */
 export function findUserByNickname(nickname: string): UserProfile | undefined {
   if (!nickname) return undefined;
   const clean = nickname.trim().toLowerCase().replace(/^@/, '');
   try {
-    const activeStr = localStorage.getItem('fuhsi_active_user');
-    if (activeStr) {
-      const activeUser = JSON.parse(activeStr);
-      if ((activeUser.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean) {
-        return sanitizeUserProfile(activeUser);
+    if (typeof localStorage !== 'undefined') {
+      const activeStr = localStorage.getItem('fuhsi_active_user');
+      if (activeStr) {
+        const activeUser = JSON.parse(activeStr);
+        if ((activeUser?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean) {
+          return sanitizeUserProfile(activeUser);
+        }
+      }
+      const stored = localStorage.getItem(USER_DB_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          const found = parsed.find((u) => (u?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
+          if (found) return sanitizeUserProfile(found);
+        }
       }
     }
   } catch (e) {}
-  const users = getStoredUsers();
-  const found = users.find((u) => (u.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
-  return found ? sanitizeUserProfile(found) : undefined;
+  const fallback = DEFAULT_USERS_LIST.find((u) => (u?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
+  return fallback ? sanitizeUserProfile(fallback) : undefined;
 }
 
 /**
- * Check if a user or user handle is a Guest account
+ * Check if a user or user handle is a Guest account (pure, non-recursive)
  */
 export function isGuestAccount(userOrNickname?: Partial<UserProfile> | string | null | any): boolean {
   if (!userOrNickname) return false;
@@ -432,29 +448,42 @@ export function isGuestAccount(userOrNickname?: Partial<UserProfile> | string | 
     if (userOrNickname.accountType === 'Guest') return true;
     if (userOrNickname.accountType === 'Student') return false;
     if (userOrNickname.badgeTitle === 'Guest') return true;
-    if (userOrNickname.nickname) {
-      const cleanNick = (userOrNickname.nickname || '').toLowerCase().replace(/^@/, '');
-      if (cleanNick.startsWith('guest_') || cleanNick.startsWith('guest')) {
-        return userOrNickname.accountType !== 'Student';
-      }
-      const dbUser = findUserByNickname(userOrNickname.nickname);
-      if (dbUser?.accountType === 'Guest') return true;
-      if (dbUser?.accountType === 'Student' || dbUser?.accountType === 'Admin') return false;
-    }
-    // Fallback: If user has no matricNumber and no academic department, consider them Guest
-    if (!userOrNickname.matricNumber && (!userOrNickname.department || userOrNickname.department === 'FUHSI' || userOrNickname.department === 'General')) {
+    const cleanNick = (userOrNickname.nickname || '').toLowerCase().replace(/^@/, '');
+    if (cleanNick.startsWith('guest_') || cleanNick.startsWith('guest')) {
       return true;
     }
-    return false;
+    if (userOrNickname.matricNumber) return false;
+    if (userOrNickname.department && userOrNickname.department !== 'General Campus' && userOrNickname.department !== 'FUHSI' && userOrNickname.department !== 'General') {
+      return false;
+    }
+    return true;
   }
   const cleanNick = (userOrNickname || '').toLowerCase().replace(/^@/, '');
+  if (cleanNick === 'modula') return false;
   if (cleanNick.startsWith('guest_') || cleanNick.startsWith('guest')) {
-    const dbUser = findUserByNickname(userOrNickname);
-    return dbUser?.accountType !== 'Student';
+    return true;
   }
-  const dbUser = findUserByNickname(userOrNickname);
-  if (dbUser?.accountType === 'Guest') return true;
-  if (dbUser?.accountType === 'Student' || dbUser?.accountType === 'Admin') return false;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const activeStr = localStorage.getItem('fuhsi_active_user');
+      if (activeStr) {
+        const activeUser = JSON.parse(activeStr);
+        if ((activeUser?.nickname || '').trim().toLowerCase().replace(/^@/, '') === cleanNick) {
+          return activeUser.accountType === 'Guest' || activeUser.badgeTitle === 'Guest';
+        }
+      }
+      const stored = localStorage.getItem(USER_DB_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          const found = parsed.find((u) => (u?.nickname || '').trim().toLowerCase().replace(/^@/, '') === cleanNick);
+          if (found) {
+            return found.accountType === 'Guest' || found.badgeTitle === 'Guest';
+          }
+        }
+      }
+    }
+  } catch (e) {}
   return false;
 }
 
