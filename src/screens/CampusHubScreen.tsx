@@ -363,10 +363,10 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
     
-    // Filter out video files
+    // Filter out non-image files
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
     if (imageFiles.length < files.length) {
-      setFormError('Only photo/picture uploads are allowed. Videos are not supported for marketplace or property listings.');
+      setFormError('Please select valid picture formats (JPG, PNG, WEBP).');
     }
 
     const remainingSlots = 6 - uploadedPhotos.length;
@@ -1512,7 +1512,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-500 italic">
-                    ⚠️ Picture uploads only. Video uploads are not supported.
+                    Select clear pictures to showcase your listing.
                   </p>
 
                   {uploadedPhotos.length < 6 && (

@@ -120,6 +120,7 @@ function initAndLoadServerDb() {
         chatReports: mergeChatReports([], parsed.chatReports || []),
         chatRestrictions: mergeChatRestrictions([], parsed.chatRestrictions || []),
         follows: mergeFollows([], parsed.follows || []),
+        notifications: parsed.notifications || {},
       });
       persistServerDb();
       console.log('[DB Init] Loaded and sanitized central database from data/db.json on server disk.');
@@ -146,6 +147,36 @@ function persistServerDb() {
 
 // Load DB on startup
 initAndLoadServerDb();
+
+async function syncFirestoreToActiveDb() {
+  try {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (!fs.existsSync(configPath)) return;
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const { initializeApp, getApps } = await import('firebase/app');
+    const { getFirestore, collection, getDocs } = await import('firebase/firestore');
+    const app = !getApps().length ? initializeApp(config) : getApps()[0];
+    const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
+    const snap = await getDocs(collection(firestoreDb, 'users'));
+    const firestoreUsers: any[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      if (data && (data.nickname || data.studentEmail)) {
+        firestoreUsers.push({ ...data, id: data.id || d.id });
+      }
+    });
+    if (firestoreUsers.length > 0) {
+      activeDb.users = mergeUsers(activeDb.users, firestoreUsers);
+      persistServerDb();
+      console.log(`[Firestore Sync] Synced ${firestoreUsers.length} users into server DB.`);
+    }
+  } catch (err: any) {
+    console.warn('[Firestore Sync] Non-critical Firestore sync notice:', err?.message || err);
+  }
+}
+
+// Kick off background Firestore sync
+syncFirestoreToActiveDb().catch(() => {});
 
 // Central DB API Endpoints
 app.get('/api/db', (req, res) => {

@@ -491,9 +491,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 {userProfile?.nickname || '@Student'}
               </h1>
               {isGuest && (
-                <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 flex items-center gap-1">
-                  <span>🏷️</span>
-                  <span>Guest</span>
+                <span className="text-xs text-slate-400 font-medium">
+                  Guest
                 </span>
               )}
               {(() => {

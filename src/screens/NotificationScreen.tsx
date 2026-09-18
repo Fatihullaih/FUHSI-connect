@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { UserProfile, Post, CampusNotification } from '../types';
-import { Bell, ShieldCheck, Sparkles, MessageSquare, Heart, CheckCheck, Megaphone, Building2, Landmark, Shield } from 'lucide-react';
+import { Bell, ShieldCheck, Sparkles, MessageSquare, Heart, CheckCheck, Megaphone, Building2, Landmark, Shield, UserPlus, Users } from 'lucide-react';
 import { isUserMatchingAudience, isFacultyTarget } from '../utils/audienceUtils';
 import { 
   normalizeNickname, 
@@ -19,13 +19,15 @@ interface NotificationScreenProps {
   allPosts?: Post[];
   onSelectPost?: (post: Post) => void;
   onOpenTradeChat?: (convId?: string) => void;
+  onOpenFollowersDirectory?: () => void;
 }
 
 export const NotificationScreen: React.FC<NotificationScreenProps> = ({ 
   userProfile, 
   allPosts = [], 
   onSelectPost,
-  onOpenTradeChat 
+  onOpenTradeChat,
+  onOpenFollowersDirectory,
 }) => {
   const [filter, setFilter] = useState<'ALL' | 'TARGETED' | 'UNREAD' | 'OFFICIAL' | 'INTERACTIONS'>('ALL');
   const [readNotifIds, setReadNotifIds] = useState<Record<string, boolean>>(() => {
@@ -118,31 +120,35 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     markAllNotificationsAsRead(userProfile.nickname);
   };
 
-  const handleToggleRead = (n: CampusNotification) => {
-    const currentStatus = Boolean(readNotifIds[n.id] !== undefined ? readNotifIds[n.id] : n.isRead);
-    const nextStatus = !currentStatus;
+  const handleNotificationClick = (n: CampusNotification) => {
+    // Mark as read immediately when clicked
+    setReadNotifIds((prev) => ({ ...prev, [n.id]: true }));
+    setReadNotificationId(userProfile.nickname, n.id, true);
+    markNotificationAsRead(userProfile.nickname, n.id);
 
-    setReadNotifIds((prev) => {
-      const updated = { ...prev, [n.id]: nextStatus };
-      setReadNotificationId(userProfile.nickname, n.id, nextStatus);
-      return updated;
-    });
+    const clean = normalizeNickname(userProfile.nickname);
+    const key = `fuhsi_user_notifications_${clean}`;
+    try {
+      const stored = getUserNotifications(userProfile.nickname);
+      const updatedList = stored.map((item) => (item.id === n.id ? { ...item, isRead: true } : item));
+      localStorage.setItem(key, JSON.stringify(updatedList));
+    } catch (e) {
+      console.error(e);
+    }
 
-    if (nextStatus) {
-      markNotificationAsRead(userProfile.nickname, n.id);
-    } else {
-      const clean = normalizeNickname(userProfile.nickname);
-      const key = `fuhsi_user_notifications_${clean}`;
-      try {
-        const stored = getUserNotifications(userProfile.nickname);
-        const updatedList = stored.map((item) => item.id === n.id ? { ...item, isRead: false } : item);
-        localStorage.setItem(key, JSON.stringify(updatedList));
-      } catch (e) {
-        console.error(e);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('fuhsi_notification_read_updated', {
+          detail: { nickname: userProfile.nickname, notifId: n.id },
+        })
+      );
+    }
+
+    if (n.type === 'FOLLOW' || n.actionType === 'VIEW_FOLLOWERS') {
+      if (onOpenFollowersDirectory) {
+        onOpenFollowersDirectory();
       }
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('fuhsi_notification_read_updated', { detail: { nickname: userProfile.nickname, notifId: n.id } }));
-      }
+      return;
     }
 
     if (n.postId && onSelectPost) {
@@ -157,14 +163,14 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     if (filter === 'UNREAD') return !n.isRead;
     if (filter === 'TARGETED') return n.type === 'TARGETED_DEPT' || n.type === 'TARGETED_FACULTY';
     if (filter === 'OFFICIAL') return n.type === 'ADMIN' || n.type === 'VERIFICATION' || (n.type as any) === 'CONVERSION';
-    if (filter === 'INTERACTIONS') return n.type === 'LIKE' || n.type === 'COMMENT';
+    if (filter === 'INTERACTIONS') return n.type === 'LIKE' || n.type === 'COMMENT' || n.type === 'FOLLOW';
     return true;
   });
 
   const unreadCount = allCombinedNotifications.filter((n) => !n.isRead).length;
   const targetedCount = targetedNotifications.length;
   const officialCount = allCombinedNotifications.filter((n) => n.type === 'ADMIN' || n.type === 'VERIFICATION' || (n.type as any) === 'CONVERSION').length;
-  const interactionsCount = allCombinedNotifications.filter((n) => n.type === 'LIKE' || n.type === 'COMMENT').length;
+  const interactionsCount = allCombinedNotifications.filter((n) => n.type === 'LIKE' || n.type === 'COMMENT' || n.type === 'FOLLOW').length;
 
   return (
     <div className="max-w-2xl mx-auto px-3 sm:px-4 py-4 space-y-4 pb-24">
@@ -270,7 +276,7 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
             return (
               <div
                 key={n.id}
-                onClick={() => handleToggleRead(n)}
+                onClick={() => handleNotificationClick(n)}
                 className={`p-4 transition-all cursor-pointer flex items-start gap-3 hover:bg-slate-50/80 ${
                   !n.isRead ? 'bg-teal-50/40 border-l-4 border-l-teal-600' : ''
                 }`}
@@ -311,7 +317,12 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
                       <Sparkles size={18} />
                     </div>
                   )}
-                  {n.type !== 'TARGETED_DEPT' && n.type !== 'TARGETED_FACULTY' && n.type !== 'VERIFICATION' && (n.type as any) !== 'CONVERSION' && n.type !== 'ADMIN' && n.type !== 'LIKE' && n.type !== 'COMMENT' && n.type !== 'MARKET' && (
+                  {n.type === 'FOLLOW' && (
+                    <div className="w-9 h-9 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center border border-teal-200">
+                      <UserPlus size={18} />
+                    </div>
+                  )}
+                  {n.type !== 'TARGETED_DEPT' && n.type !== 'TARGETED_FACULTY' && n.type !== 'VERIFICATION' && (n.type as any) !== 'CONVERSION' && n.type !== 'ADMIN' && n.type !== 'LIKE' && n.type !== 'COMMENT' && n.type !== 'MARKET' && n.type !== 'FOLLOW' && (
                     <div className="w-9 h-9 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center border border-teal-200">
                       <Bell size={18} />
                     </div>
@@ -332,6 +343,15 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
                     <span className="inline-block text-[10px] font-extrabold text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md mt-1">
                       Audience: {n.targetDepartment}
                     </span>
+                  )}
+
+                  {(n.type === 'FOLLOW' || n.actionType === 'VIEW_FOLLOWERS') && (
+                    <div className="pt-1.5">
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-teal-700 bg-teal-50/90 px-2.5 py-1 rounded-lg border border-teal-200 hover:bg-teal-100 transition-colors">
+                        <Users size={12} />
+                        <span>View Connections →</span>
+                      </span>
+                    </div>
                   )}
 
                   {n.postId && (

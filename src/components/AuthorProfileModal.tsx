@@ -85,12 +85,6 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   const [showPictureModal, setShowPictureModal] = useState(false);
   const [showFollowersModal, setShowFollowersModal] = useState<{ open: boolean; tab: 'followers' | 'following' } | null>(null);
 
-  const badgeInfo = useMemo(() => {
-    return getUserBadgeInfo(authorNickname, userProfile);
-  }, [authorNickname, userProfile]);
-
-  const isVerifiedAuthor = badgeInfo.isVerified;
-
   React.useEffect(() => {
     const handlePopState = () => {
       if (showFollowersModal) {
@@ -128,6 +122,12 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     }
     return findUserByNickname(authorNickname);
   }, [isViewingSelf, userProfile, allUsers, normAuthor, authorNickname]);
+
+  const badgeInfo = useMemo(() => {
+    return getUserBadgeInfo(authorNickname, authorProfileUser);
+  }, [authorNickname, authorProfileUser]);
+
+  const isVerifiedAuthor = badgeInfo.isVerified;
 
   const isAuthorModula = isModulaAccount(authorProfileUser) || isModulaAccount(authorNickname) || isModulaAccount(username);
   const effectiveAvatarKey = authorProfileUser?.avatarKey || authorAvatarKey || 'caduceus';
@@ -279,8 +279,8 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                 <p className="text-xs text-teal-200 font-bold mt-0.5">{username}</p>
 
                 {isAuthorModula ? null : isGuestAccount(authorProfileUser || authorNickname) ? (
-                  <p className="text-xs text-amber-200 font-extrabold mt-0.5">
-                    Guest Account
+                  <p className="text-[11px] text-teal-200/70 font-medium mt-0.5">
+                    Guest
                   </p>
                 ) : (
                   (effectiveDepartment || effectiveLevel) && (

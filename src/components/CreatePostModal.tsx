@@ -13,7 +13,6 @@ import {
   BarChart2, 
   AlertTriangle, 
   Image as ImageIcon, 
-  Video as VideoIcon, 
   Upload, 
   Trash2, 
   Lock, 
@@ -35,7 +34,6 @@ interface CreatePostModalProps {
       category: string;
       imageUrl?: string;
       imageUrls?: string[];
-      videoUri?: string;
       pollQuestion?: string;
       pollOptions?: string[];
       pollOptA?: string;
@@ -92,10 +90,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [content, setContent] = useState('');
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [showImageInput, setShowImageInput] = useState(false);
-  const [videoUri, setVideoUri] = useState('');
-  const [videoError, setVideoError] = useState<string | null>(null);
-  const [showVideoInput, setShowVideoInput] = useState(false);
-  const [showVerifiedVideoModal, setShowVerifiedVideoModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [hasPoll, setHasPoll] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
@@ -156,47 +150,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setImageUrls((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setVideoError(null);
-    const tempVideo = document.createElement('video');
-    tempVideo.preload = 'metadata';
-    const tempUrl = URL.createObjectURL(file);
-    tempVideo.src = tempUrl;
-
-    tempVideo.onloadedmetadata = () => {
-      URL.revokeObjectURL(tempUrl);
-      if (tempVideo.duration > 90) {
-        setVideoError('Video exceeds maximum duration of 1 minute 30 seconds.');
-        setVideoUri('');
-        e.target.value = '';
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setVideoUri(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    };
-
-    tempVideo.onerror = () => {
-      URL.revokeObjectURL(tempUrl);
-      setVideoError('Failed to load video file. Please select a valid video.');
-      e.target.value = '';
-    };
-  };
-
-  const handleVideoClick = () => {
-    if (isVerifiedUser) {
-      setShowVideoInput(!showVideoInput);
-    } else {
-      setShowVerifiedVideoModal(true);
-    }
-  };
-
   const handleVerificationSubmit = (data: any) => {
     try {
       const existingReqs = JSON.parse(localStorage.getItem('fuhsi_verifications_db') || '[]');
@@ -244,7 +197,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         category: 'General',
         imageUrl: imageUrls[0] || undefined,
         imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
-        videoUri: isVerifiedUser ? (videoUri.trim() || undefined) : undefined,
         pollQuestion: isValidPoll ? pollQuestion.trim() : undefined,
         pollOptions: isValidPoll ? validPollOptions : undefined,
         pollOptA: isValidPoll ? validPollOptions[0] : undefined,
@@ -257,7 +209,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
     setContent('');
     setImageUrls([]);
-    setVideoUri('');
     setPollQuestion('');
     setPollOptions(['', '']);
     setHasPoll(false);
@@ -312,7 +263,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             />
           </div>
 
-          {/* Attachments Actions (Image, Video, Poll) */}
+          {/* Attachments Actions (Image, Poll) */}
           <div className="border-t border-slate-100 pt-3 space-y-3">
             <div className="flex items-center gap-4 flex-wrap">
               {/* Image Toggle */}
@@ -323,27 +274,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               >
                 <ImageIcon size={16} />
                 <span>{imageUrls.length > 0 ? `📷 ${imageUrls.length}/2 Attached` : '+ Attach Image'}</span>
-              </button>
-
-              {/* Video Toggle (Verified Feature) */}
-              <button
-                type="button"
-                onClick={handleVideoClick}
-                className={`text-xs font-bold flex items-center gap-1.5 hover:underline cursor-pointer ${
-                  isVerifiedUser ? 'text-indigo-700' : 'text-slate-600'
-                }`}
-              >
-                <VideoIcon size={16} />
-                <span>{videoUri ? '🎥 Video Attached' : '+ Upload Video'}</span>
-                {isVerifiedUser ? (
-                  <span className="text-[9px] font-extrabold bg-emerald-100 text-emerald-900 px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-emerald-200">
-                    <ShieldCheck size={10} /> VERIFIED
-                  </span>
-                ) : (
-                  <span className="text-[9px] font-extrabold bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-amber-200">
-                    <Lock size={10} /> VERIFIED ONLY
-                  </span>
-                )}
               </button>
 
               {/* Poll Toggle */}
@@ -414,67 +344,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                         </button>
                       </div>
                     ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Verified Video Input Drawer */}
-            {isVerifiedUser && (showVideoInput || videoUri || videoError) && (
-              <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-bold text-indigo-950 flex items-center gap-1">
-                    <ShieldCheck size={14} className="text-emerald-600" /> Video Attachment
-                  </span>
-                  {videoUri && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setVideoUri('');
-                        setVideoError(null);
-                      }}
-                      className="text-xs font-bold text-rose-600 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Trash2 size={13} />
-                      <span>Remove Video</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Upload MP4 Button */}
-                {!videoUri && (
-                  <label className="cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl p-3 text-xs font-extrabold flex items-center justify-center gap-2 transition-colors shadow-xs w-full">
-                    <Upload size={16} />
-                    <span>Upload MP4 (Max length: 1m 30s)</span>
-                    <input
-                      type="file"
-                      accept="video/*"
-                      onChange={handleVideoUpload}
-                      className="hidden"
-                    />
-                  </label>
-                )}
-
-                {/* Video Duration Error */}
-                {videoError && (
-                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-semibold flex items-center gap-2">
-                    <AlertTriangle size={16} className="text-rose-600 shrink-0" />
-                    <span>{videoError}</span>
-                  </div>
-                )}
-
-                {/* Video Preview */}
-                {videoUri && (
-                  <div className="relative rounded-xl overflow-hidden border border-indigo-200 max-h-48 bg-slate-950 flex items-center justify-center">
-                    <video src={videoUri} controls className="max-h-48 w-full object-contain" />
-                    <button
-                      type="button"
-                      onClick={() => setVideoUri('')}
-                      className="absolute top-2 right-2 bg-slate-900/80 hover:bg-rose-600 text-white p-1 rounded-full transition-colors cursor-pointer"
-                      title="Remove video"
-                    >
-                      <X size={14} />
-                    </button>
                   </div>
                 )}
               </div>
@@ -598,60 +467,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           </div>
         </form>
       </div>
-
-      {/* Verified Video Lock Modal */}
-      {showVerifiedVideoModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-100 text-center space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-xs border border-amber-200">
-              <Lock size={24} />
-            </div>
-            <div>
-              <h4 className="font-extrabold text-slate-900 text-base">Video Upload — Verified Feature</h4>
-              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Video attachments (up to 1m 30s) are available exclusively to Verified accounts on FUHSI Connect.
-              </p>
-            </div>
-
-            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-left text-xs space-y-2 text-slate-800 font-medium">
-              <div className="flex items-center gap-2 text-emerald-700 font-bold">
-                <ShieldCheck size={16} />
-                <span>Verification Benefits Include:</span>
-              </div>
-              <ul className="space-y-1 text-[11px] text-slate-700 font-medium">
-                <li className="flex items-center gap-1.5">✓ Upload video posts</li>
-                <li className="flex items-center gap-1.5">✓ Verified checkmark across the platform</li>
-                {!isGuestAccount(currentUser) ? (
-                  <li className="flex items-center gap-1.5">✓ Higher trust and marketplace credibility</li>
-                ) : (
-                  <li className="flex items-center gap-1.5">✓ Higher trust and credibility</li>
-                )}
-              </ul>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowVerifiedVideoModal(false)}
-                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowVerifiedVideoModal(false);
-                  setShowVerificationModal(true);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-colors flex items-center justify-center gap-1 cursor-pointer"
-              >
-                <ShieldCheck size={14} />
-                <span>Get Verified</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showVerificationModal && (
         <VerificationModal

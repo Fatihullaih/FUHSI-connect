@@ -474,7 +474,15 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                             {acc.nickname}
                           </h3>
                           <VerificationBadge isVerified={acc.isVerified} badgeType={acc.badgeType} title={acc.badgeTitle} showTitle />
+                          {isGuestAccount(acc.nickname) && (
+                            <span className="text-[10px] text-slate-400 font-medium">Guest</span>
+                          )}
                         </div>
+                        {!isGuestAccount(acc.nickname) && getUserIdentitySubtitle(acc.nickname, acc.department, acc.level) && (
+                          <p className="text-xs text-slate-400 font-medium truncate mt-0.5">
+                            {getUserIdentitySubtitle(acc.nickname, acc.department, acc.level)}
+                          </p>
+                        )}
                       </div>
                     </div>
 

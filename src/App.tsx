@@ -51,7 +51,7 @@ import {
 } from './lib/firestoreSync';
 import { initTheme, getStoredTheme, setStoredTheme, ThemeMode } from './utils/themeUtils';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, BadgeType, PollOption, DirectMessage, FollowRecord } from './types';
-import { getStoredFollows, saveStoredFollows, toggleFollowState } from './utils/followUtils';
+import { getStoredFollows, saveStoredFollows, toggleFollowState, recordFollowNotification } from './utils/followUtils';
 import { toggleUserLike, isItemLikedByUser, getEffectiveLikesCount } from './utils/reactionUtils';
 import {
   isDemoUser,
@@ -73,6 +73,7 @@ import { ChatsScreen } from './screens/ChatsScreen';
 import { CreatePostModal } from './components/CreatePostModal';
 import { PostDetailModal } from './components/PostDetailModal';
 import { AuthorProfileModal } from './components/AuthorProfileModal';
+import { FollowersListModal } from './components/FollowersListModal';
 import { PWAInstallModal } from './components/PWAInstallModal';
 import { AuthModal } from './components/AuthModal';
 import { VerificationBadge } from './components/VerificationBadge';
@@ -89,13 +90,29 @@ export const App: React.FC = () => {
   const [showPwaModal, setShowPwaModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const raw = localStorage.getItem('fuhsi_active_user');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.nickname && !isUserPermanentlyDeleted(parsed) && (parsed.isApproved !== false || parsed.isAdmin)) {
+            return true;
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return false;
+  });
   const [appTotalMembers, setAppTotalMembers] = useState<number>(() => getApprovedMembersCount());
   const [activeChatRecipient, setActiveChatRecipient] = useState<{
     nickname: string;
     avatarKey?: string;
     avatarUrl?: string;
   } | null>(null);
+  const [showFollowersDirectoryModal, setShowFollowersDirectoryModal] = useState<boolean>(false);
 
   // Dynamically calculate total registered community members based on approved user accounts only
   useEffect(() => {
@@ -132,7 +149,22 @@ export const App: React.FC = () => {
   };
 
   // App Core State with Persistent LocalStorage Initialization
-  const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER_PROFILE);
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const raw = localStorage.getItem('fuhsi_active_user');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.nickname && !isUserPermanentlyDeleted(parsed)) {
+            return isModulaAccount(parsed) ? sanitizeModulaProfile(parsed) : parsed;
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return INITIAL_USER_PROFILE;
+  });
   const lastProfileSaveTimestampRef = useRef<number>(0);
   
   const [posts, setPosts] = useState<Post[]>(() => {
@@ -835,13 +867,13 @@ export const App: React.FC = () => {
     }
   }, [verificationRequests, userProfile?.nickname]);
 
-  // Requirement: Session & Security - Require user authentication on initial load or reload
+  // Requirement: Session & Security - Restore authenticated user session on initial load or reload
   useEffect(() => {
     try {
       const activeUserJson = localStorage.getItem('fuhsi_active_user');
       if (activeUserJson) {
         let parsed = JSON.parse(activeUserJson);
-        if (parsed && parsed.nickname) {
+        if (parsed && parsed.nickname && !isUserPermanentlyDeleted(parsed)) {
           const storedUsers = localStorage.getItem('fuhsi_users_db');
           if (storedUsers) {
             const list: UserProfile[] = JSON.parse(storedUsers);
@@ -861,15 +893,27 @@ export const App: React.FC = () => {
             localStorage.setItem('fuhsi_active_user', JSON.stringify(parsed));
           }
           setUserProfile(parsed);
+          if (parsed.isApproved !== false || parsed.isAdmin) {
+            setIsLoggedIn(true);
+            setShowAuthModal(false);
+          } else {
+            setIsLoggedIn(false);
+            setShowAuthModal(true);
+          }
+        } else {
+          setIsLoggedIn(false);
+          setShowAuthModal(true);
         }
+      } else {
+        setIsLoggedIn(false);
+        setShowAuthModal(true);
       }
       cleanupModulaFirestoreDoc().catch(() => {});
     } catch (e) {
       console.error(e);
+      setIsLoggedIn(false);
+      setShowAuthModal(true);
     }
-    // Strict authentication guard: start unauthenticated on page load/refresh
-    setIsLoggedIn(false);
-    setShowAuthModal(true);
   }, []);
 
   // Filter & Selected Item Modals
@@ -885,7 +929,8 @@ export const App: React.FC = () => {
     | { type: 'profile' }
     | { type: 'createPost' }
     | { type: 'auth' }
-    | { type: 'pwa' };
+    | { type: 'pwa' }
+    | { type: 'followersDirectory' };
 
   const [modalStack, setModalStack] = useState<ModalStackItem[]>([]);
   const [navHistory, setNavHistory] = useState<number[]>([0]);
@@ -992,6 +1037,14 @@ export const App: React.FC = () => {
     } catch (e) { console.error(e); }
   }, []);
 
+  const openFollowersDirectory = useCallback(() => {
+    setShowFollowersDirectoryModal(true);
+    setModalStack((prev) => [...prev, { type: 'followersDirectory' }]);
+    try {
+      window.history.pushState({ type: 'modal', modalType: 'followersDirectory', time: Date.now() }, '');
+    } catch (e) { console.error(e); }
+  }, []);
+
   const handleStartChat = useCallback((recipientNickname: string, avatarKey?: string, avatarUrl?: string) => {
     if (isGuestAccount(userProfile)) return;
     setActiveChatRecipient({
@@ -1006,6 +1059,7 @@ export const App: React.FC = () => {
     setShowCreatePostModal(false);
     setShowAuthModal(false);
     setShowPwaModal(false);
+    setShowFollowersDirectoryModal(false);
     setModalStack([]);
     handleNavChange(4); // Switch to Chats screen
   }, [handleNavChange, userProfile]);
@@ -1024,6 +1078,7 @@ export const App: React.FC = () => {
           setShowCreatePostModal(false);
           setShowAuthModal(false);
           setShowPwaModal(false);
+          setShowFollowersDirectoryModal(false);
           return [];
         }
         const newStack = [...prevStack];
@@ -1039,6 +1094,7 @@ export const App: React.FC = () => {
         setShowCreatePostModal(newStack.some((item) => item.type === 'createPost'));
         setShowAuthModal(newStack.some((item) => item.type === 'auth'));
         setShowPwaModal(newStack.some((item) => item.type === 'pwa'));
+        setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
 
         return newStack;
       });
@@ -1063,6 +1119,7 @@ export const App: React.FC = () => {
           setShowCreatePostModal(newStack.some((item) => item.type === 'createPost'));
           setShowAuthModal(newStack.some((item) => item.type === 'auth'));
           setShowPwaModal(newStack.some((item) => item.type === 'pwa'));
+          setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
 
           return newStack;
         }
@@ -1347,7 +1404,6 @@ export const App: React.FC = () => {
     imageUrl?: string;
     imageUrls?: string[];
     imageResName?: string;
-    videoUri?: string;
     pollQuestion?: string;
     pollOptions?: string[];
     pollOptA?: string;
@@ -1380,9 +1436,9 @@ export const App: React.FC = () => {
       authorAvatarKey: userProfile.avatarKey,
       authorAvatarUrl: userProfile.avatarUrl,
       authorPoints: 0,
-      authorDepartment: isModulaAccount(userProfile) ? '' : userProfile.department,
-      authorLevel: isModulaAccount(userProfile) ? '' : userProfile.level,
-      department: isModulaAccount(userProfile) ? 'General' : (data.department || 'General'),
+      authorDepartment: (isModulaAccount(userProfile) || isGuestAccount(userProfile)) ? '' : userProfile.department,
+      authorLevel: (isModulaAccount(userProfile) || isGuestAccount(userProfile)) ? '' : userProfile.level,
+      department: (isModulaAccount(userProfile) || isGuestAccount(userProfile)) ? 'General' : (data.department || 'General'),
       targetDepartment: targetDept,
       isDepartmentPriority: isPriority,
       category: (data.category as any) || 'General',
@@ -1390,7 +1446,6 @@ export const App: React.FC = () => {
       imageUrl: data.imageUrl,
       imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : undefined),
       imageResName: data.imageResName,
-      videoUri: data.videoUri,
       isGhostMode: false,
       timestamp: new Date().toISOString(),
       likesCount: 0,
@@ -1738,16 +1793,16 @@ export const App: React.FC = () => {
       applicantFullName: userProfile.realName || userProfile.nickname || (isGuest ? 'Guest' : 'Student'),
       applicantEmail: userProfile.studentEmail || 'N/A',
       applicantPhone: userProfile.emergencyHomePhone || 'N/A',
-      department: userProfile.department || data?.department || (isGuest ? 'General / Guest' : 'N/A'),
-      level: userProfile.level || data?.level || (isGuest ? 'Guest' : 'N/A'),
+      department: isGuest ? '' : (userProfile.department || data?.department || 'N/A'),
+      level: isGuest ? '' : (userProfile.level || data?.level || 'N/A'),
       category: data?.category || (isGuest ? 'Guest Verification' : `${accountType} Verification`),
       accountType: isGuest ? 'Guest' : accountType,
-      positionTitle: positionTitle,
-      matricNumber: userProfile.matricNumber || data?.matricNumber || 'N/A',
-      proofDetails: data?.proofDetails || (positionTitle ? `Position Held: ${positionTitle}` : (isGuest ? 'Guest Account Verification Request' : 'Standard Verification Request')),
+      positionTitle: isGuest ? '' : positionTitle,
+      matricNumber: isGuest ? '' : (userProfile.matricNumber || data?.matricNumber || 'N/A'),
+      proofDetails: data?.proofDetails || (isGuest ? 'Guest Account Verification Request' : (positionTitle ? `Position Held: ${positionTitle}` : 'Standard Verification Request')),
       paymentRef: data?.paymentRef || `SQUADCO-9G4DX4-${Math.floor(100000 + Math.random() * 900000)}`,
       amountPaid: data?.amountPaid || 1500,
-      statement: data?.statement || (isGuest ? `Guest Account Verification | Note: ${positionTitle || 'None'}` : `Category: ${accountType}${positionTitle ? ` | Position: ${positionTitle}` : ''} | Name: ${userProfile.realName || userProfile.nickname || 'Student'} | Dept: ${userProfile.department || 'FUHSI'} (${userProfile.level || 'N/A'})`),
+      statement: data?.statement || (isGuest ? 'Guest Account Verification' : `Category: ${accountType}${positionTitle ? ` | Position: ${positionTitle}` : ''} | Name: ${userProfile.realName || userProfile.nickname || 'Student'} | Dept: ${userProfile.department || 'FUHSI'} (${userProfile.level || 'N/A'})`),
       timestamp: new Date().toISOString(),
       status: 'PENDING',
     };
@@ -2359,6 +2414,22 @@ export const App: React.FC = () => {
       if (record) {
         saveFollowToFirestore(record).catch(console.error);
       }
+      // Record aggregated follower notification for the target user (applies to both Student and Guest)
+      try {
+        const notif = recordFollowNotification(userProfile.nickname, targetNickname);
+        if (notif) {
+          const cleanTarget = targetNickname.toLowerCase().replace(/^@/, '');
+          const notifsKey = `fuhsi_user_notifications_${cleanTarget}`;
+          const currentTargetNotifs = JSON.parse(localStorage.getItem(notifsKey) || '[]');
+          pushServerDbSync({
+            notifications: {
+              [cleanTarget]: currentTargetNotifs,
+            },
+          } as any);
+        }
+      } catch (err) {
+        console.error('Error recording follow notification:', err);
+      }
     } else {
       deleteFollowFromFirestore(docId).catch(console.error);
     }
@@ -2369,8 +2440,34 @@ export const App: React.FC = () => {
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-2 sm:p-4">
         <AuthModal
           isOpen={true}
-          canClose={false}
-          onClose={() => {}}
+          canClose={true}
+          onClose={() => {
+            // Seamlessly allow exploring campus as guest if dismissed
+            const guestUser: UserProfile = {
+              id: `usr_guest_${Date.now()}`,
+              nickname: `@Guest_${Math.floor(100 + Math.random() * 900)}`,
+              accountType: 'Guest',
+              realName: 'Campus Guest',
+              studentEmail: '',
+              department: 'General Campus',
+              level: 'Guest',
+              bio: 'Exploring FUHSI Connect campus network as guest.',
+              avatarKey: 'caduceus',
+              badgeType: 'NONE',
+              badgeTitle: 'Guest',
+              reputationScore: 10,
+              isVerified: false,
+              isApproved: true,
+              isAdmin: false,
+            };
+            setUserProfile(guestUser);
+            setIsLoggedIn(true);
+            setShowAuthModal(false);
+            try {
+              localStorage.setItem('fuhsi_active_user', JSON.stringify(guestUser));
+              upsertUser(guestUser);
+            } catch {}
+          }}
           onLoginSuccess={(user) => {
             setUserProfile(user);
             setIsLoggedIn(true);
@@ -2558,6 +2655,7 @@ export const App: React.FC = () => {
                 handleNavChange(4);
               }
             }}
+            onOpenFollowersDirectory={openFollowersDirectory}
           />
         )}
 
@@ -2943,6 +3041,41 @@ export const App: React.FC = () => {
               onStartChat={(recipientNickname, avatarKey, avatarUrl) => {
                 handleStartChat(recipientNickname, avatarKey, avatarUrl);
               }}
+            />
+          )}
+
+          {/* Followers / Connections Directory Modal */}
+          {showFollowersDirectoryModal && userProfile && (
+            <FollowersListModal
+              targetNickname={userProfile.nickname}
+              initialTab="followers"
+              allFollows={allFollows}
+              allUsers={allUsers}
+              currentUserNickname={userProfile.nickname}
+              onToggleFollow={handleToggleFollow}
+              onSelectUser={(selectedNick) => {
+                closeModalUI();
+                const dummyPost: Post = {
+                  id: `author_${selectedNick}`,
+                  authorNickname: selectedNick,
+                  authorAvatarKey: 'caduceus',
+                  authorBadgeType: 'NONE' as any,
+                  authorBadgeTitle: '',
+                  authorPoints: 0,
+                  timeAgo: '',
+                  category: 'General',
+                  categoryTag: 'General',
+                  content: '',
+                  text: '',
+                  timestamp: new Date().toISOString(),
+                  likesCount: 0,
+                  commentsCount: 0,
+                  isQuarantined: false,
+                  createdAt: '',
+                };
+                openAuthorProfile(dummyPost);
+              }}
+              onClose={closeModalUI}
             />
           )}
 

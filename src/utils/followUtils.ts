@@ -1,4 +1,4 @@
-import { FollowRecord } from '../types';
+import { FollowRecord, CampusNotification } from '../types';
 import { isDemoNickname } from './postGenerator';
 
 const FOLLOWS_STORAGE_KEY = 'fuhsi_user_follows_v1';
@@ -110,7 +110,17 @@ export function getFollowingCount(
 }
 
 /**
- * Get all follower records for a target user
+ * Safely parses any ISO timestamp or numeric epoch into milliseconds, guaranteeing no NaN in sort comparators
+ */
+export function parseTimestampSafe(ts?: string | number | null): number {
+  if (!ts) return 0;
+  if (typeof ts === 'number') return isNaN(ts) ? 0 : ts;
+  const parsed = new Date(ts).getTime();
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Get all follower records for a target user (sorted strictly by latest followers first)
  */
 export function getFollowersList(
   targetHandle?: string | null,
@@ -119,11 +129,32 @@ export function getFollowersList(
   const cleanTarget = normalizeHandle(targetHandle);
   if (!cleanTarget) return [];
 
-  return allFollows.filter((f) => normalizeHandle(f.followingNickname) === cleanTarget);
+  const rawList = allFollows.filter((f) => normalizeHandle(f.followingNickname) === cleanTarget);
+
+  // Sort strictly descending by latest first (newest timestamp first)
+  const sorted = [...rawList].sort((a, b) => {
+    const timeA = parseTimestampSafe(a.createdAt);
+    const timeB = parseTimestampSafe(b.createdAt);
+    if (timeB !== timeA) return timeB - timeA;
+    return rawList.indexOf(b) - rawList.indexOf(a);
+  });
+
+  // Deduplicate by follower nickname, preserving the newest entry
+  const seen = new Set<string>();
+  const deduplicated: FollowRecord[] = [];
+  for (const record of sorted) {
+    const h = normalizeHandle(record.followerNickname);
+    if (!seen.has(h)) {
+      seen.add(h);
+      deduplicated.push(record);
+    }
+  }
+
+  return deduplicated;
 }
 
 /**
- * Get all users followed by a user
+ * Get all users followed by a user (sorted strictly by latest followed first)
  */
 export function getFollowingList(
   targetHandle?: string | null,
@@ -132,7 +163,28 @@ export function getFollowingList(
   const cleanTarget = normalizeHandle(targetHandle);
   if (!cleanTarget) return [];
 
-  return allFollows.filter((f) => normalizeHandle(f.followerNickname) === cleanTarget);
+  const rawList = allFollows.filter((f) => normalizeHandle(f.followerNickname) === cleanTarget);
+
+  // Sort strictly descending by latest first (newest timestamp first)
+  const sorted = [...rawList].sort((a, b) => {
+    const timeA = parseTimestampSafe(a.createdAt);
+    const timeB = parseTimestampSafe(b.createdAt);
+    if (timeB !== timeA) return timeB - timeA;
+    return rawList.indexOf(b) - rawList.indexOf(a);
+  });
+
+  // Deduplicate by following nickname, preserving the newest entry
+  const seen = new Set<string>();
+  const deduplicated: FollowRecord[] = [];
+  for (const record of sorted) {
+    const h = normalizeHandle(record.followingNickname);
+    if (!seen.has(h)) {
+      seen.add(h);
+      deduplicated.push(record);
+    }
+  }
+
+  return deduplicated;
 }
 
 /**
@@ -176,4 +228,149 @@ export function toggleFollowState(
     const updatedFollows = [...currentFollows, newRecord];
     return { updatedFollows, isNowFollowing: true, docId };
   }
+}
+
+/**
+ * Generates natural follower notification copy based on unread follower count:
+ * - 0 followers: "Someone follows you"
+ * - 1 follower: "@username follows you"
+ * - 2 followers: "@username and @anotheruser follow you"
+ * - 3 followers: "@username and 2 others follow you"
+ * - 4 followers: "@username and 3 others follow you" (e.g. "@john and 3 others follow you")
+ * - 5 followers: "@username and 4 others follow you"
+ * - 6 followers: "@username and 5 others follow you"
+ */
+export function formatFollowNotificationText(followers: string[]): { title: string; message: string } {
+  const count = followers.length;
+  if (count <= 0) {
+    return { title: 'New Follower', message: 'Someone follows you' };
+  }
+  if (count === 1) {
+    return {
+      title: 'New Follower',
+      message: `${followers[0]} follows you`,
+    };
+  }
+  if (count === 2) {
+    return {
+      title: 'New Followers',
+      message: `${followers[0]} and ${followers[1]} follow you`,
+    };
+  }
+  // 3 or more unread followers: "@user and (count - 1) others follow you"
+  return {
+    title: 'New Followers',
+    message: `${followers[0]} and ${count - 1} others follow you`,
+  };
+}
+
+/**
+ * Record a follower notification for target user, aggregating if an unread one already exists
+ */
+export function recordFollowNotification(
+  followerHandle: string,
+  targetHandle: string
+): CampusNotification | null {
+  const cleanFollower = normalizeHandle(followerHandle);
+  const cleanTarget = normalizeHandle(targetHandle);
+  if (!cleanFollower || !cleanTarget || cleanFollower === cleanTarget) {
+    return null;
+  }
+
+  const formattedFollower = formatHandle(cleanFollower);
+  const targetKey = `fuhsi_user_notifications_${cleanTarget}`;
+
+  let userNotifs: CampusNotification[] = [];
+  try {
+    const stored = localStorage.getItem(targetKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        userNotifs = parsed;
+      }
+    }
+  } catch (e) {
+    userNotifs = [];
+  }
+
+  // Check read map for target user
+  let readMap: Record<string, boolean> = {};
+  try {
+    const raw = localStorage.getItem(`fuhsi_notifications_read_${cleanTarget}`);
+    if (raw) readMap = JSON.parse(raw);
+  } catch (e) {}
+
+  // Look for existing unread FOLLOW notification
+  const unreadIndex = userNotifs.findIndex((n) => {
+    if (n.type !== 'FOLLOW') return false;
+    if (n.isRead) return false;
+    if (readMap[n.id]) return false;
+    return true;
+  });
+
+  let notifToPersist: CampusNotification;
+
+  if (unreadIndex >= 0) {
+    const existing = userNotifs[unreadIndex];
+    const existingFollowers: string[] = Array.isArray(existing.followerNicknames) && existing.followerNicknames.length > 0
+      ? existing.followerNicknames
+      : (existing.senderNickname ? [existing.senderNickname] : []);
+
+    // Filter out cleanFollower if already in list, then prepend newest follower to the front
+    const updatedFollowers = [
+      formattedFollower,
+      ...existingFollowers.filter((f) => normalizeHandle(f) !== cleanFollower)
+    ];
+
+    const { title, message } = formatFollowNotificationText(updatedFollowers);
+
+    notifToPersist = {
+      ...existing,
+      title,
+      message,
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      senderNickname: formattedFollower,
+      followerNicknames: updatedFollowers,
+      actionType: 'VIEW_FOLLOWERS',
+    };
+
+    // Remove existing from list and put updated at index 0 (top of notifications)
+    const filtered = userNotifs.filter((_, idx) => idx !== unreadIndex);
+    userNotifs = [notifToPersist, ...filtered];
+  } else {
+    // Brand new unread notification
+    const { title, message } = formatFollowNotificationText([formattedFollower]);
+
+    notifToPersist = {
+      id: `follow_notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      type: 'FOLLOW',
+      title,
+      message,
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      senderNickname: formattedFollower,
+      followerNicknames: [formattedFollower],
+      actionType: 'VIEW_FOLLOWERS',
+    };
+
+    userNotifs = [notifToPersist, ...userNotifs];
+  }
+
+  try {
+    localStorage.setItem(targetKey, JSON.stringify(userNotifs));
+  } catch (e) {
+    console.error('Error saving follower notification:', e);
+  }
+
+  // Dispatch custom event to notify listeners
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('fuhsi_notification_received', {
+        detail: { targetNickname: cleanTarget, notif: notifToPersist },
+      })
+    );
+  }
+
+  return notifToPersist;
 }

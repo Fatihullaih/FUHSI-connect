@@ -35,7 +35,8 @@ import {
   Copy,
   Check,
   ExternalLink,
-  Loader2
+  Loader2,
+  Compass
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -357,6 +358,36 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleExploreAsGuest = () => {
+    const randomSuffix = Math.floor(100 + Math.random() * 900);
+    const guestUser: UserProfile = {
+      id: `usr_guest_${Date.now()}`,
+      nickname: `@Guest_${randomSuffix}`,
+      accountType: 'Guest',
+      realName: 'Campus Guest',
+      studentEmail: '',
+      department: 'General Campus',
+      level: 'Guest',
+      bio: 'Exploring FUHSI Connect campus network as guest.',
+      avatarKey: 'caduceus',
+      badgeType: 'NONE',
+      badgeTitle: 'Guest',
+      reputationScore: 10,
+      isVerified: false,
+      isApproved: true,
+      isAdmin: false,
+    };
+    try {
+      localStorage.setItem('fuhsi_active_user', JSON.stringify(guestUser));
+      upsertUser(guestUser);
+    } catch (e) {
+      console.error(e);
+    }
+    setErrorMessage('');
+    onLoginSuccess(guestUser);
+    onClose();
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -1210,6 +1241,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <span>Sign In</span>
                   </>
                 )}
+              </button>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-200"></div>
+                <span className="flex-shrink mx-2 text-[11px] font-semibold text-slate-400">or</span>
+                <div className="flex-grow border-t border-slate-200"></div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleExploreAsGuest}
+                className="w-full py-2.5 px-4 font-bold text-xs rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
+              >
+                <Compass size={15} className="text-teal-600" />
+                <span>Explore Campus as Guest</span>
               </button>
 
               <div className="text-center pt-2 border-t border-slate-100 space-y-2">

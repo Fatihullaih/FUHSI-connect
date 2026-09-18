@@ -5,7 +5,6 @@ import { VerificationBadge } from './VerificationBadge';
 import { VerificationModal } from './VerificationModal';
 import { formatRelativeTime } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
-import { CampusVideoPlayer } from './CampusVideoPlayer';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
 import { findUserByNickname, isGuestAccount } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
@@ -259,6 +258,10 @@ export const PostCard: React.FC<PostCardProps> = ({
                   title={authorBadgeInfo.badgeTitle}
                   showTitle 
                 />
+
+                {isGuestAccount(post.authorNickname) && (
+                  <span className="text-[10px] text-slate-400 font-medium">Guest</span>
+                )}
               </div>
               <p className="text-xs text-slate-400 font-medium flex items-center gap-1.5 flex-wrap">
                 <span>{formatRelativeTime(post.timestamp)}</span>
@@ -465,15 +468,6 @@ export const PostCard: React.FC<PostCardProps> = ({
           );
         })()}
 
-        {/* Attached Video (Publicly Viewable; Download Exclusive to Verified) */}
-        {post.videoUri && (
-          <CampusVideoPlayer
-            videoUri={post.videoUri}
-            userProfile={userProfile}
-            className="mt-3.5"
-          />
-        )}
-
         {/* Optional Poll Component */}
         {post.pollQuestion && optionsList.length > 0 && (
           <div className="mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-3">
@@ -637,6 +631,9 @@ export const PostCard: React.FC<PostCardProps> = ({
                             <AvatarIcon avatarKey={commentAvatarKey} avatarUrl={commentAvatarUrl} size={12} sizeClassName="w-5 h-5 object-cover" />
                           </div>
                           <span className="font-bold text-slate-800 group-hover/user:text-teal-700 group-hover/user:underline">{comment.authorNickname}</span>
+                          {isGuestAccount(comment.authorNickname) && (
+                            <span className="text-[10px] text-slate-400 font-medium">Guest</span>
+                          )}
                         </div>
                         <span className="text-slate-400 text-[10px]" title={comment.timestamp}>{formatRelativeTime(comment.timestamp)}</span>
                       </div>
@@ -766,7 +763,6 @@ export const PostCard: React.FC<PostCardProps> = ({
               </div>
               <ul className="space-y-1 text-[11px] text-slate-700 font-medium">
                 <li className="flex items-center gap-1.5">✓ Live editing of your published threads</li>
-                <li className="flex items-center gap-1.5">✓ Create custom threads with video attachments</li>
                 <li className="flex items-center gap-1.5">✓ Verified checkmark across FUHSI Connect</li>
                 {!isGuestAccount(userProfile) ? (
                   <li className="flex items-center gap-1.5">✓ Marketplace seller access & priority support</li>

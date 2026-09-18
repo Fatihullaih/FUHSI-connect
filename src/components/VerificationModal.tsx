@@ -284,7 +284,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                   ]
                 : [
                     'Verified Checkmark',
-                    'Video Posting Access',
                     'Higher Trust and Credibility',
                     'Editable Thread',
                     'Handle Marketplace',

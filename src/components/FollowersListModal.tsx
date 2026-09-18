@@ -3,6 +3,7 @@ import { FollowRecord, UserProfile, Post } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
+import { isGuestAccount, getUserIdentitySubtitle } from '../utils/userDbUtils';
 import { normalizeHandle, formatHandle, isUserFollowing, getFollowersList, getFollowingList } from '../utils/followUtils';
 import { X, ArrowLeft, Users, UserPlus, UserCheck } from 'lucide-react';
 
@@ -173,10 +174,17 @@ export const FollowersListModal: React.FC<FollowersListModalProps> = ({
                           title={badgeInfo.badgeTitle}
                           showTitle={false}
                         />
+                        {isGuestAccount(item.profile || item.handle) && (
+                          <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                            Guest
+                          </span>
+                        )}
                       </div>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                        {item.profile?.department || 'FUHSI Member'}
-                      </p>
+                      {!isGuestAccount(item.profile || item.handle) && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                          {getUserIdentitySubtitle(item.profile || item.handle, item.profile?.department, item.profile?.level)}
+                        </p>
+                      )}
                     </div>
                   </div>
 

@@ -6,7 +6,6 @@ import { VerificationBadge } from './VerificationBadge';
 import { VerificationModal } from './VerificationModal';
 import { formatRelativeTime, formatExactDateTime, getTimestampMs } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
-import { CampusVideoPlayer } from './CampusVideoPlayer';
 import { compressImageFile } from '../utils/imageUtils';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
 import { findUserByNickname, isGuestAccount } from '../utils/userDbUtils';
@@ -190,6 +189,9 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 badgeType={commentBadgeInfo.badgeType}
                 title={commentBadgeInfo.badgeTitle}
               />
+              {isGuestAccount(comment.authorNickname) && (
+                <span className="text-[10px] text-slate-400 font-medium">Guest</span>
+              )}
               {comment.replyToNickname && (
                 <button
                   type="button"
@@ -392,6 +394,9 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                           title={authorBadgeInfo.badgeTitle}
                           showTitle 
                         />
+                        {isGuestAccount(post.authorNickname) && (
+                          <span className="text-[10px] text-slate-400 font-medium">Guest</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-slate-500 pt-0.5">
                         {post.department && post.department !== 'General' && !isGuestAccount(post.authorNickname) && (
@@ -552,15 +557,6 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 </div>
               );
             })()}
-
-            {/* Video Attachment if present */}
-            {post.videoUri && (
-              <CampusVideoPlayer
-                videoUri={post.videoUri}
-                userProfile={userProfile}
-                className="mt-3"
-              />
-            )}
 
             {/* Optional Poll Component */}
             {post.pollQuestion && (
@@ -799,7 +795,6 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               </div>
               <ul className="space-y-1 text-[11px] text-slate-700 font-medium">
                 <li className="flex items-center gap-1.5">✓ Live editing of your published threads</li>
-                <li className="flex items-center gap-1.5">✓ Create custom threads with video attachments</li>
                 <li className="flex items-center gap-1.5">✓ Verified checkmark across FUHSI Connect</li>
                 {!isGuestAccount(userProfile) ? (
                   <li className="flex items-center gap-1.5">✓ Marketplace seller access & priority support</li>

@@ -463,7 +463,7 @@ export interface CampusEvent {
 
 export interface CampusNotification {
   id: string;
-  type: 'VERIFICATION' | 'LIKE' | 'COMMENT' | 'ADMIN' | 'MARKET' | 'TARGETED_DEPT' | 'TARGETED_FACULTY' | 'DIRECT_MESSAGE' | 'ADMIN_TRADE_DESK';
+  type: 'VERIFICATION' | 'LIKE' | 'COMMENT' | 'ADMIN' | 'MARKET' | 'TARGETED_DEPT' | 'TARGETED_FACULTY' | 'DIRECT_MESSAGE' | 'ADMIN_TRADE_DESK' | 'FOLLOW';
   title: string;
   message: string;
   timestamp: string;
@@ -472,8 +472,9 @@ export interface CampusNotification {
   postId?: string;
   senderNickname?: string;
   conversationId?: string;
-  actionType?: 'REPLY_ADMIN' | 'OPEN_TRADE_CHAT' | 'VIEW_MARKET' | string;
+  actionType?: 'REPLY_ADMIN' | 'OPEN_TRADE_CHAT' | 'VIEW_MARKET' | 'VIEW_FOLLOWERS' | string;
   itemId?: string;
+  followerNicknames?: string[];
 }
 
 export interface HelpDeskInquiry {

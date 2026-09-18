@@ -202,18 +202,37 @@ export function isModulaAccount(userOrNickname?: Partial<UserProfile> | string |
 }
 
 /**
- * Sanitize a user object so that @modula never contains academic classification
+ * Sanitize a user object so that:
+ * 1. @modula never contains academic classification
+ * 2. Guest accounts never contain student/academic information (department, level, matricNumber)
  */
+export function sanitizeUserProfile<T extends Partial<UserProfile>>(user: T): T {
+  if (!user) return user;
+  if (isModulaAccount(user)) {
+    return {
+      ...user,
+      department: '',
+      level: '',
+      accountType: 'Admin',
+      matricNumber: '',
+      isAdmin: true,
+    };
+  }
+  if (isGuestAccount(user) || user.accountType === 'Guest') {
+    return {
+      ...user,
+      accountType: 'Guest',
+      matricNumber: '',
+      department: '',
+      level: '',
+      badgeTitle: user.badgeTitle === 'FUHSI Student' ? 'Guest' : (user.badgeTitle || 'Guest'),
+    };
+  }
+  return user;
+}
+
 export function sanitizeModulaProfile<T extends Partial<UserProfile>>(user: T): T {
-  if (!isModulaAccount(user)) return user;
-  return {
-    ...user,
-    department: '',
-    level: '',
-    accountType: 'Admin',
-    matricNumber: '',
-    isAdmin: true,
-  };
+  return sanitizeUserProfile(user);
 }
 
 /**
@@ -387,9 +406,18 @@ export function saveStoredUsers(users: UserProfile[]): void {
 export function findUserByNickname(nickname: string): UserProfile | undefined {
   if (!nickname) return undefined;
   const clean = nickname.trim().toLowerCase().replace(/^@/, '');
+  try {
+    const activeStr = localStorage.getItem('fuhsi_active_user');
+    if (activeStr) {
+      const activeUser = JSON.parse(activeStr);
+      if ((activeUser.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean) {
+        return sanitizeUserProfile(activeUser);
+      }
+    }
+  } catch (e) {}
   const users = getStoredUsers();
   const found = users.find((u) => (u.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
-  return found ? sanitizeModulaProfile(found) : undefined;
+  return found ? sanitizeUserProfile(found) : undefined;
 }
 
 /**
@@ -440,7 +468,7 @@ export function getUserAccountType(userOrNickname?: Partial<UserProfile> | strin
 /**
  * Return appropriate subtitle string for any user identity:
  * - For Admin (@modula): '' (No academic classification)
- * - For Guest: 'Guest'
+ * - For Guest: 'Guest' (Strictly Guest, never department or academic info)
  * - For Student: 'Department • Level' (or department/FUHSI Student)
  */
 export function getUserIdentitySubtitle(
@@ -454,27 +482,33 @@ export function getUserIdentitySubtitle(
   if (isGuestAccount(userOrNickname)) {
     return 'Guest';
   }
-  let dept = fallbackDept;
-  let lvl = fallbackLevel;
   if (typeof userOrNickname === 'object' && userOrNickname) {
     if (isModulaAccount(userOrNickname)) return '';
     if (userOrNickname.accountType === 'Guest') return 'Guest';
-    dept = userOrNickname.department || dept;
-    lvl = userOrNickname.level || lvl;
+    if (userOrNickname.nickname) {
+      const dbUser = findUserByNickname(userOrNickname.nickname);
+      if (dbUser?.accountType === 'Guest') return 'Guest';
+    }
+    if (userOrNickname.department && userOrNickname.level) {
+      return `${userOrNickname.department} • ${userOrNickname.level}`;
+    }
+    if (userOrNickname.department) return userOrNickname.department;
   } else if (typeof userOrNickname === 'string') {
     const dbUser = findUserByNickname(userOrNickname);
     if (dbUser) {
       if (isModulaAccount(dbUser)) return '';
       if (dbUser.accountType === 'Guest') return 'Guest';
-      dept = dbUser.department || dept;
-      lvl = dbUser.level || lvl;
+      if (dbUser.department && dbUser.level) {
+        return `${dbUser.department} • ${dbUser.level}`;
+      }
+      if (dbUser.department) return dbUser.department;
     }
   }
-  if (dept && lvl) {
-    return `${dept} • ${lvl}`;
+  if (fallbackDept && !isGuestAccount(fallbackDept)) {
+    if (fallbackLevel) return `${fallbackDept} • ${fallbackLevel}`;
+    return fallbackDept;
   }
-  if (dept) return dept;
-  return 'FUHSI Student';
+  return 'Student';
 }
 
 /**
