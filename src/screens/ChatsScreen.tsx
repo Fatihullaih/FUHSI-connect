@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, ChatConversation, DirectMessage, ChatReport, ChatGroup } from '../types';
+import { UserProfile, ChatConversation, DirectMessage, ChatReport, ChatGroup, FollowRecord } from '../types';
 import { AvatarIcon } from '../components/AvatarIcon';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
+import { isUserFollowing, getStoredFollows } from '../utils/followUtils';
 import { 
   getStoredDirectMessages, 
   getUserConversations, 
@@ -29,7 +30,7 @@ import {
   checkUserChatRestriction, 
   formatRestrictionRemainingTime 
 } from '../utils/safetyFilter';
-import { isUserOnline } from '../utils/presenceUtils';
+import { isUserOnline, canViewerSeeOnlineStatus } from '../utils/presenceUtils';
 import { 
   subscribeDirectMessagesByConversation, 
   subscribeChatGroups 
@@ -91,6 +92,7 @@ interface ChatsScreenProps {
   initialRecipient?: { nickname: string; avatarKey?: string; avatarUrl?: string } | null;
   onClearInitialRecipient?: () => void;
   allUsers?: UserProfile[];
+  allFollows?: FollowRecord[];
 }
 
 export const ChatsScreen: React.FC<ChatsScreenProps> = ({
@@ -101,6 +103,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
   initialRecipient,
   onClearInitialRecipient,
   allUsers = [],
+  allFollows = [],
 }) => {
   const isCurrentUserGuest = isGuestAccount(userProfile);
 
@@ -199,8 +202,14 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
         }
       } catch (e) {}
     }
+    if (!match) return false;
+
+    // Requirement: Show Online Activity Status: Allow friends and mutual followers to see when you are active on the campus network.
+    const canSee = canViewerSeeOnlineStatus(match, userProfile, allFollows);
+    if (!canSee) return false;
+
     return isUserOnline(match);
-  }, [activeRecipient, cleanRecipientDisplay, allUsers, presenceTick]);
+  }, [activeRecipient, cleanRecipientDisplay, allUsers, presenceTick, userProfile, allFollows]);
 
   // Filter messages excluding those deleted for the current user
   const visibleMessages = useMemo(() => {
@@ -905,6 +914,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       return allUsers.filter((u) => isModulaAccount(u));
     }
     const q = newChatSearch.toLowerCase().replace(/^@/, '');
+    const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
     return allUsers
       .filter((u) => {
         if (!u || isDemoUser(u) || isDemoNickname(u.nickname)) return false;
@@ -912,11 +922,24 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
         const nick = normalizeNickname(u.nickname);
         if (!nick || nick === cleanMyNickname) return false;
         if (nick === 'yi' || nick === '@yi') return false;
+
+        // Privacy: If user disabled search discovery, only allow if current user already follows them or is admin
+        if (u.searchDiscoverable === false && !userProfile?.isAdmin && !isModulaAccount(u)) {
+          const amIFollowing = isUserFollowing(cleanMyNickname, nick, effectiveFollows);
+          if (!amIFollowing) return false;
+        }
+
+        // Privacy: If user only accepts DMs from followers
+        if (u.allowDirectMessagesFrom === 'followers' && !userProfile?.isAdmin && !isModulaAccount(u)) {
+          const amIFollowing = isUserFollowing(cleanMyNickname, nick, effectiveFollows);
+          if (!amIFollowing) return false;
+        }
+
         if (!q) return true;
         return nick.includes(q);
       })
       .slice(0, 15);
-  }, [allUsers, newChatSearch, cleanMyNickname, isCurrentUserGuest]);
+  }, [allUsers, newChatSearch, cleanMyNickname, isCurrentUserGuest, userProfile?.isAdmin, allFollows]);
 
   // Suggested quick messages
   const quickReplies = [

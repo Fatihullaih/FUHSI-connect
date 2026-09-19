@@ -1,5 +1,28 @@
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, LeaderboardUser, WeeklyRankingItem, WeeklyTrendingPost, CommunityFundSummary } from '../types';
 
+export const EMPTY_USER_PROFILE: UserProfile = {
+  id: '',
+  nickname: '',
+  accountType: 'Student',
+  realName: '',
+  matricNumber: '',
+  studentEmail: '',
+  emergencyHomePhone: '',
+  department: '',
+  level: '',
+  bio: '',
+  avatarKey: '1',
+  badgeType: 'NONE',
+  badgeTitle: '',
+  reputationScore: 0,
+  isVerified: false,
+  isApproved: false,
+  isDeclined: false,
+  isAdmin: false,
+  joinedDate: '',
+  createdAt: '',
+};
+
 export const INITIAL_USER_PROFILE: UserProfile = {
   id: 'usr_admin_modula',
   nickname: '@modula',

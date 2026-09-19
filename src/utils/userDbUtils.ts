@@ -222,8 +222,7 @@ export function sanitizeUserProfile<T extends Partial<UserProfile>>(user: T): T 
   const isGuest =
     user.accountType === 'Guest' ||
     user.badgeTitle === 'Guest' ||
-    cleanNick.startsWith('guest_') ||
-    (!user.isAdmin && user.accountType !== 'Student' && !user.matricNumber && (!user.department || user.department === 'General Campus' || user.department === 'FUHSI' || user.department === 'General'));
+    (cleanNick.startsWith('guest_') && user.accountType !== 'Student' && !user.isAdmin);
 
   if (isGuest) {
     return {
@@ -313,6 +312,10 @@ export const DEFAULT_USERS_LIST: UserProfile[] = [
     isApproved: true,
     isDeclined: false,
     isAdmin: true,
+    savedPassword: 'ibraheem',
+    password: 'ibraheem',
+    joinedDate: 'Sep 2024',
+    createdAt: '2024-09-01T00:00:00.000Z',
   },
   {
     id: 'usr_student_adedeji_ayo_24prt007',
@@ -327,12 +330,16 @@ export const DEFAULT_USERS_LIST: UserProfile[] = [
     bio: 'FUHSI Student | Prosthetics and Orthotics (200L)',
     avatarKey: 'caduceus',
     badgeType: 'BLUE',
-    badgeTitle: '',
+    badgeTitle: 'FUHSI Student',
     reputationScore: 180,
     isVerified: true,
     isApproved: true,
     isDeclined: false,
     isAdmin: false,
+    savedPassword: 'password123',
+    password: 'password123',
+    joinedDate: 'Oct 2024',
+    createdAt: '2024-10-01T00:00:00.000Z',
   },
 ];
 
@@ -450,19 +457,12 @@ export function isGuestAccount(userOrNickname?: Partial<UserProfile> | string | 
     if (userOrNickname.badgeTitle === 'Guest') return true;
     const cleanNick = (userOrNickname.nickname || '').toLowerCase().replace(/^@/, '');
     if (cleanNick.startsWith('guest_') || cleanNick.startsWith('guest')) {
-      return true;
+      return userOrNickname.accountType === 'Guest' || userOrNickname.badgeTitle === 'Guest';
     }
-    if (userOrNickname.matricNumber) return false;
-    if (userOrNickname.department && userOrNickname.department !== 'General Campus' && userOrNickname.department !== 'FUHSI' && userOrNickname.department !== 'General') {
-      return false;
-    }
-    return true;
+    return false;
   }
   const cleanNick = (userOrNickname || '').toLowerCase().replace(/^@/, '');
   if (cleanNick === 'modula') return false;
-  if (cleanNick.startsWith('guest_') || cleanNick.startsWith('guest')) {
-    return true;
-  }
   try {
     if (typeof localStorage !== 'undefined') {
       const activeStr = localStorage.getItem('fuhsi_active_user');

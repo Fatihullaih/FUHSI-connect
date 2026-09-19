@@ -10,6 +10,7 @@ import { calculateUserPoints } from '../utils/reputationUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, findUserByNickname, isModulaAccount, formatJoinDate } from '../utils/userDbUtils';
 import { isUserFollowing, getFollowersCount, getFollowingCount, normalizeHandle } from '../utils/followUtils';
+import { canViewerSeeOnlineStatus, isUserOnline } from '../utils/presenceUtils';
 import { 
   X, 
   ArrowLeft,
@@ -21,7 +22,8 @@ import {
   FileText, 
   MessageSquare,
   Lock,
-  ArrowRight
+  ArrowRight,
+  Radio
 } from 'lucide-react';
 
 interface AuthorProfileModalProps {
@@ -144,8 +146,28 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     return isUserFollowing(normCurrentUser, normAuthor, allFollows);
   }, [normCurrentUser, normAuthor, allFollows]);
 
+  const hasAuthorFollowedBack = useMemo(() => {
+    return isUserFollowing(normAuthor, normCurrentUser, allFollows);
+  }, [normAuthor, normCurrentUser, allFollows]);
+
   const isAuthorPrivate = Boolean(authorProfileUser?.isPrivate);
-  const isPrivateLocked = isAuthorPrivate && !isViewingSelf && !isFollowingAuthor && !userProfile?.isAdmin;
+  
+  // Unlocked if viewing self, admin, or if author followed viewer back AND viewer follows author
+  const isPrivateLocked = useMemo(() => {
+    if (!isAuthorPrivate) return false;
+    if (isViewingSelf || userProfile?.isAdmin) return false;
+    return !(isFollowingAuthor && hasAuthorFollowedBack);
+  }, [isAuthorPrivate, isViewingSelf, userProfile?.isAdmin, isFollowingAuthor, hasAuthorFollowedBack]);
+
+  // Online Activity Status Visibility Check
+  const canSeeOnlineStatus = useMemo(() => {
+    return canViewerSeeOnlineStatus(authorProfileUser, userProfile, allFollows);
+  }, [authorProfileUser, userProfile, allFollows]);
+
+  const authorIsOnline = useMemo(() => {
+    if (!canSeeOnlineStatus) return false;
+    return isUserOnline(authorProfileUser);
+  }, [canSeeOnlineStatus, authorProfileUser]);
 
   const authorFollowersCount = useMemo(() => {
     return getFollowersCount(normAuthor, allFollows);
@@ -274,33 +296,56 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                       <span>Private Account</span>
                     </span>
                   )}
+                  {canSeeOnlineStatus && authorIsOnline && (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-200 bg-emerald-950/60 border border-emerald-400/40 px-2 py-0.5 rounded-full backdrop-blur-xs shadow-xs">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>Active on campus network</span>
+                    </span>
+                  )}
+                  {canSeeOnlineStatus && !authorIsOnline && authorProfileUser?.lastActiveAt && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-teal-200/80 font-medium">
+                      <span>Active {formatRelativeTime(authorProfileUser.lastActiveAt)}</span>
+                    </span>
+                  )}
                 </div>
 
-                <p className="text-xs text-teal-200 font-bold mt-0.5">{username}</p>
-
-                {isAuthorModula ? null : isGuestAccount(authorProfileUser || authorNickname) ? (
-                  <p className="text-[11px] text-teal-200/70 font-medium mt-0.5">
-                    Guest
-                  </p>
-                ) : (
-                  (effectiveDepartment || effectiveLevel) && (
-                    <p className="text-xs text-teal-100/90 font-semibold mt-0.5 truncate">
-                      {[effectiveDepartment, effectiveLevel].filter(Boolean).join(' • ')}
+                {/* When account is private and locked: Non-followers only see handle and department */}
+                {isPrivateLocked ? (
+                  <div className="mt-1">
+                    <p className="text-xs text-teal-100 font-bold truncate">
+                      {effectiveDepartment || 'FUHSI Department'}
                     </p>
-                  )
-                )}
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs text-teal-200 font-bold mt-0.5">{username}</p>
 
-                <p className="text-xs text-teal-100 font-medium mt-1 flex items-center gap-1.5">
-                  <Calendar size={13} className="text-teal-300 shrink-0" />
-                  <span>Joined {effectiveJoinedDate}</span>
-                </p>
+                    {isAuthorModula ? null : isGuestAccount(authorProfileUser || authorNickname) ? (
+                      <p className="text-[11px] text-teal-200/70 font-medium mt-0.5">
+                        Guest
+                      </p>
+                    ) : (
+                      (effectiveDepartment || effectiveLevel) && (
+                        <p className="text-xs text-teal-100/90 font-semibold mt-0.5 truncate">
+                          {[effectiveDepartment, effectiveLevel].filter(Boolean).join(' • ')}
+                        </p>
+                      )
+                    )}
+
+                    <p className="text-xs text-teal-100 font-medium mt-1 flex items-center gap-1.5">
+                      <Calendar size={13} className="text-teal-300 shrink-0" />
+                      <span>Joined {effectiveJoinedDate}</span>
+                    </p>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Right Column: [Chat] and [Follow] / [Following] Action Buttons */}
             {!isViewingSelf && (
               <div className="shrink-0 flex items-center gap-2">
-                {!isGuestAccount(userProfile) && !isGuestAccount(authorNickname) && (
+                {/* Chat button only accessible if not private-locked and not guest */}
+                {!isPrivateLocked && !isGuestAccount(userProfile) && !isGuestAccount(authorNickname) && (
                   <button
                     id={`btn-chat-with-${normAuthor}`}
                     onClick={() => {
@@ -333,7 +378,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                   {isFollowingAuthor ? (
                     <span className="flex items-center gap-1.5">
                       <UserCheck size={13} className="text-teal-300" />
-                      <span>Following</span>
+                      <span>{isPrivateLocked ? 'Requested' : 'Following'}</span>
                     </span>
                   ) : (
                     <span className="flex items-center gap-1.5">
@@ -347,43 +392,53 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
           </div>
         </div>
 
-        {/* Public Stats Row: Total Threads & Points Earned */}
-        <div className="bg-white border-b border-slate-200 p-3 px-5 grid grid-cols-2 text-center divide-x divide-slate-100">
-          <div>
-            <div className="text-base sm:text-lg font-black text-slate-900">{authorPosts.length}</div>
-            <div className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">Total Threads</div>
+        {/* Public Stats Row & Follower Row: Hidden when account is private and locked */}
+        {isPrivateLocked ? (
+          <div className="bg-slate-50/90 border-b border-slate-200 py-2.5 px-4 flex items-center justify-center gap-2 text-xs font-bold text-slate-500">
+            <Lock size={12} className="text-amber-600" />
+            <span>Activity statistics and follower lists are hidden</span>
           </div>
-          <div>
-            <div className="text-base sm:text-lg font-black text-teal-700 flex items-center justify-center gap-1">
-              <Award size={16} className="text-teal-600" />
-              <span>{(displayPoints ?? 0).toLocaleString()} <span className="text-xs font-bold text-teal-600">pts</span></span>
+        ) : (
+          <>
+            {/* Public Stats Row: Total Threads & Points Earned */}
+            <div className="bg-white border-b border-slate-200 p-3 px-5 grid grid-cols-2 text-center divide-x divide-slate-100">
+              <div>
+                <div className="text-base sm:text-lg font-black text-slate-900">{authorPosts.length}</div>
+                <div className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">Total Threads</div>
+              </div>
+              <div>
+                <div className="text-base sm:text-lg font-black text-teal-700 flex items-center justify-center gap-1">
+                  <Award size={16} className="text-teal-600" />
+                  <span>{(displayPoints ?? 0).toLocaleString()} <span className="text-xs font-bold text-teal-600">pts</span></span>
+                </div>
+                <div className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">Total Points Earned</div>
+              </div>
             </div>
-            <div className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">Total Points Earned</div>
-          </div>
-        </div>
 
-        {/* Real Dynamic Following & Followers Row (Calculated from actual accounts) */}
-        <div className="bg-slate-50/90 border-b border-slate-200 py-2.5 px-4 flex items-center justify-center gap-3 text-xs font-black text-slate-700">
-          <button
-            type="button"
-            onClick={() => setShowFollowersModal({ open: true, tab: 'following' })}
-            className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1 group"
-          >
-            <span className="text-sm font-black text-slate-900 group-hover:text-teal-700">{authorFollowingCount}</span>
-            <span className="text-slate-500 group-hover:text-teal-700 font-bold">Following</span>
-          </button>
-          <span className="text-slate-300 font-bold">·</span>
-          <button
-            type="button"
-            onClick={() => setShowFollowersModal({ open: true, tab: 'followers' })}
-            className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1 group"
-          >
-            <span className="text-sm font-black text-slate-900 group-hover:text-teal-700">{authorFollowersCount}</span>
-            <span className="text-slate-500 group-hover:text-teal-700 font-bold">Followers</span>
-          </button>
-        </div>
+            {/* Real Dynamic Following & Followers Row (Calculated from actual accounts) */}
+            <div className="bg-slate-50/90 border-b border-slate-200 py-2.5 px-4 flex items-center justify-center gap-3 text-xs font-black text-slate-700">
+              <button
+                type="button"
+                onClick={() => setShowFollowersModal({ open: true, tab: 'following' })}
+                className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1 group"
+              >
+                <span className="text-sm font-black text-slate-900 group-hover:text-teal-700">{authorFollowingCount}</span>
+                <span className="text-slate-500 group-hover:text-teal-700 font-bold">Following</span>
+              </button>
+              <span className="text-slate-300 font-bold">·</span>
+              <button
+                type="button"
+                onClick={() => setShowFollowersModal({ open: true, tab: 'followers' })}
+                className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1 group"
+              >
+                <span className="text-sm font-black text-slate-900 group-hover:text-teal-700">{authorFollowersCount}</span>
+                <span className="text-slate-500 group-hover:text-teal-700 font-bold">Followers</span>
+              </button>
+            </div>
+          </>
+        )}
 
-        {/* When account is private and viewer is not a follower or admin */}
+        {/* When account is private and viewer is not a mutual follower or admin */}
         {isPrivateLocked ? (
           <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 text-center bg-slate-50/50">
             <div className="bg-white rounded-3xl p-8 max-w-sm w-full border border-slate-200 shadow-sm space-y-4">
@@ -392,19 +447,38 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
               </div>
               <div className="space-y-1.5">
                 <h4 className="text-slate-900 font-black text-base">This Account is Private</h4>
-                <p className="text-slate-500 text-xs leading-relaxed">
-                  Follow <span className="font-bold text-slate-800">{authorNickname}</span> to see their campus threads, photos, and discussion replies.
+                <p className="text-slate-600 text-xs leading-relaxed">
+                  Non-followers who visit this profile will only see the handle and department. Posts and replies are hidden until <span className="font-bold text-slate-800">{authorNickname}</span> follows you back.
                 </p>
               </div>
+
               {onToggleFollow && !isViewingSelf && (
-                <button
-                  type="button"
-                  onClick={() => onToggleFollow(authorNickname)}
-                  className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <UserPlus size={16} />
-                  <span>Follow to View Posts</span>
-                </button>
+                <div className="pt-2">
+                  {!isFollowingAuthor ? (
+                    <button
+                      type="button"
+                      onClick={() => onToggleFollow(authorNickname)}
+                      className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <UserPlus size={16} />
+                      <span>Follow {authorNickname}</span>
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-amber-900 text-xs font-semibold flex items-center justify-center gap-2">
+                        <UserCheck size={16} className="text-amber-600 shrink-0" />
+                        <span>Requested — Waiting for follow back to unlock posts</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onToggleFollow(authorNickname)}
+                        className="text-[11px] font-bold text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                      >
+                        Cancel Follow
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

@@ -23,7 +23,14 @@
         "reputationScore": { "type": "number" },
         "badgeType": { "type": "string" },
         "badgeTitle": { "type": "string" },
-        "savedPassword": { "type": "string" }
+        "savedPassword": { "type": "string" },
+        "isPrivate": { "type": "boolean" },
+        "showActiveStatus": { "type": "boolean" },
+        "searchDiscoverable": { "type": "boolean" },
+        "defaultPostAudience": { "type": "string" },
+        "allowDirectMessagesFrom": { "type": "string" },
+        "lastActiveAt": { "type": "string" },
+        "isOnline": { "type": "boolean" }
       },
       "required": ["id", "nickname"]
     },

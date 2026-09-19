@@ -42,6 +42,9 @@ export interface UserProfile {
   privacyMode?: PrivacyMode;
   isPrivate?: boolean;
   defaultPostAudience?: 'everyone' | 'followers';
+  allowDirectMessagesFrom?: 'everyone' | 'followers';
+  showActiveStatus?: boolean;
+  searchDiscoverable?: boolean;
   password?: string;
   savedPassword?: string;
   lastActiveAt?: string;

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
+  EMPTY_USER_PROFILE,
   INITIAL_USER_PROFILE,
   INITIAL_POSTS,
   INITIAL_COMMENTS,
@@ -10,7 +11,7 @@ import {
 } from './data/initialData';
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
-import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile, formatJoinDate } from './utils/userDbUtils';
+import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate } from './utils/userDbUtils';
 import {
   fetchServerDb,
   pushServerDbSync,
@@ -96,13 +97,54 @@ export const App: React.FC = () => {
         const raw = localStorage.getItem('fuhsi_active_user');
         if (raw) {
           const parsed = JSON.parse(raw);
-          if (parsed && parsed.nickname && !isUserPermanentlyDeleted(parsed) && (parsed.isApproved !== false || parsed.isAdmin)) {
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            parsed.id &&
+            parsed.nickname &&
+            !isUserPermanentlyDeleted(parsed) &&
+            (parsed.isApproved !== false || parsed.isAdmin)
+          ) {
+            const cleanNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
+            // Reject any legacy, random, or auto-generated guest accounts
+            if (cleanNick.startsWith('guest_') || String(parsed.id).startsWith('usr_guest_')) {
+              localStorage.removeItem('fuhsi_active_user');
+              return false;
+            }
+            // Reject any demo or fallback accounts
+            if (isDemoUser(parsed) || isDemoNickname(parsed.nickname)) {
+              localStorage.removeItem('fuhsi_active_user');
+              return false;
+            }
+            // Check that user exists in registered database unless @modula
+            if (!isModulaAccount(parsed)) {
+              const storedUsersStr = localStorage.getItem('fuhsi_users_db');
+              if (storedUsersStr) {
+                try {
+                  const storedUsers: UserProfile[] = JSON.parse(storedUsersStr);
+                  const userExists = storedUsers.some(
+                    (u) => (u.id && u.id === parsed.id) ||
+                           (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanNick)
+                  );
+                  if (!userExists) {
+                    localStorage.removeItem('fuhsi_active_user');
+                    return false;
+                  }
+                } catch {
+                  localStorage.removeItem('fuhsi_active_user');
+                  return false;
+                }
+              }
+            }
             return true;
+          } else {
+            localStorage.removeItem('fuhsi_active_user');
           }
         }
       }
     } catch (e) {
       console.error(e);
+      try { localStorage.removeItem('fuhsi_active_user'); } catch {}
     }
     return false;
   });
@@ -155,15 +197,48 @@ export const App: React.FC = () => {
         const raw = localStorage.getItem('fuhsi_active_user');
         if (raw) {
           const parsed = JSON.parse(raw);
-          if (parsed && parsed.nickname && !isUserPermanentlyDeleted(parsed)) {
-            return isModulaAccount(parsed) ? sanitizeModulaProfile(parsed) : parsed;
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            parsed.id &&
+            parsed.nickname &&
+            !isUserPermanentlyDeleted(parsed) &&
+            (parsed.isApproved !== false || parsed.isAdmin)
+          ) {
+            const cleanNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
+            if (
+              cleanNick.startsWith('guest_') ||
+              String(parsed.id).startsWith('usr_guest_') ||
+              isDemoUser(parsed) ||
+              isDemoNickname(parsed.nickname)
+            ) {
+              return EMPTY_USER_PROFILE;
+            }
+            if (!isModulaAccount(parsed)) {
+              const storedUsersStr = localStorage.getItem('fuhsi_users_db');
+              if (storedUsersStr) {
+                try {
+                  const storedUsers: UserProfile[] = JSON.parse(storedUsersStr);
+                  const userExists = storedUsers.some(
+                    (u) => (u.id && u.id === parsed.id) ||
+                           (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanNick)
+                  );
+                  if (!userExists) {
+                    return EMPTY_USER_PROFILE;
+                  }
+                } catch {
+                  return EMPTY_USER_PROFILE;
+                }
+              }
+            }
+            return isModulaAccount(parsed) ? sanitizeModulaProfile(parsed) : sanitizeUserProfile(parsed);
           }
         }
       }
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_USER_PROFILE;
+    return EMPTY_USER_PROFILE;
   });
   const lastProfileSaveTimestampRef = useRef<number>(0);
   
@@ -384,16 +459,28 @@ export const App: React.FC = () => {
           );
 
           const isDeleted = isUserPermanentlyDeleted(parsed);
-          if (isDeleted && !parsed.isAdmin) {
-            // User was removed/deleted from central database by Admin -> terminate session completely
+          if (
+            cleanParsedNick.startsWith('guest_') ||
+            String(parsed.id).startsWith('usr_guest_') ||
+            isDemoUser(parsed) ||
+            isDemoNickname(parsed.nickname) ||
+            (isDeleted && !parsed.isAdmin)
+          ) {
             localStorage.removeItem('fuhsi_active_user');
-            setUserProfile(INITIAL_USER_PROFILE);
+            setUserProfile(EMPTY_USER_PROFILE);
             setIsLoggedIn(false);
+            setShowAuthModal(true);
+            return;
+          } else if (!found && !isModulaAccount(parsed)) {
+            localStorage.removeItem('fuhsi_active_user');
+            setUserProfile(EMPTY_USER_PROFILE);
+            setIsLoggedIn(false);
+            setShowAuthModal(true);
+            return;
           } else if (found) {
             if (found.isApproved === false && !parsed.isAdmin) {
-              // Approval revoked -> user session must reflect pending review
               localStorage.removeItem('fuhsi_active_user');
-              setUserProfile(INITIAL_USER_PROFILE);
+              setUserProfile(EMPTY_USER_PROFILE);
               setIsLoggedIn(false);
               setShowAuthModal(true);
             } else {
@@ -594,14 +681,28 @@ export const App: React.FC = () => {
                        (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanParsedNick)
               );
               const isDeleted = isUserPermanentlyDeleted(parsed);
-              if (isDeleted && !parsed.isAdmin) {
+              if (
+                cleanParsedNick.startsWith('guest_') ||
+                String(parsed.id).startsWith('usr_guest_') ||
+                isDemoUser(parsed) ||
+                isDemoNickname(parsed.nickname) ||
+                (isDeleted && !parsed.isAdmin)
+              ) {
                 localStorage.removeItem('fuhsi_active_user');
-                setUserProfile(INITIAL_USER_PROFILE);
+                setUserProfile(EMPTY_USER_PROFILE);
                 setIsLoggedIn(false);
+                setShowAuthModal(true);
+                return;
+              } else if (!found && !isModulaAccount(parsed)) {
+                localStorage.removeItem('fuhsi_active_user');
+                setUserProfile(EMPTY_USER_PROFILE);
+                setIsLoggedIn(false);
+                setShowAuthModal(true);
+                return;
               } else if (found) {
                 if (found.isApproved === false && !parsed.isAdmin) {
                   localStorage.removeItem('fuhsi_active_user');
-                  setUserProfile(INITIAL_USER_PROFILE);
+                  setUserProfile(EMPTY_USER_PROFILE);
                   setIsLoggedIn(false);
                   setShowAuthModal(true);
                 } else {
@@ -785,16 +886,16 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (userProfile && userProfile.nickname) {
+    if (isLoggedIn && userProfile && userProfile.id && userProfile.nickname && !isUserPermanentlyDeleted(userProfile)) {
       try {
         localStorage.setItem('fuhsi_active_user', JSON.stringify(userProfile));
       } catch (e) { console.error(e); }
     }
-  }, [userProfile]);
+  }, [isLoggedIn, userProfile]);
 
   // Real-time Presence & Active Heartbeat Monitor
   useEffect(() => {
-    if (!userProfile || !userProfile.nickname) return;
+    if (!isLoggedIn || !userProfile || !userProfile.nickname) return;
 
     // 1. Send initial online presence heartbeat
     updateActiveUserPresence(userProfile, true);
@@ -871,47 +972,90 @@ export const App: React.FC = () => {
   useEffect(() => {
     try {
       const activeUserJson = localStorage.getItem('fuhsi_active_user');
-      if (activeUserJson) {
-        let parsed = JSON.parse(activeUserJson);
-        if (parsed && parsed.nickname && !isUserPermanentlyDeleted(parsed)) {
-          const storedUsers = localStorage.getItem('fuhsi_users_db');
-          if (storedUsers) {
-            const list: UserProfile[] = JSON.parse(storedUsers);
-            const found = list.find(
-              (u) => u.id === parsed.id || u.nickname?.toLowerCase() === parsed.nickname?.toLowerCase()
-            );
-            if (found) {
-              parsed = {
-                ...parsed,
-                ...found,
-                avatarUrl: found.avatarUrl || parsed.avatarUrl,
-              };
-            }
-          }
-          if (isModulaAccount(parsed)) {
-            parsed = sanitizeModulaProfile(parsed);
-            localStorage.setItem('fuhsi_active_user', JSON.stringify(parsed));
-          }
-          setUserProfile(parsed);
-          if (parsed.isApproved !== false || parsed.isAdmin) {
-            setIsLoggedIn(true);
-            setShowAuthModal(false);
-          } else {
-            setIsLoggedIn(false);
-            setShowAuthModal(true);
-          }
-        } else {
-          setIsLoggedIn(false);
-          setShowAuthModal(true);
-        }
-      } else {
+      if (!activeUserJson) {
         setIsLoggedIn(false);
+        setUserProfile(EMPTY_USER_PROFILE);
         setShowAuthModal(true);
+        cleanupModulaFirestoreDoc().catch(() => {});
+        return;
       }
+      let parsed = JSON.parse(activeUserJson);
+      if (!parsed || !parsed.nickname || !parsed.id || isUserPermanentlyDeleted(parsed)) {
+        localStorage.removeItem('fuhsi_active_user');
+        setIsLoggedIn(false);
+        setUserProfile(EMPTY_USER_PROFILE);
+        setShowAuthModal(true);
+        cleanupModulaFirestoreDoc().catch(() => {});
+        return;
+      }
+      const cleanNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
+      if (
+        cleanNick.startsWith('guest_') ||
+        String(parsed.id).startsWith('usr_guest_') ||
+        isDemoUser(parsed) ||
+        isDemoNickname(parsed.nickname)
+      ) {
+        localStorage.removeItem('fuhsi_active_user');
+        setIsLoggedIn(false);
+        setUserProfile(EMPTY_USER_PROFILE);
+        setShowAuthModal(true);
+        cleanupModulaFirestoreDoc().catch(() => {});
+        return;
+      }
+
+      // Check if user exists in registered users database unless @modula
+      const storedUsers = localStorage.getItem('fuhsi_users_db');
+      let found: UserProfile | undefined = undefined;
+      if (storedUsers) {
+        try {
+          const list: UserProfile[] = JSON.parse(storedUsers);
+          found = list.find(
+            (u) => (u.id && parsed.id && u.id === parsed.id) ||
+                   (u.nickname && cleanNick && u.nickname.toLowerCase().replace(/^@/, '') === cleanNick)
+          );
+        } catch {}
+      }
+
+      // If user does not exist in registered users and is not @modula admin, reject
+      if (!found && !isModulaAccount(parsed)) {
+        localStorage.removeItem('fuhsi_active_user');
+        setIsLoggedIn(false);
+        setUserProfile(EMPTY_USER_PROFILE);
+        setShowAuthModal(true);
+        cleanupModulaFirestoreDoc().catch(() => {});
+        return;
+      }
+
+      if (found) {
+        parsed = {
+          ...parsed,
+          ...found,
+          avatarUrl: found.avatarUrl || parsed.avatarUrl,
+        };
+      }
+      if (isModulaAccount(parsed)) {
+        parsed = sanitizeModulaProfile(parsed);
+        localStorage.setItem('fuhsi_active_user', JSON.stringify(parsed));
+      }
+
+      if (parsed.isApproved === false && !parsed.isAdmin) {
+        localStorage.removeItem('fuhsi_active_user');
+        setIsLoggedIn(false);
+        setUserProfile(EMPTY_USER_PROFILE);
+        setShowAuthModal(true);
+        cleanupModulaFirestoreDoc().catch(() => {});
+        return;
+      }
+
+      setUserProfile(parsed);
+      setIsLoggedIn(true);
+      setShowAuthModal(false);
       cleanupModulaFirestoreDoc().catch(() => {});
     } catch (e) {
       console.error(e);
+      try { localStorage.removeItem('fuhsi_active_user'); } catch {}
       setIsLoggedIn(false);
+      setUserProfile(EMPTY_USER_PROFILE);
       setShowAuthModal(true);
     }
   }, []);
@@ -1564,10 +1708,18 @@ export const App: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    setUserProfile(INITIAL_USER_PROFILE);
+    setUserProfile(EMPTY_USER_PROFILE);
     setIsLoggedIn(false);
     setShowProfileModal(false);
     setShowAuthModal(true);
+    setModalStack([]);
+    setSelectedPost(null);
+    setSelectedAuthorPost(null);
+    setActiveChatRecipient(null);
+    setShowFollowersDirectoryModal(false);
+    setShowCreatePostModal(false);
+    setShowPwaModal(false);
+    setNavIndex(0);
   };
 
   const handleDeleteAccount = async () => {
@@ -1630,7 +1782,7 @@ export const App: React.FC = () => {
       }
 
       // 7. Reset state to logged-out initial profile
-      setUserProfile(INITIAL_USER_PROFILE);
+      setUserProfile(EMPTY_USER_PROFILE);
       setIsLoggedIn(false);
       setShowProfileModal(false);
       closeModalUI();
@@ -2357,12 +2509,21 @@ export const App: React.FC = () => {
     return null;
   };
 
-  const handleUpdatePrivacySettings = useCallback((isPrivate: boolean, defaultPostAudience: 'everyone' | 'followers') => {
+  const handleUpdatePrivacySettings = useCallback((
+    isPrivate: boolean,
+    defaultPostAudience: 'everyone' | 'followers',
+    extraSettings?: {
+      allowDirectMessagesFrom?: 'everyone' | 'followers';
+      showActiveStatus?: boolean;
+      searchDiscoverable?: boolean;
+    }
+  ) => {
     if (!userProfile) return;
     const updated: UserProfile = sanitizeModulaProfile({
       ...userProfile,
       isPrivate,
       defaultPostAudience,
+      ...(extraSettings || {}),
       updatedAt: new Date().toISOString(),
     });
 
@@ -2435,44 +2596,34 @@ export const App: React.FC = () => {
     }
   }, [userProfile?.nickname, allFollows]);
 
+  const handleLoginSuccess = useCallback((user: UserProfile) => {
+    const cleanUser = isModulaAccount(user) ? sanitizeModulaProfile(user) : sanitizeUserProfile(user);
+    try {
+      localStorage.setItem('fuhsi_active_user', JSON.stringify(cleanUser));
+    } catch (e) {
+      console.error(e);
+    }
+    setUserProfile(cleanUser);
+    setIsLoggedIn(true);
+    setShowAuthModal(false);
+    setShowProfileModal(false);
+    setModalStack([]);
+    setSelectedPost(null);
+    setSelectedAuthorPost(null);
+    setActiveChatRecipient(null);
+    setShowFollowersDirectoryModal(false);
+    setShowCreatePostModal(false);
+    setShowPwaModal(false);
+  }, []);
+
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-2 sm:p-4">
         <AuthModal
           isOpen={true}
-          canClose={true}
-          onClose={() => {
-            // Seamlessly allow exploring campus as guest if dismissed
-            const guestUser: UserProfile = {
-              id: `usr_guest_${Date.now()}`,
-              nickname: `@Guest_${Math.floor(100 + Math.random() * 900)}`,
-              accountType: 'Guest',
-              realName: 'Campus Guest',
-              studentEmail: '',
-              department: 'General Campus',
-              level: 'Guest',
-              bio: 'Exploring FUHSI Connect campus network as guest.',
-              avatarKey: 'caduceus',
-              badgeType: 'NONE',
-              badgeTitle: 'Guest',
-              reputationScore: 10,
-              isVerified: false,
-              isApproved: true,
-              isAdmin: false,
-            };
-            setUserProfile(guestUser);
-            setIsLoggedIn(true);
-            setShowAuthModal(false);
-            try {
-              localStorage.setItem('fuhsi_active_user', JSON.stringify(guestUser));
-              upsertUser(guestUser);
-            } catch {}
-          }}
-          onLoginSuccess={(user) => {
-            setUserProfile(user);
-            setIsLoggedIn(true);
-            setShowAuthModal(false);
-          }}
+          canClose={false}
+          onClose={() => {}}
+          onLoginSuccess={handleLoginSuccess}
         />
       </div>
     );
@@ -2927,11 +3078,9 @@ export const App: React.FC = () => {
               <AuthModal
                 key={`modal_auth_${idx}`}
                 isOpen={true}
+                canClose={isLoggedIn}
                 onClose={closeModalUI}
-                onLoginSuccess={(user) => {
-                  setUserProfile(user);
-                  closeModalUI();
-                }}
+                onLoginSuccess={handleLoginSuccess}
               />
             );
           }
@@ -3149,11 +3298,9 @@ export const App: React.FC = () => {
           {showAuthModal && !modalStack.some((item) => item.type === 'auth') && (
             <AuthModal
               isOpen={showAuthModal}
+              canClose={isLoggedIn}
               onClose={closeModalUI}
-              onLoginSuccess={(user) => {
-                setUserProfile(user);
-                closeModalUI();
-              }}
+              onLoginSuccess={handleLoginSuccess}
             />
           )}
         </>

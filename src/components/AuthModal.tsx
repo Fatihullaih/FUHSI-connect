@@ -45,6 +45,7 @@ interface AuthModalProps {
   onLoginSuccess: (user: UserProfile) => void;
   existingUsers?: UserProfile[];
   canClose?: boolean;
+  initialMode?: 'LOGIN' | 'REGISTER';
 }
 
 export const FUHSI_DEPARTMENTS = [
@@ -80,8 +81,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onLoginSuccess,
   existingUsers = [],
   canClose = false,
+  initialMode = 'LOGIN',
 }) => {
-  const [mode, setMode] = useState<'REGISTER' | 'LOGIN' | 'FORGOT_PASSWORD' | 'SUPPORT_DESK'>('LOGIN');
+  const [mode, setMode] = useState<'REGISTER' | 'LOGIN' | 'FORGOT_PASSWORD' | 'SUPPORT_DESK'>(initialMode);
   const [pendingUserNotice, setPendingUserNotice] = useState<UserProfile | null>(null);
   const [accountNoticeType, setAccountNoticeType] = useState<'DECLINED' | 'PENDING' | null>(null);
 
@@ -358,36 +360,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const handleExploreAsGuest = () => {
-    const randomSuffix = Math.floor(100 + Math.random() * 900);
-    const guestUser: UserProfile = {
-      id: `usr_guest_${Date.now()}`,
-      nickname: `@Guest_${randomSuffix}`,
-      accountType: 'Guest',
-      realName: 'Campus Guest',
-      studentEmail: '',
-      department: 'General Campus',
-      level: 'Guest',
-      bio: 'Exploring FUHSI Connect campus network as guest.',
-      avatarKey: 'caduceus',
-      badgeType: 'NONE',
-      badgeTitle: 'Guest',
-      reputationScore: 10,
-      isVerified: false,
-      isApproved: true,
-      isAdmin: false,
-    };
-    try {
-      localStorage.setItem('fuhsi_active_user', JSON.stringify(guestUser));
-      upsertUser(guestUser);
-    } catch (e) {
-      console.error(e);
-    }
-    setErrorMessage('');
-    onLoginSuccess(guestUser);
-    onClose();
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -774,6 +746,48 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             Connect and share updates with other students within the campus.
           </p>
         </div>
+
+        {/* Top Switcher Tabs: Log In vs Sign Up / Register */}
+        {(mode === 'LOGIN' || mode === 'REGISTER') && (
+          <div className="px-5 pt-4 shrink-0 bg-white">
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                id="auth-tab-login"
+                onClick={() => {
+                  setErrorMessage('');
+                  setResetSuccessMessage('');
+                  setMode('LOGIN');
+                }}
+                className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  mode === 'LOGIN'
+                    ? 'bg-teal-700 text-white shadow-xs font-black'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+              >
+                <LogIn size={15} />
+                <span>Log In</span>
+              </button>
+              <button
+                type="button"
+                id="auth-tab-register"
+                onClick={() => {
+                  setErrorMessage('');
+                  setResetSuccessMessage('');
+                  setMode('REGISTER');
+                }}
+                className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  mode === 'REGISTER'
+                    ? 'bg-teal-700 text-white shadow-xs font-black'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+              >
+                <UserPlus size={15} />
+                <span>Sign Up / Register</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Scrollable Form Body */}
         <div className="p-5 overflow-y-auto space-y-4 flex-1">
@@ -1241,21 +1255,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <span>Sign In</span>
                   </>
                 )}
-              </button>
-
-              <div className="relative flex py-1 items-center">
-                <div className="flex-grow border-t border-slate-200"></div>
-                <span className="flex-shrink mx-2 text-[11px] font-semibold text-slate-400">or</span>
-                <div className="flex-grow border-t border-slate-200"></div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleExploreAsGuest}
-                className="w-full py-2.5 px-4 font-bold text-xs rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
-              >
-                <Compass size={15} className="text-teal-600" />
-                <span>Explore Campus as Guest</span>
               </button>
 
               <div className="text-center pt-2 border-t border-slate-100 space-y-2">

@@ -36,7 +36,10 @@ import {
   GraduationCap,
   ChevronRight,
   RefreshCw,
-  Globe
+  Globe,
+  Check,
+  Eye,
+  Shield
 } from 'lucide-react';
 import { ThemeMode, getStoredTheme, setStoredTheme } from '../utils/themeUtils';
 import { formatJoinDate } from '../utils/userDbUtils';
@@ -49,6 +52,8 @@ import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { ImageCropModal } from '../components/ImageCropModal';
+
+export type SettingsSubpage = 'main' | 'edit_profile' | 'display_mode' | 'privacy_visibility' | 'delete_account' | 'logout_confirm';
 
 interface ProfileScreenProps {
   userProfile: UserProfile | null;
@@ -87,7 +92,15 @@ interface ProfileScreenProps {
   onEditPost?: (postId: string, newContent: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onToggleFollow?: (targetNickname: string) => void;
-  onUpdatePrivacySettings?: (isPrivate: boolean, defaultPostAudience: 'everyone' | 'followers') => void;
+  onUpdatePrivacySettings?: (
+    isPrivate: boolean,
+    defaultPostAudience: 'everyone' | 'followers',
+    extraSettings?: {
+      allowDirectMessagesFrom?: 'everyone' | 'followers';
+      showActiveStatus?: boolean;
+      searchDiscoverable?: boolean;
+    }
+  ) => void;
   onLogout?: () => void;
   onDeleteAccount?: () => Promise<void> | void;
   onClose?: () => void;
@@ -121,7 +134,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [activeTab, setActiveTab] = useState<'threads' | 'replies' | 'bookmarks'>('threads');
   const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
   const [isEditingSettings, setIsEditingSettings] = useState(false);
-  const [isEditingProfileForm, setIsEditingProfileForm] = useState(false);
+  const [settingsSubpage, setSettingsSubpage] = useState<SettingsSubpage>('main');
   const [showPictureModal, setShowPictureModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [showFollowersModal, setShowFollowersModal] = useState<{ open: boolean; tab: 'followers' | 'following' } | null>(null);
@@ -158,19 +171,41 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [defaultPostAudience, setDefaultPostAudience] = useState<'everyone' | 'followers'>(
     userProfile?.defaultPostAudience || 'everyone'
   );
+  const [allowDirectMessagesFrom, setAllowDirectMessagesFrom] = useState<'everyone' | 'followers'>(
+    userProfile?.allowDirectMessagesFrom || 'everyone'
+  );
+  const [showActiveStatus, setShowActiveStatus] = useState<boolean>(
+    userProfile?.showActiveStatus !== false
+  );
+  const [searchDiscoverable, setSearchDiscoverable] = useState<boolean>(
+    userProfile?.searchDiscoverable !== false
+  );
   const [privacySavedNotice, setPrivacySavedNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (userProfile) {
       setIsAccountPrivate(Boolean(userProfile.isPrivate));
       setDefaultPostAudience(userProfile.defaultPostAudience || 'everyone');
+      setAllowDirectMessagesFrom(userProfile.allowDirectMessagesFrom || 'everyone');
+      setShowActiveStatus(userProfile.showActiveStatus !== false);
+      setSearchDiscoverable(userProfile.searchDiscoverable !== false);
     }
-  }, [userProfile?.isPrivate, userProfile?.defaultPostAudience]);
+  }, [
+    userProfile?.isPrivate,
+    userProfile?.defaultPostAudience,
+    userProfile?.allowDirectMessagesFrom,
+    userProfile?.showActiveStatus,
+    userProfile?.searchDiscoverable,
+  ]);
 
   const handleToggleAccountPrivacy = (newVal: boolean) => {
     setIsAccountPrivate(newVal);
     if (onUpdatePrivacySettings) {
-      onUpdatePrivacySettings(newVal, defaultPostAudience);
+      onUpdatePrivacySettings(newVal, defaultPostAudience, {
+        allowDirectMessagesFrom,
+        showActiveStatus,
+        searchDiscoverable,
+      });
     }
     setPrivacySavedNotice(newVal ? 'Account is now Private (followers only).' : 'Account is now Public (visible to all).');
     setTimeout(() => setPrivacySavedNotice(null), 3000);
@@ -179,9 +214,52 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const handleSetDefaultAudience = (audience: 'everyone' | 'followers') => {
     setDefaultPostAudience(audience);
     if (onUpdatePrivacySettings) {
-      onUpdatePrivacySettings(isAccountPrivate, audience);
+      onUpdatePrivacySettings(isAccountPrivate, audience, {
+        allowDirectMessagesFrom,
+        showActiveStatus,
+        searchDiscoverable,
+      });
     }
     setPrivacySavedNotice(audience === 'followers' ? 'Default post audience set to Followers Only.' : 'Default post audience set to Everyone.');
+    setTimeout(() => setPrivacySavedNotice(null), 3000);
+  };
+
+  const handleSetDirectMessagesPrivacy = (dmAudience: 'everyone' | 'followers') => {
+    setAllowDirectMessagesFrom(dmAudience);
+    if (onUpdatePrivacySettings) {
+      onUpdatePrivacySettings(isAccountPrivate, defaultPostAudience, {
+        allowDirectMessagesFrom: dmAudience,
+        showActiveStatus,
+        searchDiscoverable,
+      });
+    }
+    setPrivacySavedNotice(dmAudience === 'followers' ? 'Direct messages restricted to Followers Only.' : 'Direct messages allowed from Everyone.');
+    setTimeout(() => setPrivacySavedNotice(null), 3000);
+  };
+
+  const handleToggleActiveStatus = (val: boolean) => {
+    setShowActiveStatus(val);
+    if (onUpdatePrivacySettings) {
+      onUpdatePrivacySettings(isAccountPrivate, defaultPostAudience, {
+        allowDirectMessagesFrom,
+        showActiveStatus: val,
+        searchDiscoverable,
+      });
+    }
+    setPrivacySavedNotice(val ? 'Online activity status is now visible.' : 'Online activity status is hidden.');
+    setTimeout(() => setPrivacySavedNotice(null), 3000);
+  };
+
+  const handleToggleSearchDiscoverable = (val: boolean) => {
+    setSearchDiscoverable(val);
+    if (onUpdatePrivacySettings) {
+      onUpdatePrivacySettings(isAccountPrivate, defaultPostAudience, {
+        allowDirectMessagesFrom,
+        showActiveStatus,
+        searchDiscoverable: val,
+      });
+    }
+    setPrivacySavedNotice(val ? 'Profile is discoverable in campus search.' : 'Profile is hidden from search suggestions.');
     setTimeout(() => setPrivacySavedNotice(null), 3000);
   };
 
@@ -202,7 +280,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   // Sync form state when userProfile changes, but NEVER while user is actively editing
   useEffect(() => {
-    if (userProfile && !isEditingProfileForm) {
+    if (userProfile && settingsSubpage !== 'edit_profile') {
       setNickname(userProfile.nickname || '@Student');
       setRealName(userProfile.realNameHidden || userProfile.realName || '');
       setStudentEmail(userProfile.studentEmail || '');
@@ -215,7 +293,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       setAvatarUrl(userProfile.avatarUrl || '');
       setIsAvatarDirty(false);
     }
-  }, [userProfile, isEditingProfileForm]);
+  }, [userProfile, settingsSubpage]);
 
   // Handle popstate for back button inside ProfileScreen
   useEffect(() => {
@@ -236,8 +314,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         setShowPointsBreakdown(false);
         return;
       }
-      if (isEditingProfileForm) {
-        handleCancelEdit();
+      if (settingsSubpage !== 'main') {
+        if (settingsSubpage === 'edit_profile') {
+          handleCancelEdit();
+        } else {
+          setSettingsSubpage('main');
+        }
         return;
       }
       if (isEditingSettings) {
@@ -248,7 +330,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [showFollowersModal, confirmLogout, showPictureModal, showPointsBreakdown, isEditingSettings, isEditingProfileForm]);
+  }, [showFollowersModal, confirmLogout, showPictureModal, showPointsBreakdown, isEditingSettings, settingsSubpage]);
 
   const departments = [
     'Medicine and Surgery (MBBS)',
@@ -328,7 +410,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     setIsAvatarDirty(false);
     setSaveErrorMessage(null);
     setIsEditingSettings(true);
-    setIsEditingProfileForm(true);
+    setSettingsSubpage('edit_profile');
     try { window.history.pushState({ subModal: 'editProfile' }, ''); } catch (e) { console.error(e); }
   };
 
@@ -389,7 +471,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       setAvatarUrl(userProfile.avatarUrl || '');
     }
     setSaveErrorMessage(null);
-    setIsEditingProfileForm(false);
+    setSettingsSubpage('main');
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -426,7 +508,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     } else {
       setIsAvatarDirty(false);
       setShowSavedToast(true);
-      setIsEditingProfileForm(false);
+      setSettingsSubpage('main');
       setTimeout(() => setShowSavedToast(false), 3000);
     }
   };
@@ -458,7 +540,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
           <button
             onClick={() => {
-              setIsEditingProfileForm(false);
+              setSettingsSubpage('main');
               setIsEditingSettings(true);
               try { window.history.pushState({ subModal: 'accountSettings' }, ''); } catch (e) { console.error(e); }
             }}
@@ -698,8 +780,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {isEditingSettings && (
         <div className="fixed inset-0 z-50 w-full h-full bg-slate-100 dark:bg-slate-950 flex flex-col overflow-hidden animate-in fade-in duration-150">
           <div className="w-full h-full max-w-2xl mx-auto bg-white dark:bg-slate-900 flex flex-col shadow-2xl sm:border-x sm:border-slate-200 dark:sm:border-slate-800 overflow-hidden">
-            {!isEditingProfileForm ? (
-              /* CLEAN ACCOUNT SETTINGS MENU */
+            {settingsSubpage === 'main' && (
+              /* CLEAN ACCOUNT SETTINGS MENU (CATEGORIES ONLY) */
               <>
                 <div className="p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10">
                   <div className="flex items-center gap-2.5">
@@ -760,187 +842,70 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </button>
 
                   {/* 🎨 Display Mode */}
-                  <div className="p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-11 h-11 rounded-2xl bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex items-center justify-center text-lg shrink-0 border border-indigo-200/60 dark:border-indigo-800/60">
-                          🎨
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
-                            Display Mode
-                          </h3>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                            Light / Dark / System
-                          </p>
-                        </div>
-                      </div>
-                      <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 capitalize">
-                        {themeMode}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={() => handleThemeChange('light')}
-                        className={`py-2 px-2.5 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-xs font-bold cursor-pointer ${
-                          themeMode === 'light'
-                            ? 'bg-amber-50 border-amber-400 text-amber-950 ring-2 ring-amber-400/30 shadow-xs'
-                            : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                        }`}
-                      >
-                        <Sun size={14} className="text-amber-500" />
-                        <span>Light</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleThemeChange('dark')}
-                        className={`py-2 px-2.5 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-xs font-bold cursor-pointer ${
-                          themeMode === 'dark'
-                            ? 'bg-indigo-900/60 border-indigo-400 text-indigo-100 ring-2 ring-indigo-400/30 shadow-xs'
-                            : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                        }`}
-                      >
-                        <Moon size={14} className="text-indigo-400" />
-                        <span>Dark</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleThemeChange('system')}
-                        className={`py-2 px-2.5 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-xs font-bold cursor-pointer ${
-                          themeMode === 'system'
-                            ? 'bg-teal-50 dark:bg-teal-950 border-teal-500 text-teal-900 dark:text-teal-200 ring-2 ring-teal-500/30 shadow-xs'
-                            : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                        }`}
-                      >
-                        <Monitor size={14} className="text-teal-500" />
-                        <span>System</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 🛡️ Privacy & Audience Restrictions */}
-                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-11 h-11 rounded-2xl bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 flex items-center justify-center text-lg shrink-0 border border-teal-200/60 dark:border-teal-800/60">
-                          <Lock size={19} className="text-teal-600 dark:text-teal-400" />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
-                            Privacy & Visibility
-                          </h3>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                            Control who can view your profile and posts
-                          </p>
-                        </div>
-                      </div>
-                      {isAccountPrivate ? (
-                        <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
-                          <Lock size={11} />
-                          <span>Private</span>
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                          Public
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Private Account Toggle */}
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between gap-3">
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                            Private Account
-                          </span>
-                          <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1.5 py-0.2 rounded font-semibold">
-                            TikTok / IG style
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                          When turned on, only your followers can view your threads, replies, and activities.
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={isAccountPrivate}
-                        onClick={() => handleToggleAccountPrivacy(!isAccountPrivate)}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
-                          isAccountPrivate ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-600'
-                        }`}
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                            isAccountPrivate ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Default Post Audience */}
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                          Default Post Audience
-                        </span>
-                        <span className="text-[11px] text-teal-700 dark:text-teal-400 font-bold capitalize">
-                          {defaultPostAudience === 'followers' ? 'Followers Only' : 'Everyone'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        Choose who sees your new posts by default. You can also customize this on every new thread.
-                      </p>
-
-                      <div className="grid grid-cols-2 gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleSetDefaultAudience('everyone')}
-                          className={`py-2 px-3 rounded-xl border flex items-center justify-center gap-2 transition-all text-xs font-bold cursor-pointer ${
-                            defaultPostAudience === 'everyone'
-                              ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
-                              : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          <Globe size={14} className={defaultPostAudience === 'everyone' ? 'text-teal-600 dark:text-teal-400' : 'text-slate-400'} />
-                          <span>Everyone</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleSetDefaultAudience('followers')}
-                          className={`py-2 px-3 rounded-xl border flex items-center justify-center gap-2 transition-all text-xs font-bold cursor-pointer ${
-                            defaultPostAudience === 'followers'
-                              ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
-                              : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          <Users size={14} className={defaultPostAudience === 'followers' ? 'text-teal-600 dark:text-teal-400' : 'text-slate-400'} />
-                          <span>Followers Only</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {privacySavedNotice && (
-                      <div className="p-2.5 rounded-xl bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-200">
-                        <CheckCircle2 size={15} className="text-teal-600 dark:text-teal-400 shrink-0" />
-                        <span>{privacySavedNotice}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 🔐 Get Verified (for both Students and Guests) */}
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowVerificationModal(true);
-                    }}
+                    onClick={() => setSettingsSubpage('display_mode')}
+                    className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-indigo-500 dark:hover:border-indigo-400 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-11 h-11 rounded-2xl bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex items-center justify-center text-lg shrink-0 border border-indigo-200/60 dark:border-indigo-800/60">
+                        🎨
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 group-hover:text-indigo-700 dark:group-hover:text-indigo-300 transition-colors">
+                            Display Mode
+                          </h3>
+                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 capitalize">
+                            {themeMode}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                          Light / Dark / System
+                        </p>
+                      </div>
+                    </div>
+                    <ChevronRight size={18} className="text-slate-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors shrink-0" />
+                  </button>
+
+                  {/* 🔒 Privacy & Visibility */}
+                  <button
+                    type="button"
+                    onClick={() => setSettingsSubpage('privacy_visibility')}
+                    className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-teal-500 dark:hover:border-teal-400 hover:bg-teal-50/40 dark:hover:bg-teal-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-11 h-11 rounded-2xl bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 flex items-center justify-center text-lg shrink-0 border border-teal-200/60 dark:border-teal-800/60">
+                        <Lock size={19} className="text-teal-600 dark:text-teal-400" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 group-hover:text-teal-700 dark:group-hover:text-teal-300 transition-colors">
+                            Privacy & Visibility
+                          </h3>
+                          {isAccountPrivate ? (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                              <Lock size={10} />
+                              <span>Private</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                              Public
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                          Control who can view your profile and posts
+                        </p>
+                      </div>
+                    </div>
+                    <ChevronRight size={18} className="text-slate-400 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors shrink-0" />
+                  </button>
+
+                  {/* 🔐 Get Verified */}
+                  <button
+                    type="button"
+                    onClick={() => setShowVerificationModal(true)}
                     className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-sky-500 dark:hover:border-sky-400 hover:bg-sky-50/40 dark:hover:bg-sky-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                   >
                     <div className="flex items-center gap-3.5">
@@ -984,7 +949,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       onClick={() => {
                         setDeleteConfirmText('');
                         setDeleteErrorMessage(null);
-                        setShowDeleteConfirmModal(true);
+                        setSettingsSubpage('delete_account');
                       }}
                       className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-rose-200/90 dark:border-rose-900/40 hover:border-rose-400 hover:bg-rose-50/50 dark:hover:bg-rose-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                     >
@@ -1007,61 +972,644 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
                   {/* 🚪 Log Out */}
                   {onLogout && (
-                    <div className="pt-1">
-                      {!confirmLogout ? (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmLogout(true)}
-                          className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-slate-400 hover:bg-slate-50 dark:hover:bg-slate-750 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
-                        >
-                          <div className="flex items-center gap-3.5">
-                            <div className="w-11 h-11 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center text-lg shrink-0 border border-slate-200 dark:border-slate-600">
-                              🚪
-                            </div>
-                            <div>
-                              <h3 className="text-sm font-extrabold text-slate-800 dark:text-slate-200 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-                                Log Out
-                              </h3>
-                              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                                Log out of the current account
-                              </p>
-                            </div>
-                          </div>
-                          <ChevronRight size={18} className="text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300 transition-colors shrink-0" />
-                        </button>
-                      ) : (
-                        <div className="p-4 bg-rose-50 dark:bg-rose-950/30 rounded-2xl border border-rose-200 dark:border-rose-900 text-center space-y-3 animate-in fade-in duration-150">
-                          <p className="text-xs font-bold text-rose-900 dark:text-rose-200">
-                            Are you sure you want to log out of your account?
-                          </p>
-                          <div className="flex items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsEditingSettings(false);
-                                setConfirmLogout(false);
-                                if (onClose) onClose();
-                                onLogout();
-                              }}
-                              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs transition-colors shadow-xs cursor-pointer"
-                            >
-                              Yes, Log Out
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmLogout(false)}
-                              className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-800 dark:text-slate-200 font-bold text-xs transition-colors cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                          </div>
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('logout_confirm')}
+                      className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-slate-400 hover:bg-slate-50 dark:hover:bg-slate-750 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3.5">
+                        <div className="w-11 h-11 rounded-2xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center text-lg shrink-0 border border-slate-200 dark:border-slate-600">
+                          🚪
                         </div>
-                      )}
-                    </div>
+                        <div>
+                          <h3 className="text-sm font-extrabold text-slate-800 dark:text-slate-200 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                            Log Out
+                          </h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                            Log out of the current account
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight size={18} className="text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300 transition-colors shrink-0" />
+                    </button>
                   )}
                 </div>
               </>
-            ) : (
+            )}
+
+            {settingsSubpage === 'display_mode' && (
+              /* DEDICATED DISPLAY MODE SUBPAGE */
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10">
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('main')}
+                      className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
+                      title="Return to Settings"
+                    >
+                      <ArrowLeft size={18} />
+                      <span>Settings</span>
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden sm:block" />
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex items-center justify-center text-sm">
+                        🎨
+                      </div>
+                      <h2 className="font-black text-slate-900 dark:text-slate-100 text-sm sm:text-base">
+                        Display Mode
+                      </h2>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleCancelEdit();
+                      setIsEditingSettings(false);
+                    }}
+                    className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+                      Appearance Preference
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      Choose how FUHSI Connect looks on this device. Your choice is automatically saved.
+                    </p>
+                  </div>
+
+                  {/* Light Mode Option */}
+                  <button
+                    type="button"
+                    onClick={() => handleThemeChange('light')}
+                    className={`w-full p-4 rounded-2xl border text-left transition-all flex items-start justify-between group cursor-pointer ${
+                      themeMode === 'light'
+                        ? 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-400 ring-2 ring-amber-400/30 shadow-xs'
+                        : 'bg-white dark:bg-slate-800/80 border-slate-200/90 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0 mt-0.5">
+                        <Sun size={20} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            Light Mode
+                          </h4>
+                          {themeMode === 'light' && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                          Clean, high-contrast day theme tailored for medical study reading and daylight use.
+                        </p>
+                      </div>
+                    </div>
+                    {themeMode === 'light' && (
+                      <div className="w-6 h-6 rounded-full bg-amber-500 text-white flex items-center justify-center shrink-0 mt-1">
+                        <Check size={14} />
+                      </div>
+                    )}
+                  </button>
+
+                  {/* Dark Mode Option */}
+                  <button
+                    type="button"
+                    onClick={() => handleThemeChange('dark')}
+                    className={`w-full p-4 rounded-2xl border text-left transition-all flex items-start justify-between group cursor-pointer ${
+                      themeMode === 'dark'
+                        ? 'bg-indigo-950/30 border-indigo-400 ring-2 ring-indigo-400/30 shadow-xs'
+                        : 'bg-white dark:bg-slate-800/80 border-slate-200/90 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-900/60 text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
+                        <Moon size={20} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            Dark Mode
+                          </h4>
+                          {themeMode === 'dark' && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-300 border border-indigo-400/40">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                          Deep, eye-safe slate palette designed for low-light nocturnal study and battery saving.
+                        </p>
+                      </div>
+                    </div>
+                    {themeMode === 'dark' && (
+                      <div className="w-6 h-6 rounded-full bg-indigo-500 text-white flex items-center justify-center shrink-0 mt-1">
+                        <Check size={14} />
+                      </div>
+                    )}
+                  </button>
+
+                  {/* System Default Option */}
+                  <button
+                    type="button"
+                    onClick={() => handleThemeChange('system')}
+                    className={`w-full p-4 rounded-2xl border text-left transition-all flex items-start justify-between group cursor-pointer ${
+                      themeMode === 'system'
+                        ? 'bg-teal-50/60 dark:bg-teal-950/30 border-teal-500 ring-2 ring-teal-500/30 shadow-xs'
+                        : 'bg-white dark:bg-slate-800/80 border-slate-200/90 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-teal-100 dark:bg-teal-900/50 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0 mt-0.5">
+                        <Monitor size={20} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            System Default
+                          </h4>
+                          {themeMode === 'system' && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-900/60 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                          Automatically synchronizes appearance with your operating system or browser theme settings.
+                        </p>
+                      </div>
+                    </div>
+                    {themeMode === 'system' && (
+                      <div className="w-6 h-6 rounded-full bg-teal-600 text-white flex items-center justify-center shrink-0 mt-1">
+                        <Check size={14} />
+                      </div>
+                    )}
+                  </button>
+
+                  <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/80 text-xs text-slate-600 dark:text-slate-400 flex items-start gap-2.5">
+                    <Info size={16} className="text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
+                    <span>Your display mode is remembered across restarts and applies to all screens and modals.</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {settingsSubpage === 'privacy_visibility' && (
+              /* DEDICATED PRIVACY & VISIBILITY SUBPAGE */
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10">
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('main')}
+                      className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
+                      title="Return to Settings"
+                    >
+                      <ArrowLeft size={18} />
+                      <span>Settings</span>
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden sm:block" />
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 flex items-center justify-center text-sm">
+                        <Lock size={15} />
+                      </div>
+                      <h2 className="font-black text-slate-900 dark:text-slate-100 text-sm sm:text-base">
+                        Privacy & Visibility
+                      </h2>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleCancelEdit();
+                      setIsEditingSettings(false);
+                    }}
+                    className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+                  {privacySavedNotice && (
+                    <div className="p-3 rounded-2xl bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 text-teal-900 dark:text-teal-200 text-xs font-bold flex items-center gap-2 animate-in fade-in duration-150">
+                      <CheckCircle2 size={16} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                      <span>{privacySavedNotice}</span>
+                    </div>
+                  )}
+
+                  {/* Section 1: Private Account Toggle */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-black text-slate-900 dark:text-slate-100">
+                            Private Account
+                          </h3>
+                          <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full font-bold">
+                            Followers Only
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                          When turned on, only people you approve as followers can view your threads, replies, and activities.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={isAccountPrivate}
+                        onClick={() => handleToggleAccountPrivacy(!isAccountPrivate)}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                          isAccountPrivate ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-600'
+                        }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                            isAccountPrivate ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className={`p-3 rounded-xl border text-xs leading-relaxed ${
+                      isAccountPrivate
+                        ? 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60 text-amber-900 dark:text-amber-200'
+                        : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}>
+                      {isAccountPrivate ? (
+                        <div className="flex items-start gap-2">
+                          <Lock size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                          <span><strong>Account is Private:</strong> Non-followers who visit your profile will only see your handle and department. Your posts and replies are hidden until you follow them back.</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-start gap-2">
+                          <Globe size={14} className="text-slate-500 shrink-0 mt-0.5" />
+                          <span><strong>Account is Public:</strong> Any student or campus visitor can read your threads, answers, and profile information.</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Section 2: Default Post Audience */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-3">
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 dark:text-slate-100">
+                        Default Post Audience
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        Choose who can view new threads you post by default. You can also change this individually whenever posting.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleSetDefaultAudience('everyone')}
+                        className={`p-3.5 rounded-xl border flex items-center justify-between text-left transition-all cursor-pointer ${
+                          defaultPostAudience === 'everyone'
+                            ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${defaultPostAudience === 'everyone' ? 'bg-teal-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                            <Globe size={16} />
+                          </div>
+                          <div>
+                            <div className="font-extrabold text-xs">Everyone</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">Campus-wide feed</div>
+                          </div>
+                        </div>
+                        {defaultPostAudience === 'everyone' && <Check size={16} className="text-teal-600 dark:text-teal-400" />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSetDefaultAudience('followers')}
+                        className={`p-3.5 rounded-xl border flex items-center justify-between text-left transition-all cursor-pointer ${
+                          defaultPostAudience === 'followers'
+                            ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${defaultPostAudience === 'followers' ? 'bg-teal-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                            <Users size={16} />
+                          </div>
+                          <div>
+                            <div className="font-extrabold text-xs">Followers Only</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">Followers stream</div>
+                          </div>
+                        </div>
+                        {defaultPostAudience === 'followers' && <Check size={16} className="text-teal-600 dark:text-teal-400" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 3: Direct Messages */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-3">
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 dark:text-slate-100">
+                        Direct Message Requests
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        Control who can initiate private student chat messages with you.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleSetDirectMessagesPrivacy('everyone')}
+                        className={`p-3.5 rounded-xl border flex items-center justify-between text-left transition-all cursor-pointer ${
+                          allowDirectMessagesFrom === 'everyone'
+                            ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="font-extrabold text-xs">Everyone on Campus</div>
+                        {allowDirectMessagesFrom === 'everyone' && <Check size={16} className="text-teal-600 dark:text-teal-400" />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSetDirectMessagesPrivacy('followers')}
+                        className={`p-3.5 rounded-xl border flex items-center justify-between text-left transition-all cursor-pointer ${
+                          allowDirectMessagesFrom === 'followers'
+                            ? 'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-900 dark:text-teal-100 ring-2 ring-teal-500/30 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="font-extrabold text-xs">Followers Only</div>
+                        {allowDirectMessagesFrom === 'followers' && <Check size={16} className="text-teal-600 dark:text-teal-400" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 4: Online Status & Search Discovery */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900 dark:text-slate-100">
+                          Show Online Activity Status
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          Allow friends and mutual followers to see when you are active on the campus network.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={showActiveStatus}
+                        onClick={() => handleToggleActiveStatus(!showActiveStatus)}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                          showActiveStatus ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-600'
+                        }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                            showActiveStatus ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900 dark:text-slate-100">
+                          Include Profile in Campus Search
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          Allow course mates to find your account by typing your handle or department.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={searchDiscoverable}
+                        onClick={() => handleToggleSearchDiscoverable(!searchDiscoverable)}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                          searchDiscoverable ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-600'
+                        }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                            searchDiscoverable ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-teal-50/60 dark:bg-teal-950/20 border border-teal-200/80 dark:border-teal-800/50 text-xs text-teal-800 dark:text-teal-300 flex items-start gap-2.5">
+                    <Shield size={16} className="text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
+                    <span>Privacy preferences are synchronized automatically with your FUHSI account.</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {settingsSubpage === 'delete_account' && (
+              /* DEDICATED DELETE ACCOUNT SUBPAGE */
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10">
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('main')}
+                      className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
+                      title="Return to Settings"
+                    >
+                      <ArrowLeft size={18} />
+                      <span>Settings</span>
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden sm:block" />
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-rose-100 dark:bg-rose-950/60 text-rose-600 flex items-center justify-center text-sm">
+                        ⚠️
+                      </div>
+                      <h2 className="font-black text-rose-700 dark:text-rose-400 text-sm sm:text-base">
+                        Delete Account
+                      </h2>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleCancelEdit();
+                      setIsEditingSettings(false);
+                    }}
+                    className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+                  <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 space-y-3">
+                    <h3 className="text-sm font-black text-rose-900 dark:text-rose-200 flex items-center gap-2">
+                      <AlertTriangle size={17} className="text-rose-600 shrink-0" />
+                      <span>Irreversible Permanent Action</span>
+                    </h3>
+                    <p className="text-xs text-rose-800/90 dark:text-rose-300/90 leading-relaxed">
+                      Deleting your account cannot be undone. Once deleted:
+                    </p>
+                    <ul className="text-xs text-rose-700 dark:text-rose-300 space-y-1.5 list-disc pl-5">
+                      <li>Your username, bio, and student credentials will be permanently erased.</li>
+                      <li>All your threads, discussions, and replies will be removed.</li>
+                      <li>All accrued points, badges, and verification status will be cleared.</li>
+                      <li>Any active sessions on all devices will be terminated immediately.</li>
+                    </ul>
+                  </div>
+
+                  <div className="space-y-2 pt-2">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                      To confirm, type <span className="font-black text-rose-600">DELETE</span> or your nickname <span className="font-black text-slate-900 dark:text-white">{userProfile?.nickname?.replace(/^@/, '') || 'Student'}</span>:
+                    </label>
+                    <input
+                      type="text"
+                      value={deleteConfirmText}
+                      onChange={(e) => setDeleteConfirmText(e.target.value)}
+                      placeholder='Type "DELETE" to confirm'
+                      className="w-full text-xs rounded-xl border border-rose-300 dark:border-rose-800 p-3 text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 font-bold"
+                    />
+                  </div>
+
+                  {deleteErrorMessage && (
+                    <div className="p-3 bg-rose-100 dark:bg-rose-950/50 border border-rose-300 text-rose-900 dark:text-rose-200 text-xs font-bold rounded-xl text-center">
+                      {deleteErrorMessage}
+                    </div>
+                  )}
+
+                  <div className="pt-4 flex flex-col gap-2.5">
+                    <button
+                      type="button"
+                      disabled={isDeletingAccount || (deleteConfirmText.trim() !== 'DELETE' && deleteConfirmText.trim().toLowerCase() !== (userProfile?.nickname || '').replace(/^@/, '').toLowerCase())}
+                      onClick={async () => {
+                        if (!onDeleteAccount) return;
+                        setIsDeletingAccount(true);
+                        setDeleteErrorMessage(null);
+                        try {
+                          await onDeleteAccount();
+                          setIsEditingSettings(false);
+                        } catch (err: any) {
+                          setDeleteErrorMessage(err?.message || 'Failed to delete account. Please try again.');
+                          setIsDeletingAccount(false);
+                        }
+                      }}
+                      className="w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      {isDeletingAccount ? (
+                        <>
+                          <RefreshCw size={14} className="animate-spin" />
+                          <span>Deleting Account...</span>
+                        </>
+                      ) : (
+                        <span>Permanently Delete My Account</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('main')}
+                      className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs transition-colors cursor-pointer text-center"
+                    >
+                      Keep My Account
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {settingsSubpage === 'logout_confirm' && (
+              /* DEDICATED LOG OUT CONFIRMATION SUBPAGE */
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10">
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('main')}
+                      className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
+                      title="Return to Settings"
+                    >
+                      <ArrowLeft size={18} />
+                      <span>Settings</span>
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden sm:block" />
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center text-sm">
+                        🚪
+                      </div>
+                      <h2 className="font-black text-slate-900 dark:text-slate-100 text-sm sm:text-base">
+                        Log Out
+                      </h2>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleCancelEdit();
+                      setIsEditingSettings(false);
+                    }}
+                    className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-5">
+                  <div className="w-16 h-16 rounded-3xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 flex items-center justify-center text-3xl shadow-xs border border-slate-200 dark:border-slate-700">
+                    🚪
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+                      Log out of {userProfile?.nickname || 'your account'}?
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                      You will be logged out of your session and returned to the Sign In / Register screen. You can log back in at any time with your credentials.
+                    </p>
+                  </div>
+
+                  <div className="w-full flex flex-col gap-2.5 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditingSettings(false);
+                        if (onClose) onClose();
+                        if (onLogout) onLogout();
+                      }}
+                      className="w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs transition-colors shadow-md cursor-pointer"
+                    >
+                      Yes, Log Out
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('main')}
+                      className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition-colors cursor-pointer"
+                    >
+                      Stay Logged In
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {settingsSubpage === 'edit_profile' && (
               /* DEDICATED EDIT PROFILE SUBPAGE */
               <form onSubmit={handleSave} className="flex flex-col h-full overflow-hidden">
                 {/* Edit Profile Header */}

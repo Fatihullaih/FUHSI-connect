@@ -1,8 +1,61 @@
-import { UserProfile } from '../types';
+import { UserProfile, FollowRecord } from '../types';
 import { saveUserToFirestore } from '../lib/firestoreSync';
 import { normalizeNickname } from './messagingUtils';
+import { isUserFollowing, normalizeHandle, getStoredFollows } from './followUtils';
 
 export const PRESENCE_ACTIVE_THRESHOLD_MS = 90 * 1000; // 90 seconds threshold for active presence
+
+/**
+ * Checks if the viewer has permission to see the target user's active/online status
+ * Rule:
+ * 1. If targetUser explicitly turned off showActiveStatus (showActiveStatus === false), return false (unless viewing self or admin)
+ * 2. User viewing self can always see
+ * 3. Admins can always see
+ * 4. Friends and mutual followers (viewer follows target AND target follows viewer) can see
+ */
+export function canViewerSeeOnlineStatus(
+  targetUser: UserProfile | { nickname?: string; showActiveStatus?: boolean } | null | undefined,
+  viewerUser: UserProfile | { nickname?: string; isAdmin?: boolean } | null | undefined,
+  allFollows: FollowRecord[] = []
+): boolean {
+  if (!targetUser) return false;
+  if (targetUser.showActiveStatus === false) {
+    if (
+      viewerUser &&
+      targetUser.nickname &&
+      viewerUser.nickname &&
+      normalizeHandle(targetUser.nickname) === normalizeHandle(viewerUser.nickname)
+    ) {
+      return true;
+    }
+    return Boolean(viewerUser?.isAdmin);
+  }
+
+  // Viewing self
+  if (
+    viewerUser &&
+    targetUser.nickname &&
+    viewerUser.nickname &&
+    normalizeHandle(targetUser.nickname) === normalizeHandle(viewerUser.nickname)
+  ) {
+    return true;
+  }
+
+  // Admin
+  if (viewerUser?.isAdmin) return true;
+
+  if (!viewerUser?.nickname || !targetUser.nickname) return false;
+
+  const targetNick = normalizeHandle(targetUser.nickname);
+  const viewerNick = normalizeHandle(viewerUser.nickname);
+
+  // Allow friends and mutual followers to see when you are active on the campus network
+  const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
+  const viewerFollowsTarget = isUserFollowing(viewerNick, targetNick, effectiveFollows);
+  const targetFollowsViewer = isUserFollowing(targetNick, viewerNick, effectiveFollows);
+
+  return viewerFollowsTarget && targetFollowsViewer;
+}
 
 /**
  * Accurately determines if a user is currently online based on real-time presence signals & heartbeat timestamp
