@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Post, MarketplaceItem, UserProfile } from '../types';
+import { Post, MarketplaceItem, UserProfile, FollowRecord } from '../types';
 import { PostCard } from '../components/PostCard';
 import { AuthorProfileModal } from '../components/AuthorProfileModal';
 import { AvatarIcon } from '../components/AvatarIcon';
@@ -8,6 +8,7 @@ import { calculateUserPoints } from '../utils/reputationUtils';
 import { isDemoUser, isDemoNickname, isDemoPost } from '../utils/postGenerator';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, getUserIdentitySubtitle } from '../utils/userDbUtils';
+import { isUserFollowing, getStoredFollows } from '../utils/followUtils';
 import {
   Search,
   Sparkles,
@@ -24,6 +25,7 @@ import {
   ChevronDown,
   ChevronUp,
   HelpCircle,
+  Lock,
 } from 'lucide-react';
 
 interface SearchScreenProps {
@@ -38,6 +40,8 @@ interface SearchScreenProps {
   onAuthorClick?: (post: Post) => void;
   onEditPost?: (postId: string, newContent: string) => void;
   onDeletePost?: (postId: string) => void;
+  allUsers?: UserProfile[];
+  allFollows?: FollowRecord[];
 }
 
 interface CampusAccount {
@@ -53,6 +57,8 @@ interface CampusAccount {
   avatarUrl?: string;
   reputationScore: number;
   isVerified: boolean;
+  isPrivate?: boolean;
+  searchDiscoverable?: boolean;
 }
 
 // Helper function to normalize strings for intelligent/smart matching (ignores spaces, underscores, hyphens, @)
@@ -98,6 +104,8 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   onAuthorClick,
   onEditPost,
   onDeletePost,
+  allUsers = [],
+  allFollows = [],
 }) => {
   const [query, setQuery] = useState('');
   
@@ -134,41 +142,15 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   const allAccounts = useMemo<CampusAccount[]>(() => {
     const accMap = new Map<string, CampusAccount>();
 
-    let verifsList: any[] = [];
-    try {
-      const vStr = localStorage.getItem('fuhsi_verifications_db');
-      if (vStr) verifsList = JSON.parse(vStr);
-    } catch (e) {
-      console.error(e);
-    }
-
-    // Add registered users from local storage if available
+    // Merge registered users from allUsers prop and localStorage
+    const candidateUsers: UserProfile[] = [...allUsers];
     try {
       const storedUsers = localStorage.getItem('fuhsi_users_db');
       if (storedUsers) {
         const parsed: UserProfile[] = JSON.parse(storedUsers);
         parsed.forEach((u) => {
-          if (u.nickname && !isDemoUser(u) && !isDemoNickname(u.nickname)) {
-            const key = normalize(u.nickname);
-            if (!accMap.has(key)) {
-              const exactScore = calculateUserPoints(u.nickname, u, posts, []);
-              const verifInfo = getUserBadgeInfo(u.nickname, u);
-              const isGuest = isGuestAccount(u);
-              accMap.set(key, {
-                id: u.id || `usr_${key}`,
-                nickname: u.nickname.startsWith('@') ? u.nickname : `@${u.nickname}`,
-                realName: u.realName || u.nickname,
-                department: isGuest ? '' : (u.department || 'FUHSI Student'),
-                level: isGuest ? '' : (u.level || 'Student'),
-                bio: u.bio || (isGuest ? 'Community Guest Member on FUHSI Connect.' : 'FUHSI Student Community Member.'),
-                badgeType: verifInfo.badgeType,
-                badgeTitle: verifInfo.badgeTitle,
-                avatarKey: u.avatarKey || 'caduceus',
-                avatarUrl: u.avatarUrl,
-                reputationScore: exactScore,
-                isVerified: verifInfo.isVerified,
-              });
-            }
+          if (!candidateUsers.some((existing) => normalize(existing.nickname) === normalize(u.nickname))) {
+            candidateUsers.push(u);
           }
         });
       }
@@ -176,29 +158,47 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       console.error(e);
     }
 
-    // Add active logged in userProfile
-    if (userProfile && userProfile.nickname && !isDemoUser(userProfile) && !isDemoNickname(userProfile.nickname)) {
-      const key = normalize(userProfile.nickname);
-      if (!accMap.has(key)) {
-        const exactScore = calculateUserPoints(userProfile.nickname, userProfile, posts, []);
-        const verifInfo = getUserBadgeInfo(userProfile.nickname, userProfile);
-        const isGuest = isGuestAccount(userProfile);
-        accMap.set(key, {
-          id: userProfile.id || `usr_${key}`,
-          nickname: userProfile.nickname.startsWith('@') ? userProfile.nickname : `@${userProfile.nickname}`,
-          realName: userProfile.realName || userProfile.nickname,
-          department: isGuest ? '' : (userProfile.department || 'FUHSI Student'),
-          level: isGuest ? '' : (userProfile.level || 'Student'),
-          bio: userProfile.bio || (isGuest ? 'Community Guest Member on FUHSI Connect.' : 'FUHSI Student Community Member.'),
-          badgeType: verifInfo.badgeType,
-          badgeTitle: verifInfo.badgeTitle,
-          avatarKey: userProfile.avatarKey || 'caduceus',
-          avatarUrl: userProfile.avatarUrl,
-          reputationScore: exactScore,
-          isVerified: verifInfo.isVerified,
-        });
-      }
+    // Add active logged in userProfile if not already present
+    if (userProfile && userProfile.nickname && !candidateUsers.some((u) => normalize(u.nickname) === normalize(userProfile.nickname))) {
+      candidateUsers.push(userProfile);
     }
+
+    candidateUsers.forEach((u) => {
+      if (u.nickname && !isDemoUser(u) && !isDemoNickname(u.nickname)) {
+        const key = normalize(u.nickname);
+        if (!accMap.has(key)) {
+          const isSelf = userProfile?.nickname && normalize(userProfile.nickname) === key;
+          const isAdmin = Boolean(userProfile?.isAdmin);
+
+          // Requirement 3: Include Profile in Campus Search
+          // Allow course mates to find your account by typing your handle.
+          // If searchDiscoverable is explicitly false, hide from campus search for non-self and non-admin
+          if (u.searchDiscoverable === false && !isSelf && !isAdmin) {
+            return;
+          }
+
+          const exactScore = calculateUserPoints(u.nickname, u, posts, []);
+          const verifInfo = getUserBadgeInfo(u.nickname, u);
+          const isGuest = isGuestAccount(u);
+          accMap.set(key, {
+            id: u.id || `usr_${key}`,
+            nickname: u.nickname.startsWith('@') ? u.nickname : `@${u.nickname}`,
+            realName: u.realName || u.nickname,
+            department: isGuest ? '' : (u.department || 'FUHSI Student'),
+            level: isGuest ? '' : (u.level || 'Student'),
+            bio: u.bio || (isGuest ? 'Community Guest Member on FUHSI Connect.' : 'FUHSI Student Community Member.'),
+            badgeType: verifInfo.badgeType,
+            badgeTitle: verifInfo.badgeTitle,
+            avatarKey: u.avatarKey || 'caduceus',
+            avatarUrl: u.avatarUrl,
+            reputationScore: exactScore,
+            isVerified: verifInfo.isVerified,
+            isPrivate: Boolean(u.isPrivate),
+            searchDiscoverable: u.searchDiscoverable !== false,
+          });
+        }
+      }
+    });
 
     // Add author nicknames from posts (excluding demo posts)
     (posts || []).forEach((p) => {
@@ -222,13 +222,15 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
             avatarUrl: p.authorAvatarUrl,
             reputationScore: exactScore,
             isVerified: verifInfo.isVerified,
+            isPrivate: false,
+            searchDiscoverable: true,
           });
         }
       }
     });
 
     return Array.from(accMap.values());
-  }, [posts, userProfile]);
+  }, [posts, userProfile, allUsers]);
 
   // Perform Intelligent Search Matching for Accounts
   const matchingAccounts = useMemo(() => {
@@ -236,11 +238,10 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
     
     return allAccounts
       .map((acc) => {
+        // Course mates can find account by typing handle (an account cannot be searched using department)
         const nickScore = getMatchScore(query, acc.nickname);
         const nameScore = getMatchScore(query, acc.realName);
-        const deptScore = getMatchScore(query, acc.department);
-        const titleScore = getMatchScore(query, acc.badgeTitle);
-        const maxScore = Math.max(nickScore, nameScore, deptScore, titleScore);
+        const maxScore = Math.max(nickScore, nameScore);
         return { account: acc, score: maxScore };
       })
       .filter((item) => item.score > 0)
@@ -252,8 +253,32 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   const matchingPosts = useMemo(() => {
     if (!query.trim()) return [];
 
+    const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
+    const currentNick = userProfile?.nickname;
+
     return (posts || [])
-      .filter((p) => !isDemoPost(p))
+      .filter((p) => {
+        if (isDemoPost(p)) return false;
+        
+        // Find author account if private
+        const authorNick = p.authorNickname || p.nickname || '';
+        const authorKey = normalize(authorNick);
+        const matchedAcc = allAccounts.find((a) => normalize(a.nickname) === authorKey);
+
+        if (matchedAcc?.isPrivate) {
+          if (!currentNick) return false;
+          const isSelf = normalize(currentNick) === authorKey;
+          if (isSelf || userProfile?.isAdmin) return true;
+
+          // Requirement 1: Non-followers who visit your profile will only see your handle and department.
+          // Your posts and replies are hidden until you follow them back.
+          const isFollowing = isUserFollowing(currentNick, authorNick, effectiveFollows);
+          const hasFollowedBack = isUserFollowing(authorNick, currentNick, effectiveFollows);
+          return isFollowing && hasFollowedBack;
+        }
+
+        return true;
+      })
       .map((p) => {
         const contentScore = getMatchScore(query, p.content || '');
         const nickScore = getMatchScore(query, p.authorNickname || p.nickname || '');
@@ -264,7 +289,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((item) => item.post);
-  }, [query, posts]);
+  }, [query, posts, allAccounts, allFollows, userProfile]);
 
   // Perform Intelligent Search Matching for Marketplace Items (Disabled for Guest accounts)
   const matchingHubItems = useMemo(() => {
@@ -474,13 +499,21 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                             {acc.nickname}
                           </h3>
                           <VerificationBadge isVerified={acc.isVerified} badgeType={acc.badgeType} title={acc.badgeTitle} showTitle />
+                          {acc.isPrivate && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 shadow-2xs">
+                              <Lock size={10} />
+                              <span>Private</span>
+                            </span>
+                          )}
                           {isGuestAccount(acc.nickname) && (
                             <span className="text-[10px] text-slate-400 font-medium">Guest</span>
                           )}
                         </div>
-                        {!isGuestAccount(acc.nickname) && getUserIdentitySubtitle(acc.nickname, acc.department, acc.level) && (
+                        {!isGuestAccount(acc.nickname) && (
                           <p className="text-xs text-slate-400 font-medium truncate mt-0.5">
-                            {getUserIdentitySubtitle(acc.nickname, acc.department, acc.level)}
+                            {acc.isPrivate
+                              ? (acc.department || 'FUHSI Department')
+                              : getUserIdentitySubtitle(acc.nickname, acc.department, acc.level)}
                           </p>
                         )}
                       </div>

@@ -2773,6 +2773,8 @@ export const App: React.FC = () => {
             onAuthorClick={openAuthorProfile}
             onEditPost={handleEditPost}
             onDeletePost={handleDeletePost}
+            allUsers={allUsers && allUsers.length > 0 ? allUsers : getStoredUsers()}
+            allFollows={allFollows}
           />
         )}
 
@@ -2836,16 +2838,20 @@ export const App: React.FC = () => {
               };
               openAuthorProfile(dummyPost);
             }}
-            allUsers={getStoredUsers()}
+            allUsers={allUsers && allUsers.length > 0 ? allUsers : getStoredUsers()}
+            allFollows={allFollows}
           />
         )}
 
         {navIndex === 5 && (
           <LeaderboardScreen
             userProfile={userProfile}
+            allUsers={allUsers && allUsers.length > 0 ? allUsers : getStoredUsers()}
             activePosts={posts}
+            allComments={comments}
+            allReports={reports}
             onAuthorClick={openAuthorProfile}
-            onSubmitVerificationRequest={handleSubmitVerificationRequest}
+            onSelectPost={openPostDetail}
           />
         )}
 

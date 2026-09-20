@@ -168,9 +168,17 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
       // Check if post author account is private or post audience is followers-only
       const authorUser = findUserByNickname(post.authorNickname);
       const isAuthorPrivate = Boolean(authorUser?.isPrivate);
-      const isFollowersOnly = post.audience === 'followers' || isAuthorPrivate;
 
-      if (isFollowersOnly) {
+      if (isAuthorPrivate) {
+        if (!currentNick) return false;
+        const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
+        const isFollowing = isUserFollowing(currentNick, post.authorNickname, effectiveFollows);
+        const hasFollowedBack = isUserFollowing(post.authorNickname, currentNick, effectiveFollows);
+        // Requirement: Posts and replies are hidden until the private author follows the viewer back
+        return isFollowing && hasFollowedBack;
+      }
+
+      if (post.audience === 'followers') {
         if (!currentNick) return false;
         const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
         const isFollowing = isUserFollowing(currentNick, post.authorNickname, effectiveFollows);

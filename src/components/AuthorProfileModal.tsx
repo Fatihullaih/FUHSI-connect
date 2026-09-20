@@ -299,7 +299,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                   {canSeeOnlineStatus && authorIsOnline && (
                     <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-200 bg-emerald-950/60 border border-emerald-400/40 px-2 py-0.5 rounded-full backdrop-blur-xs shadow-xs">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                      <span>Active on campus network</span>
+                      <span>Active</span>
                     </span>
                   )}
                   {canSeeOnlineStatus && !authorIsOnline && authorProfileUser?.lastActiveAt && (

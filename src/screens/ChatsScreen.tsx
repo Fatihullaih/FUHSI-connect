@@ -204,7 +204,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     }
     if (!match) return false;
 
-    // Requirement: Show Online Activity Status: Allow friends and mutual followers to see when you are active on the campus network.
+    // Requirement: Show Online Activity Status: Allow friends or followers to see when you are active
     const canSee = canViewerSeeOnlineStatus(match, userProfile, allFollows);
     if (!canSee) return false;
 

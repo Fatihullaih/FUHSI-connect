@@ -49,12 +49,13 @@ export function canViewerSeeOnlineStatus(
   const targetNick = normalizeHandle(targetUser.nickname);
   const viewerNick = normalizeHandle(viewerUser.nickname);
 
-  // Allow friends and mutual followers to see when you are active on the campus network
+  // Allow friends or followers to see when you are active
   const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
   const viewerFollowsTarget = isUserFollowing(viewerNick, targetNick, effectiveFollows);
   const targetFollowsViewer = isUserFollowing(targetNick, viewerNick, effectiveFollows);
 
-  return viewerFollowsTarget && targetFollowsViewer;
+  // Return true if viewer is following target (follower) or target follows viewer (friend)
+  return viewerFollowsTarget || targetFollowsViewer;
 }
 
 /**

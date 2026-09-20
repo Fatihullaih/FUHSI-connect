@@ -1366,7 +1366,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           Show Online Activity Status
                         </h4>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                          Allow friends and mutual followers to see when you are active on the campus network.
+                          Allow friends or followers to see when you are active
                         </p>
                       </div>
                       <button
@@ -1393,7 +1393,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           Include Profile in Campus Search
                         </h4>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                          Allow course mates to find your account by typing your handle or department.
+                          Allow course mates to find your account by typing your handle
                         </p>
                       </div>
                       <button
