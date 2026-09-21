@@ -242,16 +242,6 @@ export const App: React.FC = () => {
   });
   const lastProfileSaveTimestampRef = useRef<number>(0);
   
-  const [posts, setPosts] = useState<Post[]>(() => {
-    try {
-      const stored = localStorage.getItem('fuhsi_posts_db');
-      if (stored) return JSON.parse(stored);
-    } catch (e) {
-      console.error(e);
-    }
-    return INITIAL_POSTS;
-  });
-
   const [comments, setComments] = useState<Comment[]>(() => {
     try {
       const stored = localStorage.getItem('fuhsi_comments_db');
@@ -260,6 +250,27 @@ export const App: React.FC = () => {
       console.error(e);
     }
     return INITIAL_COMMENTS;
+  });
+
+  const [posts, setPosts] = useState<Post[]>(() => {
+    try {
+      const stored = localStorage.getItem('fuhsi_posts_db');
+      if (stored) {
+        const rawPosts: Post[] = JSON.parse(stored);
+        let currentStoredComments: Comment[] = [];
+        try {
+          const storedComm = localStorage.getItem('fuhsi_comments_db');
+          if (storedComm) currentStoredComments = JSON.parse(storedComm);
+        } catch {}
+        return rawPosts.map((p) => ({
+          ...p,
+          commentsCount: currentStoredComments.filter((c) => c && c.postId === p.id && !c.parentId).length,
+        }));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return INITIAL_POSTS;
   });
 
   const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>(() => {
@@ -446,6 +457,7 @@ export const App: React.FC = () => {
       const mergedUsers = mergeUsers(localStoredUsers, validUsers);
       localStorage.setItem('fuhsi_users_db', JSON.stringify(mergedUsers));
       setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined).length);
+      setNotifTrigger((prev) => prev + 1);
 
       // Reconcile active logged-in user profile
       const activeUserJson = localStorage.getItem('fuhsi_active_user');
@@ -588,11 +600,23 @@ export const App: React.FC = () => {
     const unsubPosts = subscribePosts((fsPosts) => {
       if (!isMounted) return;
       const validPosts = (fsPosts || []).filter((p) => !isDemoPost(p));
-      localStorage.setItem('fuhsi_posts_db', JSON.stringify(validPosts));
-      setPosts(validPosts);
+      let currentStoredComments: Comment[] = [];
+      try {
+        const storedComm = localStorage.getItem('fuhsi_comments_db');
+        if (storedComm) currentStoredComments = JSON.parse(storedComm);
+      } catch {}
+      const reconciledPosts = validPosts.map((p) => {
+        const topLevelCount = currentStoredComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
+        return {
+          ...p,
+          commentsCount: topLevelCount,
+        };
+      });
+      localStorage.setItem('fuhsi_posts_db', JSON.stringify(reconciledPosts));
+      setPosts(reconciledPosts);
       setSelectedPost((prev) => {
         if (!prev) return null;
-        const match = validPosts.find((p) => p.id === prev.id);
+        const match = reconciledPosts.find((p) => p.id === prev.id);
         return match || null;
       });
     });
@@ -603,6 +627,24 @@ export const App: React.FC = () => {
       const validComments = (fsComments || []).filter((c) => !isDemoComment(c));
       localStorage.setItem('fuhsi_comments_db', JSON.stringify(validComments));
       setComments(validComments);
+      setPosts((prevPosts) => {
+        const reconciled = prevPosts.map((p) => {
+          const topLevelCount = validComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
+          if (p.commentsCount !== topLevelCount) {
+            return { ...p, commentsCount: topLevelCount };
+          }
+          return p;
+        });
+        try {
+          localStorage.setItem('fuhsi_posts_db', JSON.stringify(reconciled));
+        } catch {}
+        return reconciled;
+      });
+      setSelectedPost((prev) => {
+        if (!prev) return null;
+        const topLevelCount = validComments.filter((c) => c && c.postId === prev.id && !c.parentId).length;
+        return { ...prev, commentsCount: topLevelCount };
+      });
     });
 
     // 4. Subscribe Verification Requests in real-time from Firestore
@@ -1105,9 +1147,17 @@ export const App: React.FC = () => {
   // Modal Opener Helpers with History Tracking
   const openPostDetail = useCallback((post: Post) => {
     setSelectedPost(post);
-    setModalStack((prev) => [...prev, { type: 'postDetail', post }]);
+    setModalStack((prev) => {
+      if (prev.some((item) => item.type === 'postDetail' && item.post.id === post.id)) return prev;
+      return [...prev, { type: 'postDetail', post }];
+    });
     try {
-      window.history.pushState({ type: 'modal', modalType: 'postDetail', id: post.id, time: Date.now() }, '');
+      const targetUrl = `/post/${encodeURIComponent(post.id)}`;
+      if (window.location.pathname !== targetUrl) {
+        window.history.pushState({ type: 'modal', modalType: 'postDetail', id: post.id, time: Date.now() }, '', targetUrl);
+      } else {
+        window.history.replaceState({ type: 'modal', modalType: 'postDetail', id: post.id, time: Date.now() }, '', targetUrl);
+      }
     } catch (e) { console.error(e); }
   }, []);
 
@@ -1223,10 +1273,20 @@ export const App: React.FC = () => {
           setShowAuthModal(false);
           setShowPwaModal(false);
           setShowFollowersDirectoryModal(false);
+          if (window.location.pathname.startsWith('/post/')) {
+            try {
+              window.history.replaceState(null, '', '/');
+            } catch (e) { console.error(e); }
+          }
           return [];
         }
         const newStack = [...prevStack];
-        newStack.pop();
+        const popped = newStack.pop();
+        if (popped?.type === 'postDetail' && window.location.pathname.startsWith('/post/')) {
+          try {
+            window.history.replaceState(null, '', '/');
+          } catch (e) { console.error(e); }
+        }
 
         const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
         setSelectedPost(lastPost ? (lastPost as any).post : null);
@@ -1255,6 +1315,11 @@ export const App: React.FC = () => {
 
           const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
           setSelectedPost(lastPost ? (lastPost as any).post : null);
+          if (!lastPost && window.location.pathname.startsWith('/post/')) {
+            try {
+              window.history.replaceState(null, '', '/');
+            } catch (e) { console.error(e); }
+          }
 
           const lastAuthor = newStack.slice().reverse().find((item) => item.type === 'authorProfile');
           setSelectedAuthorPost(lastAuthor ? (lastAuthor as any).post : null);
@@ -1266,6 +1331,12 @@ export const App: React.FC = () => {
           setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
 
           return newStack;
+        }
+
+        if (window.location.pathname.startsWith('/post/')) {
+          try {
+            window.history.replaceState(null, '', '/');
+          } catch (e) { console.error(e); }
         }
 
         // Handle navigation tab history if no modals open
@@ -1287,6 +1358,41 @@ export const App: React.FC = () => {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Deep linking: Handle /post/:id or ?postId=... URL routing
+  const deepLinkHandledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const pathname = window.location.pathname || '';
+      const searchParams = new URLSearchParams(window.location.search);
+      const pathMatch = pathname.match(/\/post\/([^/?#]+)/);
+      const queryId = searchParams.get('post') || searchParams.get('postId');
+      const targetId = pathMatch ? decodeURIComponent(pathMatch[1]) : queryId;
+
+      if (targetId && deepLinkHandledRef.current !== targetId) {
+        let found = posts.find((p) => p.id === targetId);
+        if (!found) {
+          try {
+            const cachedRaw = localStorage.getItem('fuhsi_posts_db');
+            if (cachedRaw) {
+              const cachedPosts: Post[] = JSON.parse(cachedRaw);
+              found = cachedPosts.find((p) => p.id === targetId);
+            }
+          } catch (e) {
+            console.error('Error finding deep-linked post in localStorage:', e);
+          }
+        }
+
+        if (found) {
+          deepLinkHandledRef.current = targetId;
+          openPostDetail(found);
+        }
+      }
+    } catch (e) {
+      console.error('Deep link routing error:', e);
+    }
+  }, [posts, openPostDetail]);
 
   // Handlers for Feed
   const handleLikeClick = (post: Post) => {
@@ -1365,6 +1471,229 @@ export const App: React.FC = () => {
       })
     );
   };
+
+  const handleRepost = useCallback((targetPost: Post) => {
+    if (!userProfile || isGuestAccount(userProfile)) {
+      setShowAuthModal(true);
+      return;
+    }
+    const myNick = userProfile.nickname || '@FUHSI_Student';
+    const nowIso = new Date().toISOString();
+
+    const basePost = targetPost.isRepost && targetPost.repostedPost ? targetPost.repostedPost : targetPost;
+    const existingRepostedBy = Array.isArray(basePost.repostedBy) ? basePost.repostedBy : [];
+    const isAlreadyReposted = existingRepostedBy.some(
+      (k) => (k || '').toLowerCase().replace(/^@/, '').trim() === (myNick || '').toLowerCase().replace(/^@/, '').trim()
+    );
+
+    let updatedBasePost: Post;
+    if (!isAlreadyReposted) {
+      const nextRepostedBy = [...existingRepostedBy, myNick];
+      const nextCount = nextRepostedBy.length;
+      updatedBasePost = {
+        ...basePost,
+        repostedBy: nextRepostedBy,
+        repostsCount: nextCount,
+        shareCount: Math.max(basePost.shareCount || 0, nextCount),
+        updatedAt: nowIso,
+      };
+    } else {
+      updatedBasePost = basePost;
+    }
+
+    const repostPost: Post = {
+      id: `repost_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      authorNickname: myNick,
+      authorAvatarKey: userProfile.avatarKey || 'caduceus',
+      authorAvatarUrl: userProfile.avatarUrl,
+      authorBadgeType: (userProfile.badgeType as any) || 'NONE',
+      authorBadgeTitle: userProfile.badgeTitle || '',
+      authorPoints: userProfile.reputationPoints || 0,
+      timeAgo: 'Just now',
+      category: basePost.category || 'General',
+      categoryTag: basePost.categoryTag || basePost.category || 'General',
+      content: '',
+      text: '',
+      timestamp: nowIso,
+      createdAt: nowIso,
+      likesCount: 0,
+      commentsCount: 0,
+      repostsCount: 0,
+      isRepost: true,
+      reposterNickname: myNick,
+      repostedPostId: basePost.id,
+      repostedPost: updatedBasePost,
+    };
+
+    setPosts((prev) => {
+      const updatedList = [repostPost, ...prev.map((p) => (p.id === basePost.id ? updatedBasePost : p))];
+      try {
+        localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedList));
+      } catch (e) {
+        console.error(e);
+      }
+      return updatedList;
+    });
+
+    if (selectedPost && selectedPost.id === basePost.id) {
+      setSelectedPost(updatedBasePost);
+    }
+
+    setModalStack((prevStack) =>
+      prevStack.map((item) => {
+        if (item.type === 'postDetail' && item.post.id === basePost.id) {
+          return { ...item, post: updatedBasePost };
+        }
+        return item;
+      })
+    );
+
+    savePostToFirestore(updatedBasePost).catch((err) => console.error('Error saving reposted base post:', err));
+    savePostToFirestore(repostPost).catch((err) => console.error('Error saving new repost post:', err));
+    pushServerDbSync({ posts: [updatedBasePost, repostPost] } as any);
+  }, [userProfile, selectedPost]);
+
+  const handleUndoRepost = useCallback((targetPost: Post) => {
+    if (!userProfile || isGuestAccount(userProfile)) {
+      return;
+    }
+    const myNick = userProfile.nickname || '@FUHSI_Student';
+    const normMyNick = myNick.toLowerCase().replace(/^@/, '').trim();
+    const nowIso = new Date().toISOString();
+
+    const basePost = targetPost.isRepost && targetPost.repostedPost ? targetPost.repostedPost : targetPost;
+    const existingRepostedBy = Array.isArray(basePost.repostedBy) ? basePost.repostedBy : [];
+    const nextRepostedBy = existingRepostedBy.filter(
+      (k) => (k || '').toLowerCase().replace(/^@/, '').trim() !== normMyNick
+    );
+    const nextCount = nextRepostedBy.length;
+
+    const updatedBasePost: Post = {
+      ...basePost,
+      repostedBy: nextRepostedBy,
+      repostsCount: nextCount,
+      shareCount: nextCount,
+      updatedAt: nowIso,
+    };
+
+    setPosts((prev) => {
+      const filtered = prev
+        .filter((p) => {
+          if (p.isRepost && p.repostedPostId === basePost.id) {
+            const repNick = (p.reposterNickname || p.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
+            if (repNick === normMyNick) return false;
+          }
+          return true;
+        })
+        .map((p) => (p.id === basePost.id ? updatedBasePost : p));
+
+      try {
+        localStorage.setItem('fuhsi_posts_db', JSON.stringify(filtered));
+      } catch (e) {
+        console.error(e);
+      }
+      return filtered;
+    });
+
+    if (selectedPost && selectedPost.id === basePost.id) {
+      setSelectedPost(updatedBasePost);
+    }
+
+    setModalStack((prevStack) =>
+      prevStack.map((item) => {
+        if (item.type === 'postDetail' && item.post.id === basePost.id) {
+          return { ...item, post: updatedBasePost };
+        }
+        return item;
+      })
+    );
+
+    savePostToFirestore(updatedBasePost).catch((err) => console.error('Error updating base post on undo repost:', err));
+    pushServerDbSync({ posts: [updatedBasePost] } as any);
+  }, [userProfile, selectedPost]);
+
+  const handleQuotePost = useCallback((targetPost: Post, caption: string) => {
+    if (!userProfile || isGuestAccount(userProfile)) {
+      setShowAuthModal(true);
+      return;
+    }
+    const cleanCaption = caption.trim();
+    if (!cleanCaption) return;
+
+    const myNick = userProfile.nickname || '@FUHSI_Student';
+    const nowIso = new Date().toISOString();
+
+    const basePost = targetPost.isRepost && targetPost.repostedPost ? targetPost.repostedPost : targetPost;
+    const existingRepostedBy = Array.isArray(basePost.repostedBy) ? basePost.repostedBy : [];
+    const isAlreadyReposted = existingRepostedBy.some(
+      (k) => (k || '').toLowerCase().replace(/^@/, '').trim() === (myNick || '').toLowerCase().replace(/^@/, '').trim()
+    );
+
+    let updatedBasePost: Post;
+    if (!isAlreadyReposted) {
+      const nextRepostedBy = [...existingRepostedBy, myNick];
+      const nextCount = nextRepostedBy.length;
+      updatedBasePost = {
+        ...basePost,
+        repostedBy: nextRepostedBy,
+        repostsCount: nextCount,
+        shareCount: Math.max(basePost.shareCount || 0, nextCount),
+        updatedAt: nowIso,
+      };
+    } else {
+      updatedBasePost = basePost;
+    }
+
+    const quotePost: Post = {
+      id: `quote_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      authorNickname: myNick,
+      authorAvatarKey: userProfile.avatarKey || 'caduceus',
+      authorAvatarUrl: userProfile.avatarUrl,
+      authorBadgeType: (userProfile.badgeType as any) || 'NONE',
+      authorBadgeTitle: userProfile.badgeTitle || '',
+      authorPoints: userProfile.reputationPoints || 0,
+      timeAgo: 'Just now',
+      category: basePost.category || 'General',
+      categoryTag: basePost.categoryTag || basePost.category || 'General',
+      content: cleanCaption,
+      text: cleanCaption,
+      timestamp: nowIso,
+      createdAt: nowIso,
+      likesCount: 0,
+      commentsCount: 0,
+      repostsCount: 0,
+      isQuote: true,
+      quotedPostId: basePost.id,
+      quotedPost: updatedBasePost,
+    };
+
+    setPosts((prev) => {
+      const updatedList = [quotePost, ...prev.map((p) => (p.id === basePost.id ? updatedBasePost : p))];
+      try {
+        localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedList));
+      } catch (e) {
+        console.error(e);
+      }
+      return updatedList;
+    });
+
+    if (selectedPost && selectedPost.id === basePost.id) {
+      setSelectedPost(updatedBasePost);
+    }
+
+    setModalStack((prevStack) =>
+      prevStack.map((item) => {
+        if (item.type === 'postDetail' && item.post.id === basePost.id) {
+          return { ...item, post: updatedBasePost };
+        }
+        return item;
+      })
+    );
+
+    savePostToFirestore(updatedBasePost).catch((err) => console.error('Error saving quoted base post:', err));
+    savePostToFirestore(quotePost).catch((err) => console.error('Error saving new quote post:', err));
+    pushServerDbSync({ posts: [updatedBasePost, quotePost] } as any);
+  }, [userProfile, selectedPost]);
 
   const handleDeletePost = (postId: string) => {
     deletePostFromFirestore(postId).catch((err) => console.error('Error deleting post from Firestore:', err));
@@ -1447,25 +1776,102 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteComment = (commentId: string) => {
+    // 1. Identify comment to delete and any child replies
+    const commentToDelete = comments.find((c) => c.id === commentId);
+    const childReplies = comments.filter((c) => c.parentId === commentId);
+
+    // Delete from Firestore
     deleteCommentFromFirestore(commentId).catch((err) => console.error('Error deleting comment from Firestore:', err));
+    childReplies.forEach((r) => {
+      deleteCommentFromFirestore(r.id).catch((err) => console.error('Error deleting reply from Firestore:', err));
+    });
+
+    // 2. Updated comments list (removes target comment and its direct child replies)
     const updatedComments = comments.filter((c) => c.id !== commentId && c.parentId !== commentId);
     setComments(updatedComments);
+
+    // Target post id
+    const targetPostId = commentToDelete?.postId || (selectedPost ? selectedPost.id : null);
+
+    // 3. Derive posts commentsCount strictly from active top-level comments (0 if none)
+    let targetUpdatedPost: Post | null = null;
     const updatedPosts = posts.map((p) => {
-      if (selectedPost && p.id === selectedPost.id) {
-        return { ...p, commentsCount: Math.max(0, (p.commentsCount || 1) - 1) };
+      const topLevelCount = updatedComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
+      const updatedP = { ...p, commentsCount: topLevelCount };
+      if (p.id === targetPostId) {
+        targetUpdatedPost = updatedP;
       }
-      return p;
+      return updatedP;
     });
     setPosts(updatedPosts);
+
+    // Save updated target post to Firestore
+    if (targetUpdatedPost) {
+      savePostToFirestore(targetUpdatedPost).catch((err) => console.error('Error saving post commentsCount to Firestore:', err));
+    }
+
+    // 4. Update selectedPost and modalStack
+    if (selectedPost) {
+      const selectedTopLevelCount = updatedComments.filter(
+        (c) => c && c.postId === selectedPost.id && !c.parentId
+      ).length;
+      setSelectedPost((prev) => (prev ? { ...prev, commentsCount: selectedTopLevelCount } : null));
+    }
+
+    setModalStack((prevStack) =>
+      prevStack.map((item) => {
+        if (item.type === 'postDetail' && item.post) {
+          const modalPostTopLevelCount = updatedComments.filter(
+            (c) => c && c.postId === item.post.id && !c.parentId
+          ).length;
+          return {
+            ...item,
+            post: {
+              ...item.post,
+              commentsCount: modalPostTopLevelCount,
+            },
+          };
+        }
+        return item;
+      })
+    );
+
+    // 5. Update local storage
     try {
       localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
       localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
     } catch (e) {
       console.error(e);
     }
-    pushServerDbSync({ comments: updatedComments, replaceComments: true, posts: updatedPosts, replacePosts: true }).catch((err) =>
+
+    // 6. Push sync to server database with replace flags so deleted comments do not resurrect
+    pushServerDbSync({
+      comments: updatedComments,
+      replaceComments: true,
+      posts: updatedPosts,
+      replacePosts: true,
+    }).catch((err) =>
       console.error('Error syncing comment deletion to server db:', err)
     );
+
+    // 7. Recalculate engagement points dynamically for current user and all users
+    if (userProfile?.nickname) {
+      const updatedPoints = calculateUserPoints(userProfile.nickname, userProfile, updatedPosts, updatedComments, reports);
+      setUserProfile((prev) => ({
+        ...prev,
+        reputationScore: updatedPoints,
+      }));
+    }
+
+    try {
+      const currentUsers = getStoredUsers();
+      const nextUsers = currentUsers.map((u) => {
+        const updatedScore = calculateUserPoints(u.nickname, u, updatedPosts, updatedComments, reports);
+        return { ...u, reputationScore: updatedScore };
+      });
+      localStorage.setItem('fuhsi_users_db', JSON.stringify(nextUsers));
+      setNotifTrigger((prev) => prev + 1);
+    } catch (e) {}
   };
 
   const handleVotePoll = (post: Post, optionId: string) => {
@@ -1655,25 +2061,65 @@ export const App: React.FC = () => {
     saveCommentToFirestore(newComment).catch((err) => console.error('Error saving comment to Firestore:', err));
     pushServerDbSync({ comments: [newComment] } as any).catch(console.error);
     setComments(newCommentsList);
-    setPosts((prev) =>
-      prev.map((p) => {
-        if (p.id === postId) {
-          const updatedP = { ...p, commentsCount: (p.commentsCount || 0) + 1 };
-          savePostToFirestore(updatedP).catch(console.error);
-          pushServerDbSync({ posts: [updatedP] } as any).catch(console.error);
-          return updatedP;
+
+    // Only active top-level comments count toward the post's commentsCount!
+    // Nested replies (!c.parentId === false) do NOT increase the post's commentsCount.
+    const targetTopLevelCount = newCommentsList.filter((c) => c && c.postId === postId && !c.parentId).length;
+
+    let targetUpdatedPost: Post | null = null;
+    const updatedPosts = posts.map((p) => {
+      if (p.id === postId) {
+        const updatedP = { ...p, commentsCount: targetTopLevelCount };
+        targetUpdatedPost = updatedP;
+        savePostToFirestore(updatedP).catch(console.error);
+        pushServerDbSync({ posts: [updatedP] } as any).catch(console.error);
+        return updatedP;
+      }
+      return p;
+    });
+    setPosts(updatedPosts);
+
+    try {
+      localStorage.setItem('fuhsi_comments_db', JSON.stringify(newCommentsList));
+      localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
+    } catch (e) {
+      console.error(e);
+    }
+
+    if (selectedPost && selectedPost.id === postId) {
+      setSelectedPost((prev) => (prev ? { ...prev, commentsCount: targetTopLevelCount } : null));
+    }
+
+    setModalStack((prevStack) =>
+      prevStack.map((item) => {
+        if (item.type === 'postDetail' && item.post.id === postId) {
+          return {
+            ...item,
+            post: { ...item.post, commentsCount: targetTopLevelCount },
+          };
         }
-        return p;
+        return item;
       })
     );
-    if (selectedPost && selectedPost.id === postId) {
-      setSelectedPost((prev) => (prev ? { ...prev, commentsCount: (prev.commentsCount || 0) + 1 } : null));
+
+    // Recalculate exact points dynamically for current user and all users
+    if (userProfile?.nickname) {
+      const newScore = calculateUserPoints(userProfile.nickname, userProfile, updatedPosts, newCommentsList, reports);
+      setUserProfile((prev) => ({
+        ...prev,
+        reputationScore: newScore,
+      }));
     }
-    // Recalculate exact points dynamically
-    setUserProfile((prev) => ({
-      ...prev,
-      reputationScore: calculateUserPoints(prev.nickname, prev, posts, newCommentsList, reports)
-    }));
+
+    try {
+      const currentUsers = getStoredUsers();
+      const nextUsers = currentUsers.map((u) => {
+        const updatedScore = calculateUserPoints(u.nickname, u, updatedPosts, newCommentsList, reports);
+        return { ...u, reputationScore: updatedScore };
+      });
+      localStorage.setItem('fuhsi_users_db', JSON.stringify(nextUsers));
+      setNotifTrigger((prev) => prev + 1);
+    } catch (e) {}
   };
 
   const handleLikeComment = (commentId: string) => {
@@ -2744,6 +3190,7 @@ export const App: React.FC = () => {
         {navIndex === 0 && (
           <FeedScreen
             posts={posts}
+            allComments={comments}
             userProfile={userProfile}
             allFollows={allFollows}
             selectedFilter={selectedFilter}
@@ -2757,6 +3204,10 @@ export const App: React.FC = () => {
             onVotePoll={handleVotePoll}
             onReportPost={handleReportPost}
             onCreatePostClick={openCreatePostModal}
+            onRepost={handleRepost}
+            onUndoRepost={handleUndoRepost}
+            onQuote={handleQuotePost}
+            onSelectPost={openPostDetail}
           />
         )}
 
@@ -2765,6 +3216,7 @@ export const App: React.FC = () => {
             userProfile={userProfile}
             posts={posts}
             marketplaceItems={marketplaceItems}
+            allComments={comments}
             currentUserNickname={userProfile?.nickname}
             onSelectPost={openPostDetail}
             onLikeClick={handleLikeClick}
@@ -2773,6 +3225,9 @@ export const App: React.FC = () => {
             onAuthorClick={openAuthorProfile}
             onEditPost={handleEditPost}
             onDeletePost={handleDeletePost}
+            onRepost={handleRepost}
+            onUndoRepost={handleUndoRepost}
+            onQuote={handleQuotePost}
             allUsers={allUsers && allUsers.length > 0 ? allUsers : getStoredUsers()}
             allFollows={allFollows}
           />
@@ -2912,10 +3367,11 @@ export const App: React.FC = () => {
         modalStack.map((item, idx) => {
           const stackZIndex = 70 + idx * 10;
           if (item.type === 'postDetail') {
+            const currentPost = posts.find((p) => p.id === item.post.id) || item.post;
             return (
               <PostDetailModal
                 key={`modal_post_${item.post.id}_${idx}`}
-                post={item.post}
+                post={currentPost}
                 comments={(comments || []).filter((c) => c && c.postId === item.post.id)}
                 userProfile={userProfile}
                 zIndex={stackZIndex}
@@ -2930,6 +3386,10 @@ export const App: React.FC = () => {
                 onEditPost={handleEditPost}
                 onDeleteComment={handleDeleteComment}
                 onVotePoll={handleVotePoll}
+                onRepost={handleRepost}
+                onUndoRepost={handleUndoRepost}
+                onQuote={handleQuotePost}
+                onSelectPost={openPostDetail}
                 onAuthorClick={(author) => {
                   const dummyPost: Post = {
                     id: `author_${author.nickname}`,
@@ -2982,6 +3442,9 @@ export const App: React.FC = () => {
                 onAuthorClick={openAuthorProfile}
                 onCommentClick={openPostDetail}
                 onToggleFollow={handleToggleFollow}
+                onRepost={handleRepost}
+                onUndoRepost={handleUndoRepost}
+                onQuote={handleQuotePost}
                 onStartChat={(recipientNickname, avatarKey, avatarUrl) => {
                   handleStartChat(recipientNickname, avatarKey, avatarUrl);
                 }}
@@ -3049,6 +3512,9 @@ export const App: React.FC = () => {
                       onEditPost={handleEditPost}
                       onDeleteComment={handleDeleteComment}
                       onToggleFollow={handleToggleFollow}
+                      onRepost={handleRepost}
+                      onUndoRepost={handleUndoRepost}
+                      onQuote={handleQuotePost}
                       onUpdatePrivacySettings={handleUpdatePrivacySettings}
                       onClose={closeModalUI}
                     />
@@ -3161,6 +3627,9 @@ export const App: React.FC = () => {
                     onEditPost={handleEditPost}
                     onDeleteComment={handleDeleteComment}
                     onToggleFollow={handleToggleFollow}
+                    onRepost={handleRepost}
+                    onUndoRepost={handleUndoRepost}
+                    onQuote={handleQuotePost}
                     onUpdatePrivacySettings={handleUpdatePrivacySettings}
                     onClose={closeModalUI}
                   />
@@ -3193,6 +3662,9 @@ export const App: React.FC = () => {
               onAuthorClick={openAuthorProfile}
               onCommentClick={openPostDetail}
               onToggleFollow={handleToggleFollow}
+              onRepost={handleRepost}
+              onUndoRepost={handleUndoRepost}
+              onQuote={handleQuotePost}
               onStartChat={(recipientNickname, avatarKey, avatarUrl) => {
                 handleStartChat(recipientNickname, avatarKey, avatarUrl);
               }}
@@ -3250,6 +3722,10 @@ export const App: React.FC = () => {
               onEditPost={handleEditPost}
               onDeleteComment={handleDeleteComment}
               onVotePoll={handleVotePoll}
+              onRepost={handleRepost}
+              onUndoRepost={handleUndoRepost}
+              onQuote={handleQuotePost}
+              onSelectPost={openPostDetail}
               onAuthorClick={(author) => {
                 const dummyPost: Post = {
                   id: `author_${author.nickname}`,

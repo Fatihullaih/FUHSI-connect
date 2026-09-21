@@ -52,6 +52,10 @@ interface AuthorProfileModalProps {
   onEditPost?: (postId: string, newContent: string) => void;
   onStartChat?: (recipientNickname: string, recipientAvatarKey?: string, recipientAvatarUrl?: string) => void;
   onToggleFollow?: (targetNickname: string) => void;
+  onRepost?: (post: Post) => void;
+  onUndoRepost?: (post: Post) => void;
+  onQuote?: (post: Post, caption: string) => void;
+  onSelectPost?: (post: Post) => void;
 }
 
 export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => {
@@ -81,6 +85,10 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     onEditPost,
     onStartChat,
     onToggleFollow,
+    onRepost,
+    onUndoRepost,
+    onQuote,
+    onSelectPost,
   } = props;
 
   const [activeTab, setActiveTab] = useState<'threads' | 'replies'>('threads');
@@ -185,7 +193,11 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
           .toLowerCase()
           .replace(/^@/, '')
           .trim();
-        return nick === normAuthor;
+        const reposter = (p.reposterNickname || '')
+          .toLowerCase()
+          .replace(/^@/, '')
+          .trim();
+        return nick === normAuthor || (p.isRepost && reposter === normAuthor);
       })
       .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
   }, [effectivePosts, normAuthor]);
@@ -530,6 +542,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                   key={post.id}
                   post={post}
                   comments={(allComments || []).filter((c) => c && c.postId === post.id)}
+                  allComments={allComments}
                   currentUserNickname={currentUserNickname}
                   userProfile={userProfile}
                   onLikeClick={onLikeClick}
@@ -540,6 +553,10 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                   onAuthorClick={onAuthorClick}
                   onDeletePost={onDeletePost}
                   onEditPost={onEditPost}
+                  onRepost={onRepost}
+                  onUndoRepost={onUndoRepost}
+                  onQuote={onQuote}
+                  onSelectPost={onSelectPost}
                 />
               ))
             )

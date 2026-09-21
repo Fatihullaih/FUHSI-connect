@@ -104,6 +104,10 @@ interface ProfileScreenProps {
   onLogout?: () => void;
   onDeleteAccount?: () => Promise<void> | void;
   onClose?: () => void;
+  onRepost?: (post: Post) => void;
+  onUndoRepost?: (post: Post) => void;
+  onQuote?: (post: Post, caption: string) => void;
+  onSelectPost?: (post: Post) => void;
 }
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
@@ -128,6 +132,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onLogout,
   onDeleteAccount,
   onClose,
+  onRepost,
+  onUndoRepost,
+  onQuote,
+  onSelectPost,
 }) => {
   const isOwnProfile = Boolean(userProfile);
   const isGuest = isGuestAccount(userProfile);
@@ -363,7 +371,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     .filter((p) => {
       if (!p) return false;
       const author = normalizeHandle(p.authorNickname || p.nickname || (p as any).customNickname || '');
-      return normMyNick && author === normMyNick;
+      const reposter = normalizeHandle(p.reposterNickname || '');
+      return (normMyNick && author === normMyNick) || (p.isRepost && reposter === normMyNick);
     })
     .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
 
@@ -2091,6 +2100,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       key={post.id}
                       post={post}
                       comments={allComments.filter((c) => c.postId === post.id)}
+                      allComments={allComments}
                       currentUserNickname={myNickname}
                       userProfile={userProfile}
                       onLikeClick={onLikeClick}
@@ -2099,6 +2109,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       onAuthorClick={onAuthorClick}
                       onDeletePost={onDeletePost}
                       onEditPost={onEditPost}
+                      onRepost={onRepost}
+                      onUndoRepost={onUndoRepost}
+                      onQuote={onQuote}
+                      onSelectPost={onSelectPost}
                     />
                   ))}
                 </div>
@@ -2237,6 +2251,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       key={post.id}
                       post={post}
                       comments={allComments.filter((c) => c.postId === post.id)}
+                      allComments={allComments}
                       currentUserNickname={myNickname}
                       userProfile={userProfile}
                       onLikeClick={onLikeClick}
@@ -2245,6 +2260,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       onAuthorClick={onAuthorClick}
                       onDeletePost={onDeletePost}
                       onEditPost={onEditPost}
+                      onRepost={onRepost}
+                      onUndoRepost={onUndoRepost}
+                      onQuote={onQuote}
+                      onSelectPost={onSelectPost}
                     />
                   ))}
                 </div>

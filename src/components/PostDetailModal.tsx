@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { X, ArrowLeft, MessageSquare, Heart, Bookmark, Send, CornerDownRight, Maximize2, Trash2, AlertTriangle, BarChart2, Check, Image as ImageIcon, Edit3, Lock, ShieldCheck, Clock } from 'lucide-react';
+import { X, ArrowLeft, MessageSquare, Heart, Bookmark, Send, CornerDownRight, Maximize2, Trash2, AlertTriangle, BarChart2, Check, Image as ImageIcon, Edit3, Lock, ShieldCheck, Clock, Repeat } from 'lucide-react';
 import { Post, Comment, UserProfile, PollOption } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
@@ -10,6 +10,8 @@ import { compressImageFile } from '../utils/imageUtils';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
 import { findUserByNickname, isGuestAccount } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
+import { ShareRepostModal } from './ShareRepostModal';
+import { normalizeHandle } from '../utils/followUtils';
 
 interface PostDetailModalProps {
   post: Post;
@@ -26,6 +28,10 @@ interface PostDetailModalProps {
   onDeleteComment?: (commentId: string) => void;
   onVotePoll?: (post: Post, optionId: string) => void;
   onAuthorClick?: (author: { nickname: string; avatarKey?: string; avatarUrl?: string; badgeType?: string; badgeTitle?: string }) => void;
+  onRepost?: (post: Post) => void;
+  onUndoRepost?: (post: Post) => void;
+  onQuote?: (post: Post, caption: string) => void;
+  onSelectPost?: (post: Post) => void;
 }
 
 export const PostDetailModal: React.FC<PostDetailModalProps> = ({
@@ -43,6 +49,10 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   onDeleteComment,
   onVotePoll,
   onAuthorClick,
+  onRepost,
+  onUndoRepost,
+  onQuote,
+  onSelectPost,
 }) => {
   if (!post) return null;
 
@@ -56,6 +66,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   const [editedContent, setEditedContent] = useState(post?.content || (post as any)?.text || '');
   const [showEditLockModal, setShowEditLockModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
 
   useEffect(() => {
     setEditedContent(post?.content || (post as any)?.text || '');
@@ -73,6 +84,23 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   const isVerifiedUser = useMemo(() => {
     return checkIsUserVerified(post?.authorNickname || userProfile?.nickname, userProfile);
   }, [post?.authorNickname, userProfile]);
+
+  const isRepostedByMe = useMemo(() => {
+    const userNick = (userProfile?.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    if (!userNick) return false;
+    const list = Array.isArray(post?.repostedBy) ? post.repostedBy : [];
+    return list.some((nick) => nick.toLowerCase().replace(/^@/, '').trim() === userNick);
+  }, [post?.repostedBy, userProfile?.nickname]);
+
+  const effectiveRepostsCount = useMemo(() => {
+    if (post?.repostsCount !== undefined && post?.repostsCount !== null) {
+      return post.repostsCount;
+    }
+    if (Array.isArray(post?.repostedBy)) {
+      return post.repostedBy.length;
+    }
+    return post?.shareCount || 0;
+  }, [post?.repostsCount, post?.repostedBy, post?.shareCount]);
 
   React.useEffect(() => {
     const handlePopState = () => {
@@ -366,6 +394,17 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
             return (
               <div className="p-4 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-3 shadow-2xs">
+                {/* Repost Header Indicator */}
+                {post.isRepost && (
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500 font-bold pb-2 border-b border-slate-200">
+                    <Repeat size={14} className="text-emerald-600 shrink-0" />
+                    <span>
+                      {isRepostedByMe || (userProfile?.nickname && normalizeHandle(post.reposterNickname || '') === normalizeHandle(userProfile.nickname))
+                        ? 'You reposted'
+                        : `${post.reposterNickname || 'A student'} reposted`}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-2">
                   <div 
                     onClick={() => onAuthorClick?.({
@@ -639,6 +678,39 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               })()
             )}
 
+            {/* Embedded Quoted Post Card */}
+            {post.isQuote && post.quotedPost && (
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onSelectPost) onSelectPost(post.quotedPost!);
+                }}
+                className="p-3.5 rounded-2xl border border-slate-200/90 bg-white hover:bg-slate-50 transition-colors cursor-pointer space-y-2 mt-2"
+              >
+                <div className="flex items-center gap-2">
+                  <AvatarIcon
+                    avatarKey={post.quotedPost.authorAvatarKey}
+                    avatarUrl={post.quotedPost.authorAvatarUrl}
+                    sizeClassName="w-5 h-5 rounded-full"
+                  />
+                  <span className="font-bold text-xs text-slate-900">
+                    {post.quotedPost.authorNickname}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {post.quotedPost.timeAgo || formatRelativeTime(post.quotedPost.timestamp)}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
+                  {post.quotedPost.content || (post.quotedPost as any).text}
+                </p>
+                {post.quotedPost.imageUrl && (
+                  <div className="h-32 w-full rounded-xl overflow-hidden border border-slate-200 mt-2">
+                    <img src={post.quotedPost.imageUrl} alt="Quoted attachment" className="w-full h-full object-cover" />
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Interaction Bar */}
             <div className="flex items-center justify-between pt-2 border-t border-slate-200/80 text-xs font-extrabold text-slate-600">
               <div className="flex items-center gap-4">
@@ -661,8 +733,23 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
                 <div className="flex items-center gap-1.5 text-teal-800">
                   <MessageSquare className="w-4 h-4 text-teal-600" />
-                  <span>{comments.length} Comments</span>
+                  <span>{topLevelComments.length} {topLevelComments.length === 1 ? 'Comment' : 'Comments'}</span>
                 </div>
+
+                <button
+                  id={`btn-detail-share-${post.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowShareModal(true);
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl transition-colors cursor-pointer ${
+                    isRepostedByMe ? 'text-emerald-700 font-black bg-emerald-50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                  title="Repost, Quote, or Share thread"
+                >
+                  <Repeat className="w-4 h-4" />
+                  <span>{effectiveRepostsCount > 0 ? `${effectiveRepostsCount} Repost${effectiveRepostsCount === 1 ? '' : 's'}` : 'Share'}</span>
+                </button>
               </div>
 
               <button
@@ -682,7 +769,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           <div className="space-y-3 pt-1">
             <h3 className="font-extrabold text-slate-900 text-xs uppercase tracking-wider flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-teal-700" />
-              Replies & Student Discussion ({comments.length})
+              Student Discussion ({topLevelComments.length})
             </h3>
 
             {topLevelComments.length === 0 ? (
@@ -833,6 +920,26 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           userProfile={userProfile}
           onClose={() => setShowVerificationModal(false)}
           onSubmitVerification={() => setShowVerificationModal(false)}
+        />
+      )}
+
+      {showShareModal && (
+        <ShareRepostModal
+          post={post}
+          currentUser={userProfile}
+          isOpen={showShareModal}
+          onClose={() => setShowShareModal(false)}
+          onRepost={(target) => {
+            if (onRepost) onRepost(target);
+          }}
+          onUndoRepost={(target) => {
+            if (onUndoRepost) onUndoRepost(target);
+          }}
+          onQuote={(target, caption) => {
+            if (onQuote) onQuote(target, caption);
+          }}
+          isRepostedByMe={isRepostedByMe}
+          repostsCount={effectiveRepostsCount}
         />
       )}
     </div>

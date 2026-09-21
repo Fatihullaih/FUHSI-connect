@@ -8,6 +8,7 @@ export const REPUTATION_RULES = {
   RECEIVE_LIKE: 1,
   RECEIVE_COMMENT: 1,
   RECEIVE_REPOST: 1,
+  PERFORM_REPOST: 1,
   SPAM_PENALTY: 20,
   OFFENSIVE_PENALTY: 20,
   MULTIPLE_REPORTS_PENALTY: 20,
@@ -94,14 +95,14 @@ export const calculateUserPoints = (
     points += likesFromOthers * REPUTATION_RULES.RECEIVE_LIKE;
   });
 
-  // 4. Receive a comment on a thread (+1 per comment from OTHER users)
-  // Anti-abuse: Commenting on your own post earns 0 points
+  // 4. Receive a comment on a thread (+1 per active top-level comment from OTHER users)
+  // Anti-abuse: Commenting on your own post earns 0 points. Nested replies do NOT count toward main thread comments.
   myPosts.forEach((p) => {
     let otherCommentsCount = 0;
 
-    // From top-level comments
+    // Only active top-level comments from other users
     (allComments || []).forEach((c) => {
-      if (c.postId === p.id) {
+      if (c && c.postId === p.id && !c.parentId) {
         const commentAuthor = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
         if (commentAuthor && commentAuthor !== normTarget) {
           otherCommentsCount++;
@@ -109,28 +110,48 @@ export const calculateUserPoints = (
       }
     });
 
-    // From embedded post comments
-    if ((p as any).comments && Array.isArray((p as any).comments)) {
-      (p as any).comments.forEach((c: Comment) => {
-        const commentAuthor = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-        if (commentAuthor && commentAuthor !== normTarget) {
-          const existsInAll = (allComments || []).some((item) => item.id === c.id);
-          if (!existsInAll) {
-            otherCommentsCount++;
-          }
-        }
-      });
-    }
-
     points += otherCommentsCount * REPUTATION_RULES.RECEIVE_COMMENT;
   });
 
   // 5. Receive a repost/quote of a thread (+1 per repost/quote from OTHER users)
   // Anti-abuse: Reposting/quoting your own post earns 0 points
   myPosts.forEach((p) => {
-    const repostsCount = p.shareCount || 0;
-    points += repostsCount * REPUTATION_RULES.RECEIVE_REPOST;
+    let count = 0;
+    if (Array.isArray(p.repostedBy) && p.repostedBy.length > 0) {
+      const uniqueOthers = new Set(
+        p.repostedBy
+          .map((k) => (k || '').toLowerCase().replace(/^@/, '').trim())
+          .filter((k) => k && k !== normTarget)
+      );
+      count = uniqueOthers.size;
+    } else {
+      count = p.repostsCount ?? p.shareCount ?? 0;
+    }
+    points += count * REPUTATION_RULES.RECEIVE_REPOST;
   });
+
+  // 5b. Reposting/sharing another peer's thread (+1 per unique peer post reposted)
+  // Anti-abuse: Self-reposting yields 0 points. Repeated undo/repost does not duplicate points.
+  const uniquePeerPostsReposted = new Set<string>();
+  (allPosts || []).forEach((p) => {
+    if (!p) return;
+    const authorNorm = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    if (authorNorm === normTarget) return; // Cannot earn points for reposting own post
+
+    // Check if user is in repostedBy
+    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => {
+      return (k || '').toLowerCase().replace(/^@/, '').trim() === normTarget;
+    });
+
+    // Or if this is a repost post created by target user referencing this peer post
+    const isMyRepostItem = p.isRepost && (p.reposterNickname || p.authorNickname || '')
+      .toLowerCase().replace(/^@/, '').trim() === normTarget;
+
+    if (inRepostedBy || (isMyRepostItem && p.repostedPostId)) {
+      uniquePeerPostsReposted.add(p.repostedPostId || p.id);
+    }
+  });
+  points += uniquePeerPostsReposted.size * REPUTATION_RULES.PERFORM_REPOST;
 
   // 6. Penalties:
   // - Spam (-20)
@@ -227,33 +248,49 @@ export const getUserPointsBreakdown = (
   let totalCommentsFromOthers = 0;
   myPosts.forEach((p) => {
     (allComments || []).forEach((c) => {
-      if (c.postId === p.id) {
+      if (c && c.postId === p.id && !c.parentId) {
         const commentAuthor = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
         if (commentAuthor && commentAuthor !== normTarget) {
           totalCommentsFromOthers++;
         }
       }
     });
-
-    if ((p as any).comments && Array.isArray((p as any).comments)) {
-      (p as any).comments.forEach((c: Comment) => {
-        const commentAuthor = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-        if (commentAuthor && commentAuthor !== normTarget) {
-          const existsInAll = (allComments || []).some((item) => item.id === c.id);
-          if (!existsInAll) {
-            totalCommentsFromOthers++;
-          }
-        }
-      });
-    }
   });
   const commentPts = totalCommentsFromOthers * REPUTATION_RULES.RECEIVE_COMMENT;
 
-  let totalReposts = 0;
+  let totalRepostsReceived = 0;
   myPosts.forEach((p) => {
-    totalReposts += p.shareCount || 0;
+    if (Array.isArray(p.repostedBy) && p.repostedBy.length > 0) {
+      const uniqueOthers = new Set(
+        p.repostedBy
+          .map((k) => (k || '').toLowerCase().replace(/^@/, '').trim())
+          .filter((k) => k && k !== normTarget)
+      );
+      totalRepostsReceived += uniqueOthers.size;
+    } else {
+      totalRepostsReceived += p.repostsCount ?? p.shareCount ?? 0;
+    }
   });
-  const repostPts = totalReposts * REPUTATION_RULES.RECEIVE_REPOST;
+  const repostReceivedPts = totalRepostsReceived * REPUTATION_RULES.RECEIVE_REPOST;
+
+  const uniquePeerPostsReposted = new Set<string>();
+  (allPosts || []).forEach((p) => {
+    if (!p) return;
+    const authorNorm = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    if (authorNorm === normTarget) return;
+
+    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => {
+      return (k || '').toLowerCase().replace(/^@/, '').trim() === normTarget;
+    });
+    const isMyRepostItem = p.isRepost && (p.reposterNickname || p.authorNickname || '')
+      .toLowerCase().replace(/^@/, '').trim() === normTarget;
+
+    if (inRepostedBy || (isMyRepostItem && p.repostedPostId)) {
+      uniquePeerPostsReposted.add(p.repostedPostId || p.id);
+    }
+  });
+  const repostMadeCount = uniquePeerPostsReposted.size;
+  const repostMadePts = repostMadeCount * REPUTATION_RULES.PERFORM_REPOST;
 
   let spamPenalties = 0;
   let offensivePenalties = 0;
@@ -276,7 +313,7 @@ export const getUserPointsBreakdown = (
     reportPenalties = REPUTATION_RULES.MULTIPLE_REPORTS_PENALTY;
   }
 
-  let total = profilePts + postPts + likePts + commentPts + repostPts - spamPenalties - offensivePenalties - reportPenalties;
+  let total = profilePts + postPts + likePts + commentPts + repostReceivedPts + repostMadePts - spamPenalties - offensivePenalties - reportPenalties;
 
   return {
     profileCompletion: profilePts,
@@ -286,8 +323,10 @@ export const getUserPointsBreakdown = (
     likesCount: totalLikesFromOthers,
     commentsReceived: commentPts,
     commentsCount: totalCommentsFromOthers,
-    repostsReceived: repostPts,
-    repostsCount: totalReposts,
+    repostsReceived: repostReceivedPts,
+    repostsCount: totalRepostsReceived,
+    repostsMade: repostMadePts,
+    repostsMadeCount: repostMadeCount,
     spamPenalties,
     offensivePenalties,
     reportPenalties,
@@ -446,8 +485,10 @@ export function calculateWeeklyUserPoints(
     }
   });
 
-  // 4. Comments received this week on user's posts from other users (+1 per comment)
+  // 4. Comments received this week on user's posts from other users (+1 per active top-level comment)
+  // Replies do NOT count toward main post comment points
   (allComments || []).forEach((c) => {
+    if (!c || c.parentId) return;
     const commentTime = parseItemTimestamp(c);
     if (commentTime >= startMs && commentTime <= endMs) {
       const targetPost = myPosts.find((p) => p.id === c.postId);
@@ -460,14 +501,45 @@ export function calculateWeeklyUserPoints(
     }
   });
 
-  // 5. Reposts/shares on this week's posts
+  // 5. Reposts/shares on this week's posts received from other users (+1)
   myPosts.forEach((p) => {
     const postTime = parseItemTimestamp(p);
     if (postTime >= startMs && postTime <= endMs) {
-      const shares = p.shareCount || 0;
-      points += shares * REPUTATION_RULES.RECEIVE_REPOST;
+      let count = 0;
+      if (Array.isArray(p.repostedBy) && p.repostedBy.length > 0) {
+        const uniqueOthers = new Set(
+          p.repostedBy
+            .map((k) => (k || '').toLowerCase().replace(/^@/, '').trim())
+            .filter((k) => k && k !== normTarget)
+        );
+        count = uniqueOthers.size;
+      } else {
+        count = p.repostsCount ?? p.shareCount ?? 0;
+      }
+      points += count * REPUTATION_RULES.RECEIVE_REPOST;
     }
   });
+
+  // 5b. Reposts performed by this user on peer posts during this week (+1)
+  const weeklyPeerPostsReposted = new Set<string>();
+  (allPosts || []).forEach((p) => {
+    if (!p) return;
+    const authorNorm = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    if (authorNorm === normTarget) return;
+
+    const postTime = parseItemTimestamp(p);
+    const isThisWeek = postTime >= startMs && postTime <= endMs;
+    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => {
+      return (k || '').toLowerCase().replace(/^@/, '').trim() === normTarget;
+    });
+    const isMyRepostItem = p.isRepost && (p.reposterNickname || p.authorNickname || '')
+      .toLowerCase().replace(/^@/, '').trim() === normTarget;
+
+    if ((inRepostedBy || isMyRepostItem) && isThisWeek) {
+      weeklyPeerPostsReposted.add(p.repostedPostId || p.id);
+    }
+  });
+  points += weeklyPeerPostsReposted.size * REPUTATION_RULES.PERFORM_REPOST;
 
   // 6. Penalties for violations occurring this week
   myPosts.forEach((p) => {
@@ -679,11 +751,25 @@ export interface TrendingPostItem {
  * - Real central platform data only (no demo posts, no removed/quarantined posts).
  * - Maximum of 5 posts.
  * - Dynamic ranking based on actual engagement generated on each post.
+ * - Comments = number of active top-level comments (replies excluded).
  */
 export function calculateTopTrendingPosts(
   allPosts: Post[] = [],
-  limit = 5
+  allCommentsOrLimit?: Comment[] | number,
+  limitArg?: number
 ): TrendingPostItem[] {
+  let allComments: Comment[] | null = null;
+  let limit = 5;
+
+  if (Array.isArray(allCommentsOrLimit)) {
+    allComments = allCommentsOrLimit;
+    if (typeof limitArg === 'number') {
+      limit = limitArg;
+    }
+  } else if (typeof allCommentsOrLimit === 'number') {
+    limit = allCommentsOrLimit;
+  }
+
   const validPosts = (allPosts || []).filter((p) => {
     if (!p) return false;
     if (p.status === 'Removed' || p.isQuarantined) return false;
@@ -693,8 +779,10 @@ export function calculateTopTrendingPosts(
 
   const scoredPosts = validPosts.map((p) => {
     const likes = p.likesCount ?? (Array.isArray(p.likedBy) ? p.likedBy.length : 0);
-    const comments = p.commentsCount ?? 0;
-    const shares = p.shareCount ?? 0;
+    const comments = Array.isArray(allComments)
+      ? allComments.filter((c) => c && c.postId === p.id && !c.parentId).length
+      : (p.commentsCount ?? 0);
+    const shares = p.repostsCount ?? (Array.isArray(p.repostedBy) ? p.repostedBy.length : (p.shareCount ?? 0));
     // Comments and shares indicate deeper engagement, weighted slightly higher
     const totalEngagement = likes * 1 + comments * 2 + shares * 2;
 

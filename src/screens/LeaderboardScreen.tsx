@@ -54,8 +54,6 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
 }) => {
   // Main two sections only: Weekly Campus Ranking & Department Standing
   const [activeMainSection, setActiveMainSection] = useState<'weekly' | 'departments'>('weekly');
-  // Under Weekly Campus Ranking: Top 10 Most Engaging & Top 5 Trending Posts
-  const [weeklySubTab, setWeeklySubTab] = useState<'engaging' | 'trending'>('engaging');
 
   const currentUser = userProfile || user || INITIAL_USER_PROFILE;
 
@@ -237,38 +235,17 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* SECTION 1: WEEKLY CAMPUS RANKING (Top 10 Engaging + Top 5 Trending Posts) */}
+      {/* SECTION 1: WEEKLY CAMPUS RANKING (Top 10 Most Engaging)                   */}
       {/* ========================================================================= */}
       {activeMainSection === 'weekly' && (
         <div className="space-y-6">
-          {/* Sub-navigation pill toggle: Top 10 Most Engaging vs Top 5 Trending Posts */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-              <button
-                id="btn-sub-engaging"
-                onClick={() => setWeeklySubTab('engaging')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                  weeklySubTab === 'engaging'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Flame size={14} />
-                <span>🔥 Top 10 Most Engaging</span>
-              </button>
-
-              <button
-                id="btn-sub-trending"
-                onClick={() => setWeeklySubTab('trending')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                  weeklySubTab === 'trending'
-                    ? 'bg-purple-700 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <TrendingUp size={14} />
-                <span>🔥 Top 5 Trending Posts</span>
-              </button>
+          {/* Weekly Period & Live Status Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+            <div className="flex items-center gap-2">
+              <Flame size={18} className="text-amber-600" />
+              <h3 className="text-xs sm:text-sm font-extrabold text-slate-900">
+                Top 10 Most Engaging
+              </h3>
             </div>
 
             {/* Weekly Reset Status Indicator */}
@@ -287,9 +264,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
             🔒 Privacy Guarantee: Campus rankings display verified student handles/nicknames. Real names remain strictly confidential.
           </p>
 
-          {/* SUB-VIEW 1: TOP 10 MOST ENGAGING */}
-          {weeklySubTab === 'engaging' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Leaderboard Table / Cards */}
               <div className="lg:col-span-2 space-y-3">
                 <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
@@ -457,174 +432,10 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
                     </div>
                   </div>
                 </div>
-
-                {/* Point Earning Rules Explainer */}
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs space-y-2">
-                  <span className="font-bold text-slate-900 block">How Weekly Points Are Earned:</span>
-                  <ul className="space-y-1 text-slate-600 text-[11px]">
-                    <li className="flex items-center justify-between">
-                      <span>📝 Create a thread</span>
-                      <strong className="text-emerald-700">+2 pts</strong>
-                    </li>
-                    <li className="flex items-center justify-between">
-                      <span>👍 Receive like from peer</span>
-                      <strong className="text-emerald-700">+1 pt</strong>
-                    </li>
-                    <li className="flex items-center justify-between">
-                      <span>💬 Receive comment from peer</span>
-                      <strong className="text-emerald-700">+1 pt</strong>
-                    </li>
-                    <li className="flex items-center justify-between">
-                      <span>🔄 Receive thread repost</span>
-                      <strong className="text-emerald-700">+1 pt</strong>
-                    </li>
-                    <li className="flex items-center justify-between">
-                      <span>👤 Complete profile</span>
-                      <strong className="text-blue-700">+20 pts</strong>
-                    </li>
-                  </ul>
-                  <p className="text-[10px] text-slate-500 pt-1 border-t border-slate-200">
-                    Self-likes and self-comments earn 0 points. Weekly rankings reset automatically each Sunday at 00:00.
-                  </p>
-                </div>
               </div>
             </div>
-          )}
 
-          {/* SUB-VIEW 2: TOP 5 TRENDING POSTS */}
-          {weeklySubTab === 'trending' && (
-            <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <div>
-                  <h2 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                    <TrendingUp size={20} className="text-purple-600" />
-                    <span>🔥 Top 5 Trending Posts</span>
-                  </h2>
-                  <p className="text-[11px] text-slate-500 font-medium">
-                    Calculated dynamically from real engagement (likes, comments, and shares) generated on each post.
-                  </p>
-                </div>
-                <span className="text-[11px] font-bold text-purple-800 bg-purple-50 px-2.5 py-1 rounded-full border border-purple-200 shrink-0">
-                  Top 5 Active
-                </span>
-              </div>
 
-              {top5TrendingPosts.length === 0 ? (
-                <div className="py-12 text-center text-xs text-slate-500 font-medium">
-                  No active campus feed discussions found.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {top5TrendingPosts.map((item) => {
-                    const post = item.post;
-                    const authorNick = post.authorNickname || post.nickname || '@FUHSI_Student';
-                    const bInfo = getUserBadgeInfo(authorNick);
-                    const category = post.category || post.categoryTag || 'Campus Discussion';
-                    const textSnippet = post.content || post.text || 'Campus discussion update';
-
-                    return (
-                      <div
-                        key={post.id || item.rank}
-                        className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:border-purple-300 hover:shadow-xs transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                      >
-                        <div className="flex items-start gap-3 min-w-0 flex-1">
-                          {/* Rank */}
-                          <span
-                            className={`w-7 h-7 rounded-lg font-black text-xs flex items-center justify-center shrink-0 mt-0.5 ${
-                              item.rank === 1
-                                ? 'bg-purple-700 text-white shadow-2xs'
-                                : item.rank === 2
-                                ? 'bg-purple-200 text-purple-900'
-                                : item.rank === 3
-                                ? 'bg-purple-100 text-purple-800'
-                                : 'bg-slate-200 text-slate-700'
-                            }`}
-                          >
-                            #{item.rank}
-                          </span>
-
-                          <div className="min-w-0 flex-1 space-y-1">
-                            {/* Author & Category */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <button
-                                onClick={() => {
-                                  if (onAuthorClick) {
-                                    onAuthorClick({
-                                      id: post.id,
-                                      authorNickname: authorNick,
-                                      timeAgo: post.timeAgo || 'Trending',
-                                      categoryTag: category,
-                                      text: textSnippet,
-                                      likesCount: item.likesCount,
-                                      commentsCount: item.commentsCount,
-                                      createdAt: post.createdAt,
-                                    });
-                                  }
-                                }}
-                                className="font-extrabold text-slate-900 hover:text-purple-700 text-xs hover:underline cursor-pointer"
-                              >
-                                {authorNick}
-                              </button>
-
-                              <VerificationBadge
-                                isVerified={bInfo.isVerified}
-                                badgeType={bInfo.badgeType}
-                                title={bInfo.badgeTitle}
-                              />
-
-                              <span className="text-[10px] font-bold bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md">
-                                {category}
-                              </span>
-                            </div>
-
-                            {/* Snippet / Link to open */}
-                            <button
-                              onClick={() => {
-                                if (onSelectPost) {
-                                  onSelectPost(post);
-                                }
-                              }}
-                              className="text-xs text-slate-800 font-medium line-clamp-2 hover:text-purple-800 cursor-pointer text-left block"
-                            >
-                              {textSnippet}
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Engagement Stats Pill */}
-                        <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
-                          <div className="flex items-center gap-3 text-xs text-slate-600 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-2xs">
-                            <span className="flex items-center gap-1 font-bold text-amber-700">
-                              <ThumbsUp size={13} />
-                              {item.likesCount}
-                            </span>
-                            <span className="flex items-center gap-1 font-bold text-teal-700">
-                              <MessageSquare size={13} />
-                              {item.commentsCount}
-                            </span>
-                            <span className="flex items-center gap-1 font-bold text-purple-700">
-                              <Share2 size={13} />
-                              {item.sharesCount}
-                            </span>
-                          </div>
-
-                          {onSelectPost && (
-                            <button
-                              onClick={() => onSelectPost(post)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-purple-700 hover:bg-purple-50 transition-colors cursor-pointer"
-                              title="View Discussion"
-                            >
-                              <ChevronRight size={16} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 

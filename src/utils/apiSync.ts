@@ -193,6 +193,20 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
         ? mergedLikedBy.length
         : (primary.likesCount !== undefined ? primary.likesCount : (secondary.likesCount ?? 0));
 
+      // Handle repostedBy list
+      let mergedRepostedBy: string[] = [];
+      if (Array.isArray(primary.repostedBy) && (primary.repostedBy.length > 0 || isPNewer)) {
+        mergedRepostedBy = primary.repostedBy;
+      } else if (Array.isArray(secondary.repostedBy)) {
+        mergedRepostedBy = secondary.repostedBy;
+      }
+
+      const repostsCount = mergedRepostedBy.length > 0
+        ? mergedRepostedBy.length
+        : (primary.repostsCount !== undefined
+            ? primary.repostsCount
+            : (secondary.repostsCount ?? primary.shareCount ?? secondary.shareCount ?? 0));
+
       const bookmarks = Math.max(existing.bookmarks || 0, p.bookmarks || 0);
       const commentsCount = Math.max(existing.commentsCount || 0, p.commentsCount || 0);
 
@@ -202,6 +216,9 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
         likedBy: mergedLikedBy,
         likes: likesCount,
         likesCount,
+        repostedBy: mergedRepostedBy,
+        repostsCount,
+        shareCount: repostsCount,
         bookmarks,
         commentsCount,
       });

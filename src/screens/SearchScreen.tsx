@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Post, MarketplaceItem, UserProfile, FollowRecord } from '../types';
+import { Post, MarketplaceItem, UserProfile, FollowRecord, Comment } from '../types';
 import { PostCard } from '../components/PostCard';
 import { AuthorProfileModal } from '../components/AuthorProfileModal';
 import { AvatarIcon } from '../components/AvatarIcon';
@@ -32,6 +32,7 @@ interface SearchScreenProps {
   userProfile: UserProfile;
   posts: Post[];
   marketplaceItems: MarketplaceItem[];
+  allComments?: Comment[];
   currentUserNickname?: string;
   onSelectPost: (post: Post) => void;
   onLikeClick: (post: Post) => void;
@@ -40,6 +41,9 @@ interface SearchScreenProps {
   onAuthorClick?: (post: Post) => void;
   onEditPost?: (postId: string, newContent: string) => void;
   onDeletePost?: (postId: string) => void;
+  onRepost?: (post: Post) => void;
+  onUndoRepost?: (post: Post) => void;
+  onQuote?: (post: Post, caption: string) => void;
   allUsers?: UserProfile[];
   allFollows?: FollowRecord[];
 }
@@ -96,6 +100,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   userProfile,
   posts,
   marketplaceItems,
+  allComments,
   currentUserNickname,
   onSelectPost,
   onLikeClick,
@@ -104,6 +109,9 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   onAuthorClick,
   onEditPost,
   onDeletePost,
+  onRepost,
+  onUndoRepost,
+  onQuote,
   allUsers = [],
   allFollows = [],
 }) => {
@@ -566,6 +574,8 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                 <PostCard
                   key={post.id || `search_post_${idx}`}
                   post={post}
+                  comments={allComments ? allComments.filter((c) => c && c.postId === post.id) : []}
+                  allComments={allComments}
                   userProfile={userProfile}
                   currentUserNickname={currentUserNickname || userProfile?.nickname}
                   onLikeClick={() => onLikeClick(post)}
@@ -574,6 +584,10 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                   onAuthorClick={onAuthorClick}
                   onEditPost={onEditPost}
                   onDeletePost={onDeletePost}
+                  onRepost={onRepost}
+                  onUndoRepost={onUndoRepost}
+                  onQuote={onQuote}
+                  onSelectPost={onSelectPost}
                 />
               ))}
 

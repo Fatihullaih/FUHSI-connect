@@ -18,6 +18,7 @@ interface FeedScreenProps {
   userProfile?: UserProfile | null;
   user?: UserProfile | null;
   posts: Post[];
+  allComments?: Comment[];
   allFollows?: FollowRecord[];
   selectedFilter?: string;
   onFilterSelect?: (filter: string) => void;
@@ -30,6 +31,10 @@ interface FeedScreenProps {
   onReportPost?: (post: Post, reason: string) => void;
   onAuthorClick?: (post: Post) => void;
   onCreatePostClick?: () => void;
+  onRepost?: (post: Post) => void;
+  onUndoRepost?: (post: Post) => void;
+  onQuote?: (post: Post, caption: string) => void;
+  onSelectPost?: (post: Post) => void;
 
   // Legacy / alternative props compatibility
   comments?: Record<string, Comment[]>;
@@ -44,6 +49,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   userProfile,
   user,
   posts = [],
+  allComments,
   allFollows = [],
   onLikeClick,
   onBookmarkClick,
@@ -54,6 +60,10 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   onReportPost,
   onAuthorClick,
   onCreatePostClick,
+  onRepost,
+  onUndoRepost,
+  onQuote,
+  onSelectPost,
   onCreatePost,
   comments = {},
   onVote,
@@ -237,7 +247,8 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
               <PostCard
                 key={post.id}
                 post={post}
-                comments={comments[post.id] || []}
+                comments={allComments ? allComments.filter((c) => c && c.postId === post.id) : (comments[post.id] || [])}
+                allComments={allComments}
                 currentUserNickname={userProfile?.nickname || user?.nickname}
                 userProfile={userProfile || user}
                 onLikeClick={onLikeClick}
@@ -248,6 +259,10 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                 onVotePoll={onVotePoll}
                 onReportPost={onReportPost}
                 onAuthorClick={onAuthorClick}
+                onRepost={onRepost}
+                onUndoRepost={onUndoRepost}
+                onQuote={onQuote}
+                onSelectPost={onSelectPost}
                 onVote={onVote}
                 onBookmark={onBookmark}
                 onAddComment={onAddComment}

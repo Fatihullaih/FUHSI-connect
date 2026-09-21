@@ -8,10 +8,13 @@ import { ImagePreviewModal } from './ImagePreviewModal';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
 import { findUserByNickname, isGuestAccount } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
+import { ShareRepostModal, getDedicatedPostUrl } from './ShareRepostModal';
+import { normalizeHandle } from '../utils/followUtils';
 import { 
   Heart, 
   MessageSquare, 
   Share2, 
+  Repeat,
   Bookmark, 
   BookmarkCheck, 
   Flag, 
@@ -37,6 +40,7 @@ import {
 interface PostCardProps {
   post: Post;
   comments?: Comment[];
+  allComments?: Comment[];
   currentUserNickname?: string;
   userProfile?: UserProfile | null;
   onLikeClick?: (post: Post) => void;
@@ -47,6 +51,10 @@ interface PostCardProps {
   onVotePoll?: (post: Post, option: string) => void;
   onReportPost?: (post: Post, reason: string) => void;
   onAuthorClick?: (post: Post) => void;
+  onRepost?: (post: Post) => void;
+  onUndoRepost?: (post: Post) => void;
+  onQuote?: (post: Post, caption: string) => void;
+  onSelectPost?: (post: Post) => void;
   // Alternative legacy props
   onVote?: (postId: string, voteType: 'up' | 'down') => void;
   onBookmark?: (postId: string) => void;
@@ -57,6 +65,7 @@ interface PostCardProps {
 export const PostCard: React.FC<PostCardProps> = ({
   post,
   comments = [],
+  allComments,
   currentUserNickname,
   userProfile,
   onLikeClick,
@@ -67,6 +76,10 @@ export const PostCard: React.FC<PostCardProps> = ({
   onVotePoll,
   onReportPost,
   onAuthorClick,
+  onRepost,
+  onUndoRepost,
+  onQuote,
+  onSelectPost,
   onVote,
   onBookmark,
   onAddComment,
@@ -78,6 +91,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [flagReason, setFlagReason] = useState('Inappropriate Content / Harassment');
   const [customReason, setCustomReason] = useState('');
   const [copiedShare, setCopiedShare] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -108,7 +122,15 @@ export const PostCard: React.FC<PostCardProps> = ({
   const likesCount = getEffectiveLikesCount(post);
   const isLiked = isItemLikedByUser(post, userProfile);
   const isBookmarked = post.isBookmarkedByMe !== undefined ? Boolean(post.isBookmarkedByMe) : Boolean(post.isBookmarked);
-  const commentsCount = post.commentsCount ?? post.commentCount ?? comments.length;
+  const commentsCount = useMemo(() => {
+    if (Array.isArray(allComments)) {
+      return allComments.filter((c) => c && c.postId === post.id && !c.parentId).length;
+    }
+    if (Array.isArray(comments) && comments.length > 0) {
+      return comments.filter((c) => c && !c.parentId).length;
+    }
+    return post.commentsCount ?? post.commentCount ?? 0;
+  }, [allComments, comments, post.id, post.commentsCount, post.commentCount]);
   const department = post.department || post.authorDepartment || 'General';
 
   const avatarKey = (isMyPost ? userProfile?.avatarKey : undefined) || authorUser?.avatarKey || post.authorAvatarKey || post.authorAvatarId || 'caduceus';
@@ -227,9 +249,38 @@ export const PostCard: React.FC<PostCardProps> = ({
     return optionsList.reduce((acc, opt) => acc + (opt.votes || 0), 0);
   }, [optionsList]);
 
+  const isRepostedByMe = useMemo(() => {
+    const userNick = (currentUserNickname || userProfile?.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    if (!userNick) return false;
+    const list = Array.isArray(post.repostedBy) ? post.repostedBy : [];
+    return list.some((nick) => nick.toLowerCase().replace(/^@/, '').trim() === userNick);
+  }, [post.repostedBy, currentUserNickname, userProfile?.nickname]);
+
+  const effectiveRepostsCount = useMemo(() => {
+    if (post.repostsCount !== undefined && post.repostsCount !== null) {
+      return post.repostsCount;
+    }
+    if (Array.isArray(post.repostedBy)) {
+      return post.repostedBy.length;
+    }
+    return post.shareCount || 0;
+  }, [post.repostsCount, post.repostedBy, post.shareCount]);
+
   return (
     <article className="bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:border-slate-300 hover:shadow-md transform-gpu hover:scale-[1.012] transition-all duration-200 overflow-hidden mb-4">
       <div className="p-4 sm:p-5">
+        {/* Repost Header Indicator */}
+        {post.isRepost && (
+          <div className="flex items-center gap-1.5 text-xs text-slate-500 font-bold mb-3 pb-2.5 border-b border-slate-100">
+            <Repeat size={14} className="text-emerald-600 shrink-0" />
+            <span>
+              {isRepostedByMe || (userProfile?.nickname && normalizeHandle(post.reposterNickname || '') === normalizeHandle(userProfile.nickname))
+                ? 'You reposted'
+                : `${post.reposterNickname || 'A student'} reposted`}
+            </span>
+          </div>
+        )}
+
         {/* Post Header */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -527,6 +578,40 @@ export const PostCard: React.FC<PostCardProps> = ({
           </div>
         )}
 
+        {/* Embedded Quoted Post Card */}
+        {post.isQuote && post.quotedPost && (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onSelectPost) onSelectPost(post.quotedPost!);
+              else if (onCommentClick) onCommentClick(post.quotedPost!);
+            }}
+            className="mt-3.5 p-3.5 rounded-2xl border border-slate-200/90 bg-slate-50/90 hover:bg-slate-100/90 transition-colors cursor-pointer space-y-2"
+          >
+            <div className="flex items-center gap-2">
+              <AvatarIcon
+                avatarKey={post.quotedPost.authorAvatarKey}
+                avatarUrl={post.quotedPost.authorAvatarUrl}
+                size={16}
+              />
+              <span className="font-bold text-xs text-slate-900">
+                {post.quotedPost.authorNickname}
+              </span>
+              <span className="text-[10px] text-slate-400">
+                {post.quotedPost.timeAgo || formatRelativeTime(post.quotedPost.timestamp)}
+              </span>
+            </div>
+            <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
+              {post.quotedPost.content || post.quotedPost.text}
+            </p>
+            {post.quotedPost.imageUrl && (
+              <div className="h-32 w-full rounded-xl overflow-hidden border border-slate-200 mt-2">
+                <img src={post.quotedPost.imageUrl} alt="Quoted attachment" className="w-full h-full object-cover" />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Post Footer Controls */}
         <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-500">
           <button
@@ -554,25 +639,22 @@ export const PostCard: React.FC<PostCardProps> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl hover:bg-slate-100 text-slate-600 transition-colors"
             >
               <MessageSquare size={16} />
-              <span>{commentsCount} Comments</span>
+              <span>{commentsCount} {commentsCount === 1 ? 'Comment' : 'Comments'}</span>
             </button>
 
             <button
-              onClick={handleShare}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl hover:bg-slate-100 text-slate-600 transition-colors"
-              title="Share post link"
+              id={`btn-share-post-${post.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowShareModal(true);
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer ${
+                isRepostedByMe ? 'text-emerald-700 font-bold bg-emerald-50/80' : 'text-slate-600'
+              }`}
+              title="Repost, Quote, or Share thread"
             >
-              {copiedShare ? (
-                <>
-                  <CheckCircle2 size={16} className="text-emerald-600" />
-                  <span className="text-emerald-600">Copied!</span>
-                </>
-              ) : (
-                <>
-                  <Share2 size={16} />
-                  <span className="hidden sm:inline">Share</span>
-                </>
-              )}
+              <Repeat size={16} className={isRepostedByMe ? 'text-emerald-600' : ''} />
+              <span>{effectiveRepostsCount > 0 ? `${effectiveRepostsCount} Repost${effectiveRepostsCount === 1 ? '' : 's'}` : 'Share'}</span>
             </button>
 
             <button
@@ -590,12 +672,12 @@ export const PostCard: React.FC<PostCardProps> = ({
           <div className="mt-4 pt-4 border-t border-slate-100 bg-slate-50/70 -mx-4 sm:-mx-5 -mb-4 sm:-mb-5 p-4 sm:p-5 rounded-b-2xl">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-1.5">
               <MessageSquare size={14} />
-              Student Discussions ({comments.length})
+              Student Discussions ({commentsCount})
             </h4>
 
             {/* List of comments */}
             <div className="space-y-3 mb-4">
-              {comments.length === 0 ? (
+              {commentsCount === 0 ? (
                 <p className="text-xs text-slate-400 italic py-2">No comments yet. Be the first student to reply!</p>
               ) : (
                 comments.map((comment) => {
@@ -801,6 +883,26 @@ export const PostCard: React.FC<PostCardProps> = ({
           userProfile={userProfile || null}
           onClose={() => setShowVerificationModal(false)}
           onSubmitVerification={() => setShowVerificationModal(false)}
+        />
+      )}
+
+      {showShareModal && (
+        <ShareRepostModal
+          post={post}
+          currentUser={userProfile}
+          isOpen={showShareModal}
+          onClose={() => setShowShareModal(false)}
+          onRepost={(target) => {
+            if (onRepost) onRepost(target);
+          }}
+          onUndoRepost={(target) => {
+            if (onUndoRepost) onUndoRepost(target);
+          }}
+          onQuote={(target, caption) => {
+            if (onQuote) onQuote(target, caption);
+          }}
+          isRepostedByMe={isRepostedByMe}
+          repostsCount={effectiveRepostsCount}
         />
       )}
     </article>

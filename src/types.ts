@@ -116,6 +116,16 @@ export interface Post {
   commentsCount?: number;
   commentCount?: number;
   shareCount?: number;
+  repostsCount?: number;
+  repostedBy?: string[];
+  isRepostedByMe?: boolean;
+  isRepost?: boolean;
+  reposterNickname?: string;
+  repostedPostId?: string;
+  repostedPost?: Post;
+  isQuote?: boolean;
+  quotedPostId?: string;
+  quotedPost?: Post;
   bookmarks?: number;
   isLikedByMe?: boolean;
   isBookmarkedByMe?: boolean;
