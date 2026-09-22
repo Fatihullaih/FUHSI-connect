@@ -369,12 +369,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   const myPosts = (allPosts || [])
     .filter((p) => {
-      if (!p) return false;
+      if (!p || p.id.startsWith('repost_')) return false;
       const author = normalizeHandle(p.authorNickname || p.nickname || (p as any).customNickname || '');
-      const reposter = normalizeHandle(p.reposterNickname || '');
-      return (normMyNick && author === normMyNick) || (p.isRepost && reposter === normMyNick);
+      const reposters = Array.isArray(p.repostedBy) ? p.repostedBy.map(normalizeHandle) : [];
+      const hasReposted = Boolean(normMyNick && reposters.includes(normMyNick));
+      return (Boolean(normMyNick) && author === normMyNick) || hasReposted;
     })
-    .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
+    .sort((a, b) => {
+      const aTime = (Array.isArray(a.repostRecords) ? a.repostRecords.find((r) => normalizeHandle(r.userNickname) === normMyNick)?.timestamp : null) || a.timestamp;
+      const bTime = (Array.isArray(b.repostRecords) ? b.repostRecords.find((r) => normalizeHandle(r.userNickname) === normMyNick)?.timestamp : null) || b.timestamp;
+      return getTimestampMs(bTime) - getTimestampMs(aTime);
+    });
 
   // User comments (replies) sorted chronologically (newest first)
   const myReplies = (allComments || [])
@@ -2095,26 +2100,30 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <div>
               {myPosts.length > 0 ? (
                 <div className="space-y-3">
-                  {myPosts.map((post) => (
-                    <PostCard
-                      key={post.id}
-                      post={post}
-                      comments={allComments.filter((c) => c.postId === post.id)}
-                      allComments={allComments}
-                      currentUserNickname={myNickname}
-                      userProfile={userProfile}
-                      onLikeClick={onLikeClick}
-                      onBookmarkClick={onBookmarkClick}
-                      onCommentClick={onCommentClick}
-                      onAuthorClick={onAuthorClick}
-                      onDeletePost={onDeletePost}
-                      onEditPost={onEditPost}
-                      onRepost={onRepost}
-                      onUndoRepost={onUndoRepost}
-                      onQuote={onQuote}
-                      onSelectPost={onSelectPost}
-                    />
-                  ))}
+                  {myPosts.map((post) => {
+                    const isAuthor = normalizeHandle(post.authorNickname || post.nickname || '') === normMyNick;
+                    return (
+                      <PostCard
+                        key={post.id}
+                        post={post}
+                        repostedByNick={!isAuthor ? myNickname : undefined}
+                        comments={allComments.filter((c) => c.postId === post.id)}
+                        allComments={allComments}
+                        currentUserNickname={myNickname}
+                        userProfile={userProfile}
+                        onLikeClick={onLikeClick}
+                        onBookmarkClick={onBookmarkClick}
+                        onCommentClick={onCommentClick}
+                        onAuthorClick={onAuthorClick}
+                        onDeletePost={onDeletePost}
+                        onEditPost={onEditPost}
+                        onRepost={onRepost}
+                        onUndoRepost={onUndoRepost}
+                        onQuote={onQuote}
+                        onSelectPost={onSelectPost}
+                      />
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="p-8 text-center text-slate-400 space-y-2">

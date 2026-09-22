@@ -185,21 +185,26 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     return getFollowingCount(normAuthor, allFollows);
   }, [normAuthor, allFollows]);
 
-  // Find all threads written by this author, sorted chronologically (newest first)
+  // Find all threads written by this author or reposted by them, sorted chronologically (newest first)
   const authorPosts = useMemo(() => {
     return effectivePosts
       .filter((p) => {
+        if (!p || p.id.startsWith('repost_')) return false;
         const nick = (p.authorNickname || p.nickname || (p as any).customNickname || '')
           .toLowerCase()
           .replace(/^@/, '')
           .trim();
-        const reposter = (p.reposterNickname || '')
-          .toLowerCase()
-          .replace(/^@/, '')
-          .trim();
-        return nick === normAuthor || (p.isRepost && reposter === normAuthor);
+        const reposters = Array.isArray(p.repostedBy)
+          ? p.repostedBy.map((r) => (r || '').toLowerCase().replace(/^@/, '').trim())
+          : [];
+        const hasReposted = reposters.includes(normAuthor);
+        return nick === normAuthor || hasReposted;
       })
-      .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
+      .sort((a, b) => {
+        const aTime = (Array.isArray(a.repostRecords) ? a.repostRecords.find((r) => (r.userNickname || '').toLowerCase().replace(/^@/, '').trim() === normAuthor)?.timestamp : null) || a.timestamp;
+        const bTime = (Array.isArray(b.repostRecords) ? b.repostRecords.find((r) => (r.userNickname || '').toLowerCase().replace(/^@/, '').trim() === normAuthor)?.timestamp : null) || b.timestamp;
+        return getTimestampMs(bTime) - getTimestampMs(aTime);
+      });
   }, [effectivePosts, normAuthor]);
 
   // Find all replies/comments made by this author across all threads
@@ -537,28 +542,32 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                 </p>
               </div>
             ) : (
-              authorPosts.map((post) => (
-                <PostCard
-                  key={post.id}
-                  post={post}
-                  comments={(allComments || []).filter((c) => c && c.postId === post.id)}
-                  allComments={allComments}
-                  currentUserNickname={currentUserNickname}
-                  userProfile={userProfile}
-                  onLikeClick={onLikeClick}
-                  onBookmarkClick={onBookmarkClick}
-                  onCommentClick={(p) => {
-                    if (onCommentClick) onCommentClick(p);
-                  }}
-                  onAuthorClick={onAuthorClick}
-                  onDeletePost={onDeletePost}
-                  onEditPost={onEditPost}
-                  onRepost={onRepost}
-                  onUndoRepost={onUndoRepost}
-                  onQuote={onQuote}
-                  onSelectPost={onSelectPost}
-                />
-              ))
+              authorPosts.map((post) => {
+                const isOriginalAuthor = (post.authorNickname || '').toLowerCase().replace(/^@/, '').trim() === normAuthor;
+                return (
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    repostedByNick={!isOriginalAuthor ? authorNickname : undefined}
+                    comments={(allComments || []).filter((c) => c && c.postId === post.id)}
+                    allComments={allComments}
+                    currentUserNickname={currentUserNickname}
+                    userProfile={userProfile}
+                    onLikeClick={onLikeClick}
+                    onBookmarkClick={onBookmarkClick}
+                    onCommentClick={(p) => {
+                      if (onCommentClick) onCommentClick(p);
+                    }}
+                    onAuthorClick={onAuthorClick}
+                    onDeletePost={onDeletePost}
+                    onEditPost={onEditPost}
+                    onRepost={onRepost}
+                    onUndoRepost={onUndoRepost}
+                    onQuote={onQuote}
+                    onSelectPost={onSelectPost}
+                  />
+                );
+              })
             )
           )}
 

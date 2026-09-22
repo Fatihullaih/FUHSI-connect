@@ -39,6 +39,36 @@ export interface ServerDbState {
   replaceFollows?: boolean;
   deletedUserIds?: string[];
   deletedUserNicknames?: string[];
+  deletedPostIds?: string[];
+}
+
+export function isPostDeletedLocally(postId?: string | null): boolean {
+  if (!postId) return false;
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    const raw = localStorage.getItem('fuhsi_deleted_post_ids');
+    if (!raw) return false;
+    const deleted: string[] = JSON.parse(raw);
+    return Array.isArray(deleted) && deleted.includes(String(postId).trim());
+  } catch {
+    return false;
+  }
+}
+
+export function markPostPermanentlyDeleted(postId?: string | null): void {
+  if (!postId) return;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const cleanId = String(postId).trim();
+    const raw = localStorage.getItem('fuhsi_deleted_post_ids');
+    const list: string[] = raw ? JSON.parse(raw) : [];
+    if (!list.includes(cleanId)) {
+      list.push(cleanId);
+      localStorage.setItem('fuhsi_deleted_post_ids', JSON.stringify(list));
+    }
+  } catch (e) {
+    console.error('Error marking post permanently deleted:', e);
+  }
 }
 
 export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserProfile[] {
@@ -161,7 +191,25 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
   const map = new Map<string, Post>();
 
   const processPost = (p: Post) => {
-    if (!p || !p.id || isDemoPost(p)) return;
+    if (!p || !p.id || isDemoPost(p) || isPostDeletedLocally(p.id)) return;
+    
+    // Ignore legacy duplicate post entities for reposts
+    if (p.id.startsWith('repost_') || (p.isRepost && p.repostedPostId)) {
+      if (p.repostedPostId && p.reposterNickname) {
+        const base = map.get(p.repostedPostId);
+        if (base) {
+          const list = Array.isArray(base.repostedBy) ? [...base.repostedBy] : [];
+          if (!list.includes(p.reposterNickname)) {
+            list.push(p.reposterNickname);
+            base.repostedBy = list;
+            base.repostsCount = list.length;
+            base.shareCount = Math.max(base.shareCount || 0, list.length);
+          }
+        }
+      }
+      return;
+    }
+
     const existing = map.get(p.id);
     if (!existing) {
       const likedBy = Array.isArray(p.likedBy) ? p.likedBy : [];
@@ -210,6 +258,17 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
       const bookmarks = Math.max(existing.bookmarks || 0, p.bookmarks || 0);
       const commentsCount = Math.max(existing.commentsCount || 0, p.commentsCount || 0);
 
+      const existingRecords = Array.isArray(existing.repostRecords) ? existing.repostRecords : [];
+      const pRecords = Array.isArray(p.repostRecords) ? p.repostRecords : [];
+      const recordsMap = new Map<string, { userNickname: string; timestamp: string }>();
+      [...existingRecords, ...pRecords].forEach((r) => {
+        if (r && r.userNickname) {
+          const k = (r.userNickname || '').toLowerCase().replace(/^@/, '').trim();
+          recordsMap.set(k, r);
+        }
+      });
+      const mergedRepostRecords = Array.from(recordsMap.values());
+
       map.set(p.id, {
         ...secondary,
         ...primary,
@@ -217,6 +276,7 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
         likes: likesCount,
         likesCount,
         repostedBy: mergedRepostedBy,
+        repostRecords: mergedRepostRecords,
         repostsCount,
         shareCount: repostsCount,
         bookmarks,

@@ -8,7 +8,7 @@ import { formatRelativeTime, formatExactDateTime, getTimestampMs } from '../util
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { compressImageFile } from '../utils/imageUtils';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
-import { findUserByNickname, isGuestAccount } from '../utils/userDbUtils';
+import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
 import { ShareRepostModal } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
@@ -101,6 +101,28 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     }
     return post?.shareCount || 0;
   }, [post?.repostsCount, post?.repostedBy, post?.shareCount]);
+
+  const effectiveReposter = useMemo(() => {
+    if (!post) return null;
+    if (post.reposterNickname) {
+      return post.reposterNickname;
+    }
+    const reposters = Array.isArray(post.repostedBy) ? post.repostedBy : [];
+    if (reposters.length === 0) return null;
+
+    const userNick = (userProfile?.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    if (userNick && reposters.some((nick) => (nick || '').toLowerCase().replace(/^@/, '').trim() === userNick)) {
+      return userProfile?.nickname || 'You';
+    }
+    return reposters[reposters.length - 1];
+  }, [post?.reposterNickname, post?.repostedBy, userProfile?.nickname]);
+
+  const isViewerReposter = useMemo(() => {
+    if (!effectiveReposter) return false;
+    const userNick = (userProfile?.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    const reposterNorm = effectiveReposter.toLowerCase().replace(/^@/, '').trim();
+    return reposterNorm === 'you' || (Boolean(userNick) && reposterNorm === userNick);
+  }, [effectiveReposter, userProfile?.nickname]);
 
   React.useEffect(() => {
     const handlePopState = () => {
@@ -386,6 +408,10 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               post?.authorNickname &&
               post.authorNickname.toLowerCase() === userProfile.nickname.toLowerCase()
             );
+            const isModulaAdmin = Boolean(
+              isModulaAccount(userProfile) ||
+              (typeof localStorage !== 'undefined' && isModulaAccount(localStorage.getItem('fuhsi_active_user')))
+            );
             const authorUser = findUserByNickname(post?.authorNickname);
             const postAvatarKey = (isMyPost ? userProfile?.avatarKey : undefined) || authorUser?.avatarKey || post.authorAvatarKey || '1';
             const postAvatarUrl = (isMyPost ? userProfile?.avatarUrl : undefined) ?? authorUser?.avatarUrl ?? post.authorAvatarUrl;
@@ -395,13 +421,30 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             return (
               <div className="p-4 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-3 shadow-2xs">
                 {/* Repost Header Indicator */}
-                {post.isRepost && (
+                {effectiveReposter && (
                   <div className="flex items-center gap-1.5 text-xs text-slate-500 font-bold pb-2 border-b border-slate-200">
                     <Repeat size={14} className="text-emerald-600 shrink-0" />
                     <span>
-                      {isRepostedByMe || (userProfile?.nickname && normalizeHandle(post.reposterNickname || '') === normalizeHandle(userProfile.nickname))
-                        ? 'You reposted'
-                        : `${post.reposterNickname || 'A student'} reposted`}
+                      {isViewerReposter ? (
+                        <span>You reposted</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onAuthorClick) {
+                              onAuthorClick({
+                                nickname: `@${effectiveReposter.replace(/^@/, '')}`,
+                                badgeType: 'NONE',
+                                badgeTitle: '',
+                              });
+                            }
+                          }}
+                          className="hover:text-slate-800 hover:underline cursor-pointer"
+                        >
+                          @{effectiveReposter.replace(/^@/, '')} reposted
+                        </button>
+                      )}
                     </span>
                   </div>
                 )}
@@ -459,45 +502,61 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                     </div>
                   </div>
 
-                  {isMyPost && (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (isVerifiedUser) {
-                            setIsEditing(true);
-                            setEditedContent(post.content);
-                          } else {
-                            setShowEditLockModal(true);
-                          }
-                        }}
-                        className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-xs font-bold ${
-                          isVerifiedUser
-                            ? 'text-indigo-600 hover:bg-indigo-50'
-                            : 'text-slate-400 hover:bg-slate-100'
-                        }`}
-                        title={isVerifiedUser ? 'Edit your thread' : 'Edit Thread (Verified Feature Only)'}
-                      >
-                        <Edit3 size={16} />
-                        {!isVerifiedUser && <Lock size={12} className="text-amber-500" />}
-                      </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isMyPost && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isVerifiedUser) {
+                              setIsEditing(true);
+                              setEditedContent(post.content);
+                            } else {
+                              setShowEditLockModal(true);
+                            }
+                          }}
+                          className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-xs font-bold ${
+                            isVerifiedUser
+                              ? 'text-indigo-600 hover:bg-indigo-50'
+                              : 'text-slate-400 hover:bg-slate-100'
+                          }`}
+                          title={isVerifiedUser ? 'Edit your thread' : 'Edit Thread (Verified Feature Only)'}
+                        >
+                          <Edit3 size={16} />
+                          {!isVerifiedUser && <Lock size={12} className="text-amber-500" />}
+                        </button>
+                        {!isModulaAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeletePost(true)}
+                            className="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                            title="Delete your thread"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {/* Admin Delete Control: ONLY visible to @modula */}
+                    {isModulaAdmin && (
                       <button
                         type="button"
                         onClick={() => setConfirmDeletePost(true)}
-                        className="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
-                        title="Delete your thread"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        title="Admin Delete Thread (@modula)"
+                        aria-label="Admin delete thread"
                       >
-                        <Trash2 size={18} />
+                        <X size={17} className="stroke-[2.2]" />
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 {confirmDeletePost && (
                   <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-2 animate-in fade-in">
                     <div className="flex items-center gap-2 text-rose-900 font-bold">
                       <AlertTriangle size={16} className="text-rose-600 shrink-0" />
-                      <span>Delete this thread permanently? This action cannot be undone.</span>
+                      <span>Are you sure you want to delete this thread?</span>
                     </div>
                     <div className="flex items-center gap-2 justify-end">
                       <button
@@ -516,7 +575,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                         }}
                         className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-extrabold hover:bg-rose-700 transition-colors shadow-xs cursor-pointer"
                       >
-                        Yes, Delete Thread
+                        Yes
                       </button>
                     </div>
                   </div>

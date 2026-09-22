@@ -13,7 +13,7 @@ import { db } from './firebase';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup } from '../types';
 import { isDemoUser, isDemoPost, isDemoNickname, isDemoComment, isDemoVerificationRequest, isDemoMarketplaceItem, isDemoDirectMessage } from '../utils/postGenerator';
 import { isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
-import { mergeUsers } from '../utils/apiSync';
+import { mergeUsers, isPostDeletedLocally } from '../utils/apiSync';
 
 // Collection references
 const USERS_COL = 'users';
@@ -350,7 +350,7 @@ export function subscribePosts(onUpdate: (posts: Post[]) => void) {
     const list: Post[] = [];
     snapshot.forEach((docSnap) => {
       const p = docSnap.data() as Post;
-      if (!isDemoPost(p)) {
+      if (!isDemoPost(p) && !isPostDeletedLocally(p.id)) {
         list.push(p);
       }
     });
@@ -366,7 +366,7 @@ export function subscribePosts(onUpdate: (posts: Post[]) => void) {
  * Save single post to Firestore
  */
 export async function savePostToFirestore(post: Post): Promise<void> {
-  if (!post || !post.id || isDemoPost(post)) return;
+  if (!post || !post.id || isDemoPost(post) || isPostDeletedLocally(post.id)) return;
   try {
     await setDoc(doc(db, POSTS_COL, post.id), sanitizeForFirestore(post), { merge: true });
   } catch (err) {
@@ -381,6 +381,15 @@ export async function deletePostFromFirestore(postId: string): Promise<void> {
   if (!postId) return;
   try {
     await deleteDoc(doc(db, POSTS_COL, postId));
+    // Also delete any comments associated with this post in Firestore
+    const commentSnap = await getDocs(query(collection(db, COMMENTS_COL), where('postId', '==', postId)));
+    if (!commentSnap.empty) {
+      const batch = writeBatch(db);
+      commentSnap.forEach((cDoc) => {
+        batch.delete(cDoc.ref);
+      });
+      await batch.commit().catch(() => {});
+    }
   } catch (err) {
     console.error('Error deleting post from Firestore:', err);
   }

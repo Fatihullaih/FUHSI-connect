@@ -6,7 +6,7 @@ import { VerificationModal } from './VerificationModal';
 import { formatRelativeTime } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
-import { findUserByNickname, isGuestAccount } from '../utils/userDbUtils';
+import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
 import { ShareRepostModal, getDedicatedPostUrl } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
@@ -55,6 +55,7 @@ interface PostCardProps {
   onUndoRepost?: (post: Post) => void;
   onQuote?: (post: Post, caption: string) => void;
   onSelectPost?: (post: Post) => void;
+  repostedByNick?: string;
   // Alternative legacy props
   onVote?: (postId: string, voteType: 'up' | 'down') => void;
   onBookmark?: (postId: string) => void;
@@ -80,6 +81,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   onUndoRepost,
   onQuote,
   onSelectPost,
+  repostedByNick,
   onVote,
   onBookmark,
   onAddComment,
@@ -109,6 +111,22 @@ export const PostCard: React.FC<PostCardProps> = ({
     (post as any).isOwner ||
     (currentUserNickname && post.authorNickname?.toLowerCase() === currentUserNickname.toLowerCase())
   );
+
+  const isModulaAdmin = useMemo(() => {
+    if (isModulaAccount(userProfile) || isModulaAccount(currentUserNickname)) {
+      return true;
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('fuhsi_active_user');
+        if (stored) {
+          const u = JSON.parse(stored);
+          if (isModulaAccount(u)) return true;
+        }
+      }
+    } catch {}
+    return false;
+  }, [userProfile, currentUserNickname]);
 
   const authorUser = useMemo(() => {
     return findUserByNickname(post.authorNickname);
@@ -266,17 +284,60 @@ export const PostCard: React.FC<PostCardProps> = ({
     return post.shareCount || 0;
   }, [post.repostsCount, post.repostedBy, post.shareCount]);
 
+  // Determine who reposted this thread (Twitter/X style repost indicator)
+  const effectiveReposter = useMemo(() => {
+    if (repostedByNick) {
+      return repostedByNick;
+    }
+    if (post.reposterNickname) {
+      return post.reposterNickname;
+    }
+    const reposters = Array.isArray(post.repostedBy) ? post.repostedBy : [];
+    if (reposters.length === 0) return null;
+
+    const userNick = (currentUserNickname || userProfile?.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    // If the viewer has reposted it, prioritize showing viewer's own repost
+    if (userNick && reposters.some((nick) => (nick || '').toLowerCase().replace(/^@/, '').trim() === userNick)) {
+      return currentUserNickname || userProfile?.nickname || 'You';
+    }
+    // Otherwise show the latest user who reposted it
+    return reposters[reposters.length - 1];
+  }, [repostedByNick, post.reposterNickname, post.repostedBy, currentUserNickname, userProfile?.nickname]);
+
+  const isViewerReposter = useMemo(() => {
+    if (!effectiveReposter) return false;
+    const userNick = (currentUserNickname || userProfile?.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    const reposterNorm = effectiveReposter.toLowerCase().replace(/^@/, '').trim();
+    return reposterNorm === 'you' || (Boolean(userNick) && reposterNorm === userNick);
+  }, [effectiveReposter, currentUserNickname, userProfile?.nickname]);
+
   return (
     <article className="bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:border-slate-300 hover:shadow-md transform-gpu hover:scale-[1.012] transition-all duration-200 overflow-hidden mb-4">
       <div className="p-4 sm:p-5">
         {/* Repost Header Indicator */}
-        {post.isRepost && (
+        {effectiveReposter && (
           <div className="flex items-center gap-1.5 text-xs text-slate-500 font-bold mb-3 pb-2.5 border-b border-slate-100">
             <Repeat size={14} className="text-emerald-600 shrink-0" />
             <span>
-              {isRepostedByMe || (userProfile?.nickname && normalizeHandle(post.reposterNickname || '') === normalizeHandle(userProfile.nickname))
-                ? 'You reposted'
-                : `${post.reposterNickname || 'A student'} reposted`}
+              {isViewerReposter ? (
+                <span>You reposted</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onAuthorClick) {
+                      onAuthorClick({
+                        ...post,
+                        authorNickname: `@${effectiveReposter.replace(/^@/, '')}`,
+                      });
+                    }
+                  }}
+                  className="hover:text-slate-800 hover:underline cursor-pointer"
+                >
+                  @{effectiveReposter.replace(/^@/, '')} reposted
+                </button>
+              )}
             </span>
           </div>
         )}
@@ -373,15 +434,32 @@ export const PostCard: React.FC<PostCardProps> = ({
                   <Edit3 size={16} />
                   {!isVerifiedUser && <Lock size={12} className="text-amber-500" />}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmDelete(true)}
-                  className="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
-                  title="Delete your thread"
-                >
-                  <Trash2 size={18} />
-                </button>
+                {!isModulaAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmDelete(true)}
+                    className="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                    title="Delete your thread"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
               </>
+            )}
+            {/* Admin Delete Control: ONLY visible to @modula */}
+            {isModulaAdmin && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowConfirmDelete(true);
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                title="Admin Delete Thread (@modula)"
+                aria-label="Admin delete thread"
+              >
+                <X size={17} className="stroke-[2.2]" />
+              </button>
             )}
           </div>
         </div>
@@ -391,7 +469,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-2 animate-in fade-in duration-150">
             <div className="flex items-center gap-2 text-rose-900 font-bold">
               <AlertTriangle size={16} className="text-rose-600 shrink-0" />
-              <span>Are you sure you want to delete your thread permanently? This cannot be undone.</span>
+              <span>Are you sure you want to delete this thread?</span>
             </div>
             <div className="flex items-center gap-2 justify-end">
               <button
@@ -409,7 +487,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 }}
                 className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-extrabold hover:bg-rose-700 transition-colors shadow-xs cursor-pointer"
               >
-                Yes, Delete Thread
+                Yes
               </button>
             </div>
           </div>
@@ -466,7 +544,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 }}
                 className="mt-1.5 inline-flex items-center gap-1 text-xs font-bold text-teal-700 hover:text-teal-900 bg-teal-50/80 hover:bg-teal-100 px-2 py-0.5 rounded-md transition-colors cursor-pointer border border-teal-200/50"
               >
-                <span>{isExpanded ? 'Read Less' : 'Read More'}</span>
+                <span>{isExpanded ? 'Show Less' : 'Show More'}</span>
                 {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
               </button>
             )}

@@ -1,9 +1,6 @@
 import React, { useState } from 'react';
 import { Post, UserProfile } from '../types';
-import { AvatarIcon } from './AvatarIcon';
-import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { formatRelativeTime } from '../utils/dateUtils';
 import {
   X,
   Repeat,
@@ -12,8 +9,6 @@ import {
   Share2,
   CheckCircle2,
   Send,
-  MessageSquare,
-  Sparkles,
 } from 'lucide-react';
 
 interface ShareRepostModalProps {
@@ -62,7 +57,10 @@ export const ShareRepostModal: React.FC<ShareRepostModalProps> = ({
     try {
       await navigator.clipboard.writeText(postUrl);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      setTimeout(() => {
+        setCopied(false);
+        onClose();
+      }, 900);
     } catch (e) {
       console.error('Failed to copy post link:', e);
     }
@@ -109,170 +107,87 @@ export const ShareRepostModal: React.FC<ShareRepostModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl max-w-xs sm:max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150"
+      >
         {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
-              <Repeat size={16} />
-            </div>
-            <div>
-              <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
-                {viewMode === 'quote' ? 'Quote Thread' : 'Share / Repost'}
-              </h3>
-              <p className="text-[11px] text-slate-500 font-medium">
-                {viewMode === 'quote'
-                  ? 'Add your own thoughts above the original post'
-                  : 'Share this thread across FUHSI Connect or copy its link'}
-              </p>
-            </div>
-          </div>
-
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="font-extrabold text-slate-900 text-sm">
+            {viewMode === 'quote' ? 'Quote Post' : 'Share'}
+          </h3>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+            aria-label="Close"
           >
             <X size={18} />
           </button>
         </div>
 
-        {/* VIEW 1: ACTION MENU */}
+        {/* VIEW 1: COMPACT 2x2 ACTION MENU */}
         {viewMode === 'menu' && (
-          <div className="p-4 sm:p-5 space-y-4">
-            {/* Post Target Preview */}
-            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1.5">
-              <div className="flex items-center gap-2">
-                <AvatarIcon
-                  avatarKey={targetPost.authorAvatarKey}
-                  avatarUrl={targetPost.authorAvatarUrl}
-                  size={16}
-                />
-                <span className="font-bold text-xs text-slate-900">{authorNick}</span>
-                <VerificationBadge
-                  isVerified={authorBadge.isVerified}
-                  badgeType={authorBadge.badgeType}
-                  title={authorBadge.badgeTitle}
-                />
-                <span className="text-[10px] text-slate-400">
-                  {targetPost.timeAgo || formatRelativeTime(targetPost.timestamp)}
-                </span>
-              </div>
-              <p className="text-xs text-slate-700 line-clamp-2 leading-relaxed">
-                {targetPost.content || targetPost.text || 'Campus discussion update'}
-              </p>
-            </div>
-
-            {/* Menu Options */}
-            <div className="space-y-2">
-              {/* Option 1: Repost / Undo Repost */}
+          <div className="p-3.5">
+            <div className="grid grid-cols-2 gap-2.5">
+              {/* Option 1: Repost */}
               <button
                 id="btn-action-repost"
+                type="button"
                 onClick={handleDirectRepost}
-                className={`w-full p-3.5 rounded-2xl border text-left flex items-center justify-between transition-all cursor-pointer ${
+                className={`flex items-center justify-center gap-2 py-3 px-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                   isRepostedByMe
-                    ? 'bg-rose-50/80 border-rose-200 hover:bg-rose-100/70 text-rose-900'
-                    : 'bg-emerald-50/70 border-emerald-200/80 hover:bg-emerald-100/70 text-emerald-950'
+                    ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
+                    : 'bg-emerald-50/70 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
                 }`}
               >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      isRepostedByMe ? 'bg-rose-200 text-rose-800' : 'bg-emerald-600 text-white shadow-2xs'
-                    }`}
-                  >
-                    <Repeat size={20} />
-                  </div>
-                  <div>
-                    <h4 className="font-extrabold text-xs sm:text-sm flex items-center gap-1.5">
-                      <span>{isRepostedByMe ? 'Undo Repost' : 'Repost'}</span>
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-white/80 text-emerald-800 border border-emerald-200/60">
-                        +1 Point
-                      </span>
-                    </h4>
-                    <p className="text-[11px] text-slate-600 font-medium">
-                      {isRepostedByMe
-                        ? 'Remove this thread from your profile reposts'
-                        : 'Instantly share this thread to your profile & campus feed'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="text-right shrink-0">
-                  <span className="text-xs font-black text-emerald-800 bg-white px-2 py-1 rounded-lg border border-emerald-200">
-                    {repostsCount} {repostsCount === 1 ? 'repost' : 'reposts'}
-                  </span>
-                </div>
+                <Repeat size={16} className={isRepostedByMe ? 'text-rose-600 shrink-0' : 'text-emerald-600 shrink-0'} />
+                <span className="truncate">{isRepostedByMe ? 'Undo Repost' : 'Repost'}</span>
               </button>
 
-              {/* Option 2: Quote */}
+              {/* Option 2: Quote Post */}
               <button
                 id="btn-action-quote"
+                type="button"
                 onClick={() => setViewMode('quote')}
-                className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-left flex items-center justify-between transition-all cursor-pointer"
+                className="flex items-center justify-center gap-2 py-3 px-2.5 rounded-xl border border-purple-200 bg-purple-50/70 hover:bg-purple-100 text-purple-800 text-xs font-bold transition-all cursor-pointer"
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center">
-                    <Quote size={20} />
-                  </div>
-                  <div>
-                    <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm flex items-center gap-1.5">
-                      <span>Quote Post</span>
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-800 border border-purple-200">
-                        +2 Points
-                      </span>
-                    </h4>
-                    <p className="text-[11px] text-slate-500 font-medium">
-                      Add your own commentary or thoughts above this post
-                    </p>
-                  </div>
-                </div>
+                <Quote size={16} className="text-purple-600 shrink-0" />
+                <span className="truncate">Quote Post</span>
               </button>
 
-              {/* Option 3: Copy Dedicated Post Link */}
+              {/* Option 3: Copy Link */}
               <button
                 id="btn-action-copy-link"
+                type="button"
                 onClick={handleCopyLink}
-                className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-left flex items-center justify-between transition-all cursor-pointer"
+                className="flex items-center justify-center gap-2 py-3 px-2.5 rounded-xl border border-teal-200 bg-teal-50/70 hover:bg-teal-100 text-teal-800 text-xs font-bold transition-all cursor-pointer"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
-                    {copied ? <CheckCircle2 size={20} className="text-emerald-600" /> : <Copy size={20} />}
-                  </div>
-                  <div className="min-w-0">
-                    <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm">
-                      {copied ? 'Link Copied to Clipboard!' : 'Copy Post Link'}
-                    </h4>
-                    <p className="text-[11px] text-slate-400 font-mono truncate">
-                      {postUrl}
-                    </p>
-                  </div>
-                </div>
-
-                {copied && (
-                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200 shrink-0">
-                    Copied!
-                  </span>
+                {copied ? (
+                  <>
+                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                    <span className="text-emerald-700 truncate">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={16} className="text-teal-600 shrink-0" />
+                    <span className="truncate">Copy Link</span>
+                  </>
                 )}
               </button>
 
-              {/* Option 4: Native Share */}
+              {/* Option 4: Share */}
               <button
                 id="btn-action-share-native"
+                type="button"
                 onClick={handleNativeShare}
-                className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-left flex items-center gap-3 transition-all cursor-pointer"
+                className="flex items-center justify-center gap-2 py-3 px-2.5 rounded-xl border border-blue-200 bg-blue-50/70 hover:bg-blue-100 text-blue-800 text-xs font-bold transition-all cursor-pointer"
               >
-                <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-800 flex items-center justify-center shrink-0">
-                  <Share2 size={20} />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm">
-                    Share via Device...
-                  </h4>
-                  <p className="text-[11px] text-slate-500 font-medium">
-                    Send to WhatsApp, Telegram, X, or email
-                  </p>
-                </div>
+                <Share2 size={16} className="text-blue-600 shrink-0" />
+                <span className="truncate">Share</span>
               </button>
             </div>
           </div>
@@ -280,75 +195,27 @@ export const ShareRepostModal: React.FC<ShareRepostModalProps> = ({
 
         {/* VIEW 2: QUOTE COMPOSER */}
         {viewMode === 'quote' && (
-          <form onSubmit={handlePublishQuote} className="p-4 sm:p-5 space-y-4">
-            {/* User typing header */}
-            <div className="flex items-center gap-2.5">
-              <AvatarIcon
-                avatarKey={currentUser?.avatarKey}
-                avatarUrl={currentUser?.avatarUrl}
-                size={22}
-              />
-              <div>
-                <span className="font-extrabold text-xs sm:text-sm text-slate-900">
-                  {currentUser?.nickname || '@FUHSI_Student'}
-                </span>
-                <span className="text-[10px] text-slate-400 block font-medium">
-                  Publishing quote to campus feed
-                </span>
-              </div>
-            </div>
-
-            {/* Caption Input */}
+          <form onSubmit={handlePublishQuote} className="p-3.5 space-y-3">
             <textarea
               id="input-quote-caption"
               rows={3}
               value={quoteCaption}
               onChange={(e) => setQuoteCaption(e.target.value)}
-              placeholder="Add your caption or opinion on this thread..."
+              placeholder="Add your thoughts..."
               autoFocus
-              className="w-full text-xs sm:text-sm p-3.5 rounded-2xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-purple-500/30 focus:border-purple-600 resize-none font-medium placeholder:text-slate-400"
+              className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-purple-500/30 focus:border-purple-600 resize-none font-medium placeholder:text-slate-400"
             />
 
-            {/* Embedded Original Post Card */}
-            <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/90 space-y-2">
-              <div className="flex items-center gap-2">
-                <AvatarIcon
-                  avatarKey={targetPost.authorAvatarKey}
-                  avatarUrl={targetPost.authorAvatarUrl}
-                  size={16}
-                />
-                <span className="font-bold text-xs text-slate-900">{authorNick}</span>
-                <VerificationBadge
-                  isVerified={authorBadge.isVerified}
-                  badgeType={authorBadge.badgeType}
-                  title={authorBadge.badgeTitle}
-                />
-                <span className="text-[10px] text-slate-400">
-                  {targetPost.timeAgo || formatRelativeTime(targetPost.timestamp)}
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
-                {targetPost.content || targetPost.text || 'Campus discussion update'}
-              </p>
-
-              {targetPost.imageUrl && (
-                <div className="h-28 w-full rounded-xl overflow-hidden border border-slate-200">
-                  <img
-                    src={targetPost.imageUrl}
-                    alt="Post media thumbnail"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              )}
+            <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-[11px] text-slate-600 line-clamp-2">
+              <span className="font-bold text-slate-800 mr-1.5">{authorNick}:</span>
+              {targetPost.content || targetPost.text || 'Campus discussion update'}
             </div>
 
-            {/* Buttons */}
-            <div className="flex items-center justify-between pt-2">
+            <div className="flex items-center justify-between pt-1">
               <button
                 type="button"
                 onClick={() => setViewMode('menu')}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 Back
               </button>
@@ -356,10 +223,10 @@ export const ShareRepostModal: React.FC<ShareRepostModalProps> = ({
               <button
                 type="submit"
                 disabled={!quoteCaption.trim() || isSubmittingQuote}
-                className="px-5 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white text-xs sm:text-sm font-extrabold flex items-center gap-2 shadow-xs cursor-pointer"
+                className="px-4 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
-                <Send size={14} />
-                <span>Publish Quote</span>
+                <Send size={13} />
+                <span>Publish</span>
               </button>
             </div>
           </form>

@@ -118,6 +118,7 @@ export interface Post {
   shareCount?: number;
   repostsCount?: number;
   repostedBy?: string[];
+  repostRecords?: { userNickname: string; timestamp: string }[];
   isRepostedByMe?: boolean;
   isRepost?: boolean;
   reposterNickname?: string;

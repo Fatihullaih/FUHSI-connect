@@ -156,8 +156,10 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
     };
   }, [observerTarget, isLoadingMore, hasReachedEnd, loadMorePosts]);
 
-  // Combine initial posts and extra loaded posts (excluding any demo posts)
-  const allCombinedPosts = [...posts, ...extraPosts].filter((post) => !isDemoPost(post));
+  // Combine initial posts and extra loaded posts (excluding any demo posts or legacy repost clones)
+  const allCombinedPosts = [...posts, ...extraPosts].filter(
+    (post) => !isDemoPost(post) && !post.id.startsWith('repost_') && !(post.isRepost && post.repostedPostId)
+  );
 
   // Filter removed posts, apply audience/privacy rules, and sort chronologically (newest first)
   const currentUserObj = userProfile || user;

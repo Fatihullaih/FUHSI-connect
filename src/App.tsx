@@ -25,6 +25,7 @@ import {
   mergeDirectMessages,
   mergeFollows,
   uploadAvatarToServer,
+  markPostPermanentlyDeleted,
 } from './utils/apiSync';
 import {
   subscribeUsers,
@@ -262,10 +263,35 @@ export const App: React.FC = () => {
           const storedComm = localStorage.getItem('fuhsi_comments_db');
           if (storedComm) currentStoredComments = JSON.parse(storedComm);
         } catch {}
-        return rawPosts.map((p) => ({
-          ...p,
-          commentsCount: currentStoredComments.filter((c) => c && c.postId === p.id && !c.parentId).length,
-        }));
+
+        const reposterMap = new Map<string, Set<string>>();
+        rawPosts.forEach((p) => {
+          if ((p.id.startsWith('repost_') || p.isRepost) && p.repostedPostId && (p.reposterNickname || p.authorNickname)) {
+            const repNick = p.reposterNickname || p.authorNickname;
+            if (!reposterMap.has(p.repostedPostId)) reposterMap.set(p.repostedPostId, new Set());
+            reposterMap.get(p.repostedPostId)!.add(repNick);
+          }
+        });
+
+        const genuinePosts = rawPosts.filter(
+          (p) => !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)
+        );
+
+        return genuinePosts.map((p) => {
+          const extra = reposterMap.get(p.id);
+          const currentRepostedBy = Array.isArray(p.repostedBy) ? [...p.repostedBy] : [];
+          if (extra) {
+            extra.forEach((r) => {
+              if (!currentRepostedBy.includes(r)) currentRepostedBy.push(r);
+            });
+          }
+          return {
+            ...p,
+            repostedBy: currentRepostedBy,
+            repostsCount: currentRepostedBy.length,
+            commentsCount: currentStoredComments.filter((c) => c && c.postId === p.id && !c.parentId).length,
+          };
+        });
       }
     } catch (e) {
       console.error(e);
@@ -599,7 +625,9 @@ export const App: React.FC = () => {
     // 2. Subscribe Posts in real-time from Firestore
     const unsubPosts = subscribePosts((fsPosts) => {
       if (!isMounted) return;
-      const validPosts = (fsPosts || []).filter((p) => !isDemoPost(p));
+      const validPosts = (fsPosts || []).filter(
+        (p) => !isDemoPost(p) && !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)
+      );
       let currentStoredComments: Comment[] = [];
       try {
         const storedComm = localStorage.getItem('fuhsi_comments_db');
@@ -851,7 +879,9 @@ export const App: React.FC = () => {
 
       // 2. Sync Posts
       if (Array.isArray(db.posts)) {
-        const validPosts = db.posts.filter((p) => !isDemoPost(p));
+        const validPosts = db.posts.filter(
+          (p) => !isDemoPost(p) && !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)
+        );
         localStorage.setItem('fuhsi_posts_db', JSON.stringify(validPosts));
         setPosts((prev) => (JSON.stringify(prev) !== JSON.stringify(validPosts) ? validPosts : prev));
       }
@@ -1478,55 +1508,40 @@ export const App: React.FC = () => {
       return;
     }
     const myNick = userProfile.nickname || '@FUHSI_Student';
+    const normMyNick = myNick.toLowerCase().replace(/^@/, '').trim();
     const nowIso = new Date().toISOString();
 
     const basePost = targetPost.isRepost && targetPost.repostedPost ? targetPost.repostedPost : targetPost;
     const existingRepostedBy = Array.isArray(basePost.repostedBy) ? basePost.repostedBy : [];
     const isAlreadyReposted = existingRepostedBy.some(
-      (k) => (k || '').toLowerCase().replace(/^@/, '').trim() === (myNick || '').toLowerCase().replace(/^@/, '').trim()
+      (k) => (k || '').toLowerCase().replace(/^@/, '').trim() === normMyNick
     );
 
-    let updatedBasePost: Post;
-    if (!isAlreadyReposted) {
-      const nextRepostedBy = [...existingRepostedBy, myNick];
-      const nextCount = nextRepostedBy.length;
-      updatedBasePost = {
-        ...basePost,
-        repostedBy: nextRepostedBy,
-        repostsCount: nextCount,
-        shareCount: Math.max(basePost.shareCount || 0, nextCount),
-        updatedAt: nowIso,
-      };
-    } else {
-      updatedBasePost = basePost;
+    if (isAlreadyReposted) {
+      return;
     }
 
-    const repostPost: Post = {
-      id: `repost_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      authorNickname: myNick,
-      authorAvatarKey: userProfile.avatarKey || 'caduceus',
-      authorAvatarUrl: userProfile.avatarUrl,
-      authorBadgeType: (userProfile.badgeType as any) || 'NONE',
-      authorBadgeTitle: userProfile.badgeTitle || '',
-      authorPoints: userProfile.reputationPoints || 0,
-      timeAgo: 'Just now',
-      category: basePost.category || 'General',
-      categoryTag: basePost.categoryTag || basePost.category || 'General',
-      content: '',
-      text: '',
-      timestamp: nowIso,
-      createdAt: nowIso,
-      likesCount: 0,
-      commentsCount: 0,
-      repostsCount: 0,
-      isRepost: true,
-      reposterNickname: myNick,
-      repostedPostId: basePost.id,
-      repostedPost: updatedBasePost,
+    const nextRepostedBy = [...existingRepostedBy, myNick];
+    const nextCount = nextRepostedBy.length;
+    const existingRecords = Array.isArray(basePost.repostRecords) ? basePost.repostRecords : [];
+    const nextRecords = [
+      ...existingRecords.filter((r) => (r.userNickname || '').toLowerCase().replace(/^@/, '').trim() !== normMyNick),
+      { userNickname: myNick, timestamp: nowIso },
+    ];
+
+    const updatedBasePost: Post = {
+      ...basePost,
+      repostedBy: nextRepostedBy,
+      repostRecords: nextRecords,
+      repostsCount: nextCount,
+      shareCount: Math.max(basePost.shareCount || 0, nextCount),
+      updatedAt: nowIso,
     };
 
     setPosts((prev) => {
-      const updatedList = [repostPost, ...prev.map((p) => (p.id === basePost.id ? updatedBasePost : p))];
+      const updatedList = prev
+        .filter((p) => !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId))
+        .map((p) => (p.id === basePost.id ? updatedBasePost : p));
       try {
         localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedList));
       } catch (e) {
@@ -1549,8 +1564,7 @@ export const App: React.FC = () => {
     );
 
     savePostToFirestore(updatedBasePost).catch((err) => console.error('Error saving reposted base post:', err));
-    savePostToFirestore(repostPost).catch((err) => console.error('Error saving new repost post:', err));
-    pushServerDbSync({ posts: [updatedBasePost, repostPost] } as any);
+    pushServerDbSync({ posts: [updatedBasePost] } as any);
   }, [userProfile, selectedPost]);
 
   const handleUndoRepost = useCallback((targetPost: Post) => {
@@ -1567,10 +1581,15 @@ export const App: React.FC = () => {
       (k) => (k || '').toLowerCase().replace(/^@/, '').trim() !== normMyNick
     );
     const nextCount = nextRepostedBy.length;
+    const existingRecords = Array.isArray(basePost.repostRecords) ? basePost.repostRecords : [];
+    const nextRecords = existingRecords.filter(
+      (r) => (r.userNickname || '').toLowerCase().replace(/^@/, '').trim() !== normMyNick
+    );
 
     const updatedBasePost: Post = {
       ...basePost,
       repostedBy: nextRepostedBy,
+      repostRecords: nextRecords,
       repostsCount: nextCount,
       shareCount: nextCount,
       updatedAt: nowIso,
@@ -1578,13 +1597,7 @@ export const App: React.FC = () => {
 
     setPosts((prev) => {
       const filtered = prev
-        .filter((p) => {
-          if (p.isRepost && p.repostedPostId === basePost.id) {
-            const repNick = (p.reposterNickname || p.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-            if (repNick === normMyNick) return false;
-          }
-          return true;
-        })
+        .filter((p) => !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId))
         .map((p) => (p.id === basePost.id ? updatedBasePost : p));
 
       try {
@@ -1696,8 +1709,9 @@ export const App: React.FC = () => {
   }, [userProfile, selectedPost]);
 
   const handleDeletePost = (postId: string) => {
+    markPostPermanentlyDeleted(postId);
     deletePostFromFirestore(postId).catch((err) => console.error('Error deleting post from Firestore:', err));
-    const updatedPosts = posts.filter((p) => p.id !== postId);
+    const updatedPosts = posts.filter((p) => p.id !== postId && p.repostedPostId !== postId && p.quotedPostId !== postId);
     const updatedComments = comments.filter((c) => c.postId !== postId);
     setPosts(updatedPosts);
     setComments(updatedComments);
@@ -1707,7 +1721,13 @@ export const App: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    pushServerDbSync({ posts: updatedPosts, replacePosts: true, comments: updatedComments, replaceComments: true }).catch((err) =>
+    pushServerDbSync({
+      deletedPostIds: [postId],
+      posts: updatedPosts,
+      replacePosts: true,
+      comments: updatedComments,
+      replaceComments: true,
+    }).catch((err) =>
       console.error('Error syncing post deletion to server db:', err)
     );
 
@@ -3326,7 +3346,7 @@ export const App: React.FC = () => {
               onApproveVerification={handleApproveVerification}
               onRejectVerification={handleRevokeVerification}
               onRevokeVerification={handleRevokeVerification}
-              onDeletePost={(postId) => setPosts((prev) => prev.filter((p) => p.id !== postId))}
+              onDeletePost={handleDeletePost}
             onUpdateBadge={(badgeType, badgeTitle) => {
               if (userProfile) {
                 const updated = { ...userProfile, isVerified: true, verificationStatus: 'approved' as const, badgeType: badgeType || 'BLUE', badgeTitle: (badgeTitle || '').trim() };

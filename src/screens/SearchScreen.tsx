@@ -266,7 +266,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
 
     return (posts || [])
       .filter((p) => {
-        if (isDemoPost(p)) return false;
+        if (isDemoPost(p) || p.id.startsWith('repost_') || (p.isRepost && p.repostedPostId)) return false;
         
         // Find author account if private
         const authorNick = p.authorNickname || p.nickname || '';
@@ -725,6 +725,11 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
           authorBadgeTitle={selectedAuthor.badgeTitle}
           allPosts={posts}
           userProfile={userProfile}
+          currentUserNickname={currentUserNickname || userProfile?.nickname}
+          onDeletePost={onDeletePost}
+          onLikeClick={onLikeClick}
+          onBookmarkClick={onBookmarkClick}
+          onAuthorClick={onAuthorClick}
           onClose={() => setSelectedAuthor(null)}
           onCommentClick={(post) => {
             onSelectPost(post);
