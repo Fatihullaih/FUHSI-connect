@@ -394,17 +394,8 @@ export const App: React.FC = () => {
       if (!isRead) count++;
     });
 
-    posts.forEach((p) => {
-      const target = p.targetDepartment;
-      if (!target || target === 'General Campus' || target === 'General') return;
-      if (isUserMatchingAudience(userProfile.department, target)) {
-        const id = `targeted_notif_${p.id}`;
-        if (!readMap[id]) count++;
-      }
-    });
-
     return count;
-  }, [userProfile?.nickname, userProfile?.department, posts, notifTrigger]);
+  }, [userProfile?.nickname, notifTrigger]);
 
   // Unread Chats Count for Navigation Badge (Distinct active conversations / senders with unread incoming messages)
   // - 1 user sending multiple unread messages = 1
