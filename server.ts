@@ -49,12 +49,14 @@ let activeDb: typeof DEFAULT_SERVER_DB = { ...DEFAULT_SERVER_DB };
 
 function sanitizeServerDb(dbObj: typeof DEFAULT_SERVER_DB): typeof DEFAULT_SERVER_DB {
   const deletedPostSet = new Set((dbObj.deletedPostIds || []).map((id: any) => String(id)));
+  const deletedCommentSet = new Set((dbObj.deletedCommentIds || []).map((id: any) => String(id)));
   return {
     ...dbObj,
     deletedPostIds: Array.from(deletedPostSet),
+    deletedCommentIds: Array.from(deletedCommentSet),
     users: (dbObj.users || []).filter((u: any) => !isDemoUser(u) && !isDemoNickname(u.nickname)),
     posts: (dbObj.posts || []).filter((p: any) => !isDemoPost(p) && !deletedPostSet.has(String(p.id))),
-    comments: (dbObj.comments || []).filter((c: any) => !isDemoComment(c) && !deletedPostSet.has(String(c.postId))),
+    comments: (dbObj.comments || []).filter((c: any) => !isDemoComment(c) && !deletedPostSet.has(String(c.postId)) && !deletedCommentSet.has(String(c.id)) && !deletedCommentSet.has(String(c.parentId))),
     marketplaceItems: (dbObj.marketplaceItems || []).filter((m: any) => !isDemoMarketplaceItem(m)),
     pendingMarketplaceItems: (dbObj.pendingMarketplaceItems || []).filter((m: any) => !isDemoMarketplaceItem(m)),
     verificationRequests: (dbObj.verificationRequests || []).filter((v: any) => !isDemoVerificationRequest(v)),
@@ -375,6 +377,15 @@ app.post('/api/db/sync', (req, res) => {
         activeDb.deletedPostIds = Array.from(allDeletedPostIds);
         activeDb.posts = (activeDb.posts || []).filter((p: any) => !allDeletedPostIds.has(String(p.id)));
         activeDb.comments = (activeDb.comments || []).filter((c: any) => !allDeletedPostIds.has(String(c.postId)));
+        changed = true;
+      }
+
+      // Handle globally deleted comments and replies
+      if (Array.isArray(updates.deletedCommentIds) && updates.deletedCommentIds.length > 0) {
+        const toDeleteCommentIds = new Set(updates.deletedCommentIds.map((id: any) => String(id)));
+        const allDeletedCommentIds = new Set([...(activeDb.deletedCommentIds || []), ...toDeleteCommentIds]);
+        activeDb.deletedCommentIds = Array.from(allDeletedCommentIds);
+        activeDb.comments = (activeDb.comments || []).filter((c: any) => !allDeletedCommentIds.has(String(c.id)) && !allDeletedCommentIds.has(String(c.parentId)));
         changed = true;
       }
 

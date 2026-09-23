@@ -35,6 +35,7 @@ interface FeedScreenProps {
   onUndoRepost?: (post: Post) => void;
   onQuote?: (post: Post, caption: string) => void;
   onSelectPost?: (post: Post) => void;
+  onDeleteComment?: (commentId: string) => void;
 
   // Legacy / alternative props compatibility
   comments?: Record<string, Comment[]>;
@@ -64,6 +65,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   onUndoRepost,
   onQuote,
   onSelectPost,
+  onDeleteComment,
   onCreatePost,
   comments = {},
   onVote,
@@ -265,6 +267,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                 onUndoRepost={onUndoRepost}
                 onQuote={onQuote}
                 onSelectPost={onSelectPost}
+                onDeleteComment={onDeleteComment}
                 onVote={onVote}
                 onBookmark={onBookmark}
                 onAddComment={onAddComment}

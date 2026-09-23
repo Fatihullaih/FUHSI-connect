@@ -26,6 +26,7 @@ import {
   mergeFollows,
   uploadAvatarToServer,
   markPostPermanentlyDeleted,
+  markCommentPermanentlyDeleted,
 } from './utils/apiSync';
 import {
   subscribeUsers,
@@ -1800,6 +1801,10 @@ export const App: React.FC = () => {
     const commentToDelete = comments.find((c) => c.id === commentId);
     const childReplies = comments.filter((c) => c.parentId === commentId);
 
+    // Mark permanently deleted in local cache so sync never resurrects them
+    markCommentPermanentlyDeleted(commentId);
+    childReplies.forEach((r) => markCommentPermanentlyDeleted(r.id));
+
     // Delete from Firestore
     deleteCommentFromFirestore(commentId).catch((err) => console.error('Error deleting comment from Firestore:', err));
     childReplies.forEach((r) => {
@@ -1868,6 +1873,7 @@ export const App: React.FC = () => {
     pushServerDbSync({
       comments: updatedComments,
       replaceComments: true,
+      deletedCommentIds: [commentId, ...childReplies.map((r) => r.id)],
       posts: updatedPosts,
       replacePosts: true,
     }).catch((err) =>
@@ -3219,6 +3225,7 @@ export const App: React.FC = () => {
             onBookmarkClick={handleBookmarkClick}
             onCommentClick={openPostDetail}
             onDeletePost={handleDeletePost}
+            onDeleteComment={handleDeleteComment}
             onEditPost={handleEditPost}
             onAuthorClick={openAuthorProfile}
             onVotePoll={handleVotePoll}
@@ -3245,6 +3252,7 @@ export const App: React.FC = () => {
             onAuthorClick={openAuthorProfile}
             onEditPost={handleEditPost}
             onDeletePost={handleDeletePost}
+            onDeleteComment={handleDeleteComment}
             onRepost={handleRepost}
             onUndoRepost={handleUndoRepost}
             onQuote={handleQuotePost}
@@ -3458,6 +3466,7 @@ export const App: React.FC = () => {
                 onLikeClick={handleLikeClick}
                 onBookmarkClick={handleBookmarkClick}
                 onDeletePost={handleDeletePost}
+                onDeleteComment={handleDeleteComment}
                 onEditPost={handleEditPost}
                 onAuthorClick={openAuthorProfile}
                 onCommentClick={openPostDetail}
@@ -3679,6 +3688,7 @@ export const App: React.FC = () => {
               onLikeClick={handleLikeClick}
               onBookmarkClick={handleBookmarkClick}
               onDeletePost={handleDeletePost}
+              onDeleteComment={handleDeleteComment}
               onAuthorClick={openAuthorProfile}
               onCommentClick={openPostDetail}
               onToggleFollow={handleToggleFollow}

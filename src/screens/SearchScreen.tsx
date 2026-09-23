@@ -41,6 +41,7 @@ interface SearchScreenProps {
   onAuthorClick?: (post: Post) => void;
   onEditPost?: (postId: string, newContent: string) => void;
   onDeletePost?: (postId: string) => void;
+  onDeleteComment?: (commentId: string) => void;
   onRepost?: (post: Post) => void;
   onUndoRepost?: (post: Post) => void;
   onQuote?: (post: Post, caption: string) => void;
@@ -109,6 +110,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   onAuthorClick,
   onEditPost,
   onDeletePost,
+  onDeleteComment,
   onRepost,
   onUndoRepost,
   onQuote,
@@ -588,6 +590,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                   onUndoRepost={onUndoRepost}
                   onQuote={onQuote}
                   onSelectPost={onSelectPost}
+                  onDeleteComment={onDeleteComment}
                 />
               ))}
 

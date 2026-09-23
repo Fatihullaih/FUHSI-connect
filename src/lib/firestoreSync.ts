@@ -13,7 +13,7 @@ import { db } from './firebase';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup } from '../types';
 import { isDemoUser, isDemoPost, isDemoNickname, isDemoComment, isDemoVerificationRequest, isDemoMarketplaceItem, isDemoDirectMessage } from '../utils/postGenerator';
 import { isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
-import { mergeUsers, isPostDeletedLocally } from '../utils/apiSync';
+import { mergeUsers, isPostDeletedLocally, isCommentDeletedLocally } from '../utils/apiSync';
 
 // Collection references
 const USERS_COL = 'users';
@@ -403,7 +403,7 @@ export function subscribeComments(onUpdate: (comments: Comment[]) => void) {
     const list: Comment[] = [];
     snapshot.forEach((docSnap) => {
       const c = docSnap.data() as Comment;
-      if (!isDemoComment(c)) {
+      if (!isDemoComment(c) && !isCommentDeletedLocally(c.id)) {
         list.push(c);
       }
     });

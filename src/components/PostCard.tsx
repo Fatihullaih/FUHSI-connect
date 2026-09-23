@@ -55,6 +55,7 @@ interface PostCardProps {
   onUndoRepost?: (post: Post) => void;
   onQuote?: (post: Post, caption: string) => void;
   onSelectPost?: (post: Post) => void;
+  onDeleteComment?: (commentId: string) => void;
   repostedByNick?: string;
   // Alternative legacy props
   onVote?: (postId: string, voteType: 'up' | 'down') => void;
@@ -81,6 +82,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   onUndoRepost,
   onQuote,
   onSelectPost,
+  onDeleteComment,
   repostedByNick,
   onVote,
   onBookmark,
@@ -89,6 +91,7 @@ export const PostCard: React.FC<PostCardProps> = ({
 }) => {
   const [showComments, setShowComments] = useState(false);
   const [newComment, setNewComment] = useState('');
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
   const [showFlagModal, setShowFlagModal] = useState(false);
   const [flagReason, setFlagReason] = useState('Inappropriate Content / Harassment');
   const [customReason, setCustomReason] = useState('');
@@ -795,9 +798,53 @@ export const PostCard: React.FC<PostCardProps> = ({
                             <span className="text-[10px] text-slate-400 font-medium">Guest</span>
                           )}
                         </div>
-                        <span className="text-slate-400 text-[10px]" title={comment.timestamp}>{formatRelativeTime(comment.timestamp)}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-slate-400 text-[10px]" title={comment.timestamp}>{formatRelativeTime(comment.timestamp)}</span>
+                          {isModulaAdmin && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingCommentId(comment.id);
+                              }}
+                              className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Admin Delete Comment (@modula)"
+                              aria-label="Admin delete comment"
+                            >
+                              <X size={13} className="stroke-[2.2]" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <p className="text-slate-700 leading-relaxed pl-7">{comment.content}</p>
+
+                      {deletingCommentId === comment.id && (
+                        <div className="mt-2 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-2 animate-in fade-in">
+                          <div className="flex items-center gap-2 text-rose-900 font-bold text-[11px]">
+                            <AlertTriangle size={14} className="text-rose-600 shrink-0" />
+                            <span>Are you sure you want to delete this comment?</span>
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDeletingCommentId(null)}
+                              className="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-800 text-[11px] font-bold hover:bg-slate-300 transition-colors cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeletingCommentId(null);
+                                if (onDeleteComment) onDeleteComment(comment.id);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-extrabold hover:bg-rose-700 transition-colors shadow-xs cursor-pointer"
+                            >
+                              Yes
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })

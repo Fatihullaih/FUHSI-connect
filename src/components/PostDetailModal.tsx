@@ -81,6 +81,20 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  const isModulaAdmin = useMemo(() => {
+    if (isModulaAccount(userProfile)) return true;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('fuhsi_active_user');
+        if (stored) {
+          const u = JSON.parse(stored);
+          if (isModulaAccount(u)) return true;
+        }
+      }
+    } catch {}
+    return false;
+  }, [userProfile]);
+
   const isVerifiedUser = useMemo(() => {
     return checkIsUserVerified(post?.authorNickname || userProfile?.nickname, userProfile);
   }, [post?.authorNickname, userProfile]);
@@ -259,13 +273,29 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               )}
             </div>
 
-            <span 
-              className="text-[10px] text-slate-400 font-medium shrink-0 flex items-center gap-1 hover:text-slate-600 transition-colors cursor-help"
-              title={`Exact time: ${exactTime}`}
-            >
-              <Clock size={11} className="text-slate-400 inline shrink-0" />
-              <span>{relativeTime}</span>
-            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span 
+                className="text-[10px] text-slate-400 font-medium flex items-center gap-1 hover:text-slate-600 transition-colors cursor-help"
+                title={`Exact time: ${exactTime}`}
+              >
+                <Clock size={11} className="text-slate-400 inline shrink-0" />
+                <span>{relativeTime}</span>
+              </span>
+              {isModulaAdmin && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeletingCommentId(comment.id);
+                  }}
+                  className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                  title={comment.parentId ? "Admin Delete Reply (@modula)" : "Admin Delete Comment (@modula)"}
+                  aria-label="Admin delete"
+                >
+                  <X size={14} className="stroke-[2.2]" />
+                </button>
+              )}
+            </div>
           </div>
 
           {comment.content && (
@@ -319,12 +349,12 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               </button>
             </div>
 
-            {isMyComment && (
+            {!isModulaAdmin && isMyComment && (
               <button
                 type="button"
                 onClick={() => setDeletingCommentId(comment.id)}
                 className="flex items-center gap-1 text-rose-500 hover:text-rose-700 transition-colors cursor-pointer"
-                title="Delete your reply"
+                title={comment.parentId ? "Delete your reply" : "Delete your comment"}
               >
                 <Trash2 size={12} />
                 <span>Delete</span>
@@ -334,7 +364,14 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
           {deletingCommentId === comment.id && (
             <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-2 animate-in fade-in">
-              <p className="text-rose-900 font-bold text-[11px]">Are you sure you want to delete your reply?</p>
+              <div className="flex items-center gap-2 text-rose-900 font-bold text-[11px]">
+                <AlertTriangle size={14} className="text-rose-600 shrink-0" />
+                <span>
+                  {comment.parentId
+                    ? 'Are you sure you want to delete this reply?'
+                    : 'Are you sure you want to delete this comment?'}
+                </span>
+              </div>
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
@@ -351,7 +388,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                   }}
                   className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-extrabold hover:bg-rose-700 transition-colors shadow-xs cursor-pointer"
                 >
-                  Yes, Delete
+                  Yes
                 </button>
               </div>
             </div>

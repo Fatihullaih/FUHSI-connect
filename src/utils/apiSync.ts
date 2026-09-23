@@ -40,6 +40,36 @@ export interface ServerDbState {
   deletedUserIds?: string[];
   deletedUserNicknames?: string[];
   deletedPostIds?: string[];
+  deletedCommentIds?: string[];
+}
+
+export function isCommentDeletedLocally(commentId?: string | null): boolean {
+  if (!commentId) return false;
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    const raw = localStorage.getItem('fuhsi_deleted_comment_ids');
+    if (!raw) return false;
+    const deleted: string[] = JSON.parse(raw);
+    return Array.isArray(deleted) && deleted.includes(String(commentId).trim());
+  } catch {
+    return false;
+  }
+}
+
+export function markCommentPermanentlyDeleted(commentId?: string | null): void {
+  if (!commentId) return;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const cleanId = String(commentId).trim();
+    const raw = localStorage.getItem('fuhsi_deleted_comment_ids');
+    const list: string[] = raw ? JSON.parse(raw) : [];
+    if (!list.includes(cleanId)) {
+      list.push(cleanId);
+      localStorage.setItem('fuhsi_deleted_comment_ids', JSON.stringify(list));
+    }
+  } catch (e) {
+    console.error('Error marking comment permanently deleted:', e);
+  }
 }
 
 export function isPostDeletedLocally(postId?: string | null): boolean {
@@ -302,7 +332,7 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
 export function mergeComments(a: Comment[] = [], b: Comment[] = []): Comment[] {
   const map = new Map<string, Comment>();
   const processComment = (c: Comment) => {
-    if (!c || !c.id || isDemoComment(c)) return;
+    if (!c || !c.id || isDemoComment(c) || isCommentDeletedLocally(c.id)) return;
     const existing = map.get(c.id);
     if (!existing) {
       const likedBy = Array.isArray(c.likedBy) ? c.likedBy : [];

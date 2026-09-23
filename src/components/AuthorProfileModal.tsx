@@ -14,6 +14,7 @@ import { canViewerSeeOnlineStatus, isUserOnline } from '../utils/presenceUtils';
 import { 
   X, 
   ArrowLeft,
+  AlertTriangle,
   Award, 
   Calendar, 
   UserCheck, 
@@ -49,6 +50,7 @@ interface AuthorProfileModalProps {
   onCommentClick?: (post: Post) => void;
   onAuthorClick?: (post: Post) => void;
   onDeletePost?: (postId: string) => void;
+  onDeleteComment?: (commentId: string) => void;
   onEditPost?: (postId: string, newContent: string) => void;
   onStartChat?: (recipientNickname: string, recipientAvatarKey?: string, recipientAvatarUrl?: string) => void;
   onToggleFollow?: (targetNickname: string) => void;
@@ -82,6 +84,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     onCommentClick,
     onAuthorClick,
     onDeletePost,
+    onDeleteComment,
     onEditPost,
     onStartChat,
     onToggleFollow,
@@ -94,6 +97,23 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   const [activeTab, setActiveTab] = useState<'threads' | 'replies'>('threads');
   const [showPictureModal, setShowPictureModal] = useState(false);
   const [showFollowersModal, setShowFollowersModal] = useState<{ open: boolean; tab: 'followers' | 'following' } | null>(null);
+  const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
+
+  const isViewerModula = useMemo(() => {
+    if (isModulaAccount(userProfile) || isModulaAccount(currentUserNickname)) {
+      return true;
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('fuhsi_active_user');
+        if (stored) {
+          const u = JSON.parse(stored);
+          if (isModulaAccount(u)) return true;
+        }
+      }
+    } catch {}
+    return false;
+  }, [userProfile, currentUserNickname]);
 
   React.useEffect(() => {
     const handlePopState = () => {
@@ -565,6 +585,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                     onUndoRepost={onUndoRepost}
                     onQuote={onQuote}
                     onSelectPost={onSelectPost}
+                    onDeleteComment={onDeleteComment}
                   />
                 );
               })
@@ -620,9 +641,25 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                             Replying on: "{targetPost ? (targetPost.content.length > 45 ? targetPost.content.substring(0, 45) + '...' : targetPost.content) : 'Campus Thread'}"
                           </span>
                         </div>
-                        <span className="text-[10px] text-teal-700 group-hover:underline font-extrabold shrink-0 flex items-center gap-0.5">
-                          View thread & comments <ArrowRight size={10} />
-                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] text-teal-700 group-hover:underline font-extrabold flex items-center gap-0.5">
+                            View thread & comments <ArrowRight size={10} />
+                          </span>
+                          {isViewerModula && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingReplyId(comment.id);
+                              }}
+                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Admin Delete Reply (@modula)"
+                              aria-label="Admin delete reply"
+                            >
+                              <X size={15} className="stroke-[2.2]" />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       <p className="text-slate-800 font-semibold leading-relaxed pl-3.5 border-l-2 border-teal-500/50">
@@ -632,6 +669,37 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                       <div className="text-[10px] text-slate-400 font-medium text-right">
                         {formatRelativeTime(comment.timestamp)}
                       </div>
+
+                      {deletingReplyId === comment.id && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="mt-2 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-2 animate-in fade-in text-left"
+                        >
+                          <div className="flex items-center gap-2 text-rose-900 font-bold">
+                            <AlertTriangle size={14} className="text-rose-600 shrink-0" />
+                            <span>Are you sure you want to delete this reply?</span>
+                          </div>
+                          <div className="flex items-center gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setDeletingReplyId(null)}
+                              className="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-800 font-bold text-[11px] hover:bg-slate-300 transition-colors cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeletingReplyId(null);
+                                if (onDeleteComment) onDeleteComment(comment.id);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-extrabold text-[11px] hover:bg-rose-700 transition-colors shadow-xs cursor-pointer"
+                            >
+                              Yes
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

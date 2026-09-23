@@ -2121,6 +2121,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                         onUndoRepost={onUndoRepost}
                         onQuote={onQuote}
                         onSelectPost={onSelectPost}
+                        onDeleteComment={onDeleteComment}
                       />
                     );
                   })}
@@ -2174,17 +2175,32 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                                 View thread →
                               </button>
                             )}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeletingReplyId(reply.id);
-                              }}
-                              className="p-1 rounded text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
-                              title="Delete reply"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            {isMod ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeletingReplyId(reply.id);
+                                }}
+                                className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Admin Delete Reply (@modula)"
+                                aria-label="Admin delete reply"
+                              >
+                                <X size={15} className="stroke-[2.2]" />
+                              </button>
+                            ) : isOwnProfile && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeletingReplyId(reply.id);
+                                }}
+                                className="p-1 rounded text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Delete reply"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -2207,7 +2223,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           <div className="mt-2 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-2 animate-in fade-in">
                             <div className="flex items-center gap-2 text-rose-900 font-bold">
                               <AlertTriangle size={14} className="text-rose-600 shrink-0" />
-                              <span>Are you sure you want to delete your reply?</span>
+                              <span>Are you sure you want to delete this reply?</span>
                             </div>
                             <div className="flex items-center gap-2 justify-end">
                               <button
@@ -2229,7 +2245,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                                 }}
                                 className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-extrabold text-[11px] hover:bg-rose-700 transition-colors shadow-xs cursor-pointer"
                               >
-                                Yes, Delete
+                                Yes
                               </button>
                             </div>
                           </div>
@@ -2273,6 +2289,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       onUndoRepost={onUndoRepost}
                       onQuote={onQuote}
                       onSelectPost={onSelectPost}
+                      onDeleteComment={onDeleteComment}
                     />
                   ))}
                 </div>
