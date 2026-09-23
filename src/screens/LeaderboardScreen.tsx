@@ -22,6 +22,7 @@ import {
   MessageSquare,
   ThumbsUp,
   Share2,
+  Clock,
 } from 'lucide-react';
 
 interface LeaderboardScreenProps {
@@ -159,12 +160,24 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
 
   return (
     <div className="py-6 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto space-y-5 pb-24">
-      {/* Clean Header */}
-      <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-        <h1 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
-          <Trophy className="text-amber-500 w-6 h-6" />
-          <span>Leaderboards</span>
-        </h1>
+      {/* Header Banner */}
+      <div className="bg-gradient-to-r from-amber-600 via-amber-700 to-amber-950 rounded-3xl p-6 sm:p-7 text-white shadow-lg relative overflow-hidden">
+        <div className="relative z-10 max-w-2xl">
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider bg-amber-400/20 text-amber-200 border border-amber-400/30 px-3 py-1 rounded-full mb-2.5">
+            <Trophy size={13} />
+            Campus Recognition
+          </span>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight mb-1.5 flex items-center gap-2">
+            <span>🏆 Leaderboards</span>
+          </h1>
+          <p className="text-xs sm:text-sm text-amber-100/90 leading-relaxed font-medium">
+            Real-time rankings driven purely by active student engagement, discussions, and academic department participation.
+          </p>
+        </div>
+
+        <div className="absolute right-0 bottom-0 opacity-10 translate-x-8 translate-y-8 pointer-events-none">
+          <Trophy size={220} />
+        </div>
       </div>
 
       {/* Main Two Sections Navigation */}
@@ -508,6 +521,18 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
           )}
         </div>
       )}
+
+      {/* Bottom Weekly Reset Note */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 rounded-2xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 mt-6">
+        <div className="flex items-center gap-2 font-bold">
+          <Clock size={16} className="text-amber-600 shrink-0" />
+          <span>Weekly rankings reset every Sunday at 00:00 • Real-time live updates</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-amber-900 font-extrabold bg-white px-3 py-1.5 rounded-full border border-amber-200 shadow-2xs">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+          <span>Cycle: {weeklyWindow.label} ({weeklyWindow.daysRemaining}d {weeklyWindow.hoursRemaining}h remaining)</span>
+        </div>
+      </div>
     </div>
   );
 };
