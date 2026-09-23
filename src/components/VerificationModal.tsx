@@ -123,6 +123,10 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
   const handleOpenPaymentGateway = (e: React.FormEvent) => {
     e.preventDefault();
+    // Temporarily disabled per user request: clicking "Subscribe & Pay" does nothing / takes nowhere at the moment.
+    return;
+
+    /* PREVIOUS IMPLEMENTATION - READY TO RESTORE WHEN REQUESTED:
     setErrorMsg('');
 
     const ref = `SQUADCO-9G4DX4-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -152,6 +156,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
     } catch {
       // Fallback if popups are blocked
     }
+    */
   };
 
   const handleSimulatePayment = () => {
@@ -405,7 +410,11 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 </button>
                 
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    // Inactive at the moment per user request - clicking does nothing
+                  }}
                   className="bg-black hover:bg-slate-800 text-white px-6 py-3 rounded-full text-xs font-black transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
                 >
                   <CreditCard size={16} />
