@@ -9,7 +9,6 @@ import {
   CheckCheck, 
   Megaphone, 
   UserPlus, 
-  Users, 
   X, 
   Clock
 } from 'lucide-react';
@@ -289,15 +288,6 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
                   <p className={`text-xs leading-relaxed line-clamp-2 ${!n.isRead ? 'text-slate-700 font-medium' : 'text-slate-500 font-normal'}`}>
                     {n.message}
                   </p>
-                  
-                  {(n.type === 'FOLLOW' || n.actionType === 'VIEW_FOLLOWERS') && (
-                    <div className="pt-1">
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-teal-700 bg-teal-50/90 px-2.5 py-0.5 rounded-lg border border-teal-200 hover:bg-teal-100 transition-colors">
-                        <Users size={12} />
-                        <span>View Connections →</span>
-                      </span>
-                    </div>
-                  )}
                 </div>
 
                 {!n.isRead && (
