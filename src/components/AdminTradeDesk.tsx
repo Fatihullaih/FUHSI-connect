@@ -100,6 +100,8 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
     return true;
   });
 
+  const totalPendingMarketplace = (pendingMarketplaceItems?.length || 0) + reports.filter((r) => r.status === 'PENDING').length;
+
   // Filtered directory items
   const filteredItems = approvedMarketplaceItems.filter((item) => {
     const matchesCat = categoryFilter === 'ALL' || item.category?.toLowerCase() === categoryFilter.toLowerCase();
@@ -180,7 +182,7 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
   };
 
   return (
-    <div className="space-y-4">
+    <div id="marketplace-management-desk" className="space-y-4">
       {/* Toast */}
       {msgToast && (
         <div className="p-3.5 bg-emerald-900 text-emerald-100 rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg animate-in fade-in">
@@ -197,8 +199,13 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
               <div className="w-8 h-8 rounded-xl bg-emerald-600/20 text-emerald-400 flex items-center justify-center font-bold">
                 <ShieldCheck className="w-5 h-5" />
               </div>
-              <h2 className="font-extrabold text-base sm:text-lg tracking-tight text-white">
-                Admin Marketplace Management
+              <h2 className="font-extrabold text-base sm:text-lg tracking-tight text-white flex items-center gap-2">
+                <span>Admin Marketplace Management</span>
+                {totalPendingMarketplace > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-slate-950 animate-pulse shadow-2xs">
+                    {totalPendingMarketplace} pending
+                  </span>
+                )}
               </h2>
             </div>
             <p className="text-xs text-slate-400 mt-1 font-medium">

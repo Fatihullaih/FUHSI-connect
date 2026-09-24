@@ -327,6 +327,7 @@ export interface VerificationRequest {
   id: string;
   applicantNickname: string;
   applicantFullName?: string;
+  realName?: string;
   applicantEmail?: string;
   applicantPhone?: string;
   department?: string;

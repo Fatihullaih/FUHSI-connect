@@ -504,6 +504,14 @@ app.post('/api/db/sync', (req, res) => {
         }
         changed = true;
       }
+      if (Array.isArray(updates.marketplaceReports)) {
+        activeDb.marketplaceReports = updates.marketplaceReports;
+        changed = true;
+      }
+      if (Array.isArray(updates.helpDeskInquiries)) {
+        activeDb.helpDeskInquiries = updates.helpDeskInquiries;
+        changed = true;
+      }
       if (typeof updates.verificationFee === 'number') {
         activeDb.verificationFee = updates.verificationFee;
         changed = true;

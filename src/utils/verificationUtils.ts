@@ -16,12 +16,21 @@ export interface UserBadgeInfo {
 export function getUserBadgeInfo(nicknameOrId?: string, fallbackUser?: UserProfile | null): UserBadgeInfo {
   const defaultInfo: UserBadgeInfo = {
     isVerified: false,
-    badgeType: 'BLUE',
+    badgeType: 'NONE',
     badgeTitle: '',
   };
 
   const clean = (nicknameOrId || fallbackUser?.nickname || '').trim().toLowerCase().replace(/^@/, '');
   if (!clean && !fallbackUser) return defaultInfo;
+
+  // Platform administrator (@modula) is always verified
+  if (clean === 'modula' || fallbackUser?.nickname?.toLowerCase().replace(/^@/, '') === 'modula' || fallbackUser?.isAdmin) {
+    return {
+      isVerified: true,
+      badgeType: 'BLUE',
+      badgeTitle: '',
+    };
+  }
 
   let user: UserProfile | undefined = fallbackUser || undefined;
 
@@ -53,30 +62,53 @@ export function getUserBadgeInfo(nicknameOrId?: string, fallbackUser?: UserProfi
     const vStr = localStorage.getItem('fuhsi_verifications_db');
     if (vStr) {
       const vList: any[] = JSON.parse(vStr);
-      approvedVerifReq = vList.find(
+      const userReqs = vList.filter(
+        (req) => (req.applicantNickname || '').trim().toLowerCase().replace(/^@/, '') === clean
+      );
+      approvedVerifReq = userReqs.find(
         (req) =>
           req.status === 'APPROVED' &&
           req.requestType !== 'STUDENT_CONVERSION' &&
-          req.category !== 'Student Conversion Subscription' &&
-          (req.applicantNickname || '').trim().toLowerCase().replace(/^@/, '') === clean
+          req.category !== 'Student Conversion Subscription'
       );
     }
   } catch (e) {
     console.error('Error reading verifications db in getUserBadgeInfo:', e);
   }
 
+  // Strict check: if user is explicitly revoked or unverified, or badgeType is NONE, revoke badge immediately!
+  const isExplicitlyRevokedOrDeclined =
+    user?.isVerified === false ||
+    user?.verificationStatus === 'rejected' ||
+    user?.verificationStatus === 'unverified' ||
+    user?.badgeType === 'NONE';
+
+  if (isExplicitlyRevokedOrDeclined && !approvedVerifReq) {
+    return {
+      isVerified: false,
+      badgeType: 'NONE',
+      badgeTitle: '',
+    };
+  }
+
+  // If there is no approved verification request AND user is not marked as approved+verified
+  if (!approvedVerifReq && (!user?.isVerified || user?.verificationStatus !== 'approved')) {
+    return {
+      isVerified: false,
+      badgeType: 'NONE',
+      badgeTitle: '',
+    };
+  }
+
   const isVerified = Boolean(
-    user?.isVerified ||
-    user?.verificationStatus === 'approved' ||
-    user?.isAdmin ||
-    clean === 'modula' ||
-    Boolean(approvedVerifReq)
+    (approvedVerifReq && user?.verificationStatus !== 'rejected' && user?.isVerified !== false) ||
+    (user?.isVerified && user?.verificationStatus === 'approved' && user?.badgeType !== 'NONE')
   );
 
   if (!isVerified) {
     return {
       isVerified: false,
-      badgeType: 'BLUE',
+      badgeType: 'NONE',
       badgeTitle: '',
     };
   }
@@ -126,7 +158,7 @@ export function getUserBadgeInfo(nicknameOrId?: string, fallbackUser?: UserProfi
   }
 
   return {
-    isVerified,
+    isVerified: true,
     badgeType: rawType,
     badgeTitle: rawTitle,
   };

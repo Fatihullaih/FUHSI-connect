@@ -189,13 +189,18 @@ export const AdminChatReportsDesk: React.FC<AdminChatReportsDeskProps> = () => {
   const pendingCount = reports.filter((r) => r.status === 'PENDING').length;
 
   return (
-    <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-4">
+    <div id="chat-moderation-desk" className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
         <div>
           <h2 className="font-extrabold text-slate-900 text-sm sm:text-base flex items-center gap-2">
             <ShieldAlert className="w-4 h-4 text-rose-600" />
             <span>Chat Moderation Cases ({reports.length})</span>
+            {pendingCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white animate-pulse shadow-2xs">
+                {pendingCount} new
+              </span>
+            )}
           </h2>
         </div>
 

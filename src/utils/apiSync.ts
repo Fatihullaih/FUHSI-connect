@@ -29,6 +29,8 @@ export interface ServerDbState {
   chatRestrictions?: any[];
   chatViolations?: any[];
   follows?: FollowRecord[];
+  marketplaceReports?: any[];
+  helpDeskInquiries?: any[];
   replaceUsers?: boolean;
   replacePosts?: boolean;
   replaceComments?: boolean;
@@ -180,6 +182,9 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         badgeTitle = '';
       }
 
+      const targetNick = (primary.nickname || secondary.nickname || '').toLowerCase().replace(/^@/, '');
+      const isMod = targetNick === 'modula';
+
       const merged: UserProfile = {
         ...secondary,
         ...primary,
@@ -197,12 +202,37 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         avatarUrl: primary.avatarUrl !== undefined ? primary.avatarUrl : secondary.avatarUrl,
         isApproved,
         isDeclined,
-        isVerified: Boolean(primary.isVerified !== undefined ? primary.isVerified : secondary.isVerified),
-        verificationStatus: primary.verificationStatus || secondary.verificationStatus,
+        isVerified: (() => {
+          if (isMod) return true;
+          if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return false;
+          if (primary.isVerified === true && primary.verificationStatus === 'approved') return true;
+          if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return false;
+          if (secondary.isVerified === true && secondary.verificationStatus === 'approved') return true;
+          return false;
+        })(),
+        verificationStatus: (() => {
+          if (isMod) return 'approved';
+          if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return 'rejected';
+          if (primary.verificationStatus === 'approved') return 'approved';
+          if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return 'rejected';
+          return secondary.verificationStatus || primary.verificationStatus || 'unverified';
+        })(),
         isAdmin: Boolean(primary.isAdmin || secondary.isAdmin),
         reputationScore: Math.max(primary.reputationScore || 0, secondary.reputationScore || 0),
-        badgeType: primary.badgeType && primary.badgeType !== 'NONE' ? primary.badgeType : secondary.badgeType || 'BLUE',
-        badgeTitle,
+        badgeType: (() => {
+          if (isMod) return 'BLUE';
+          if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return 'NONE';
+          if (primary.isVerified === true && primary.badgeType && (primary.badgeType as any) !== 'NONE') return primary.badgeType;
+          if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return 'NONE';
+          if (secondary.isVerified === true && secondary.badgeType && (secondary.badgeType as any) !== 'NONE') return secondary.badgeType;
+          return 'NONE';
+        })(),
+        badgeTitle: (() => {
+          if (isMod) return '';
+          if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return '';
+          if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return '';
+          return badgeTitle;
+        })(),
         savedPassword: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,
         password: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,
         updatedAt: primary.updatedAt || secondary.updatedAt || new Date().toISOString(),
@@ -376,9 +406,18 @@ export function mergeVerificationRequests(a: VerificationRequest[] = [], b: Veri
     if (!existing) {
       map.set(r.id, { ...r });
     } else {
-      const status = r.status !== 'PENDING' ? r.status : (existing.status || r.status);
-      const assignedBadgeType = r.assignedBadgeType || existing.assignedBadgeType;
-      const assignedBadgeTitle = r.assignedBadgeTitle || existing.assignedBadgeTitle;
+      let status = r.status;
+      if (r.status === 'REJECTED' || existing.status === 'REJECTED') {
+        status = 'REJECTED';
+      } else if (r.status !== 'PENDING') {
+        status = r.status;
+      } else {
+        status = existing.status || r.status;
+      }
+
+      const assignedBadgeType = status === 'REJECTED' ? 'NONE' : (r.assignedBadgeType && r.assignedBadgeType !== 'NONE' ? r.assignedBadgeType : existing.assignedBadgeType || 'NONE');
+      const assignedBadgeTitle = status === 'REJECTED' ? '' : (r.assignedBadgeTitle !== undefined ? r.assignedBadgeTitle : (existing.assignedBadgeTitle || ''));
+
       map.set(r.id, {
         ...existing,
         ...r,

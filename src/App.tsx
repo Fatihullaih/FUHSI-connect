@@ -11,6 +11,7 @@ import {
 } from './data/initialData';
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
+import { useAdminPendingCounts } from './utils/adminAlertUtils';
 import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate } from './utils/userDbUtils';
 import {
   fetchServerDb,
@@ -2643,7 +2644,8 @@ export const App: React.FC = () => {
       const updatedList = prev.map((v) => {
         const isMatch =
           v.id === reqIdOrNick ||
-          (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanTarget;
+          (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanTarget ||
+          (v.applicantNickname || '').toLowerCase() === targetApplicantNick.toLowerCase();
         if (isMatch) {
           const revokedReq: VerificationRequest = {
             ...v,
@@ -2692,13 +2694,14 @@ export const App: React.FC = () => {
       let usersList: UserProfile[] = storedUsers ? JSON.parse(storedUsers) : [];
       usersList = usersList.map((u) => {
         const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
-        if (uNick === cleanTarget || u.id === targetApplicantNick) {
+        if (uNick === cleanTarget || u.id === targetApplicantNick || (u.nickname || '').toLowerCase() === targetApplicantNick.toLowerCase()) {
           const updatedRecord: UserProfile = {
             ...u,
             isVerified: false,
             verificationStatus: 'rejected' as const,
             badgeType: 'NONE' as const,
             badgeTitle: '',
+            updatedAt: new Date().toISOString(),
           };
           saveUserToFirestore(updatedRecord).catch((err) => console.error(err));
           return updatedRecord;
@@ -2757,6 +2760,34 @@ export const App: React.FC = () => {
       } catch (e) {}
       return updatedComments;
     });
+
+    // 6. Send official platform update notification
+    try {
+      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+      const revNotif = {
+        id: `official_update_rev_${Date.now()}`,
+        type: 'ADMIN',
+        title: 'Verification Update',
+        message: 'Your verification status has been reviewed and updated by Campus Administration. The verification badge has been removed from your account.',
+        timestamp: new Date().toISOString(),
+        isRead: false,
+      };
+      let existingNotifs = [];
+      const storedNotifs = localStorage.getItem(notifKey);
+      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
+      const updatedNotifs = [revNotif, ...existingNotifs];
+      localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
+      pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
+    } catch (e) {
+      console.error(e);
+    }
+
+    // 7. Dispatch events across window for immediate real-time update
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fuhsi_user_profile_updated', { detail: { nickname: targetApplicantNick } }));
+      window.dispatchEvent(new CustomEvent('fuhsi_verifications_updated', { detail: { nickname: targetApplicantNick } }));
+      window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname: targetApplicantNick } }));
+    }
   };
 
   // Admin Handlers
@@ -3020,6 +3051,15 @@ export const App: React.FC = () => {
     return getStoredUsers();
   }, [appTotalMembers, notifTrigger]);
 
+  // Real-time Admin Tasks & Pending Activity Counter (Central Data Source of Truth)
+  const adminTasks = useAdminPendingCounts(
+    allUsers,
+    verificationRequests,
+    pendingMarketplaceItems,
+    posts,
+    reports
+  );
+
   // Real-time Follow / Unfollow Handler (Syncs locally, Firestore and Server DB)
   const handleToggleFollow = useCallback((targetNickname: string) => {
     if (!userProfile?.nickname) return;
@@ -3179,15 +3219,32 @@ export const App: React.FC = () => {
             {userProfile?.isAdmin && (
               <button
                 onClick={() => handleNavChange(6)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all shadow-sm ${
-                  navIndex === 6
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all shadow-sm cursor-pointer ${
+                  adminTasks.hasPendingTasks
+                    ? 'bg-amber-400 text-slate-950 ring-2 ring-amber-300 shadow-md shadow-amber-400/50 animate-pulse'
+                    : navIndex === 6
                     ? 'bg-amber-400 text-slate-900 ring-2 ring-amber-300'
                     : 'bg-amber-500/90 hover:bg-amber-400 text-slate-950'
                 }`}
-                title="Open FUHSI Moderation Council Portal"
+                title={
+                  adminTasks.hasPendingTasks
+                    ? `Admin Console — 🟡 ${adminTasks.totalPending} pending item${adminTasks.totalPending === 1 ? '' : 's'} require attention`
+                    : 'Open FUHSI Moderation Council Portal'
+                }
               >
                 <Shield size={14} className="fill-slate-900 shrink-0" />
                 <span>Admin Console</span>
+                {adminTasks.hasPendingTasks && (
+                  <span className="flex items-center gap-1 ml-0.5" title={`${adminTasks.totalPending} pending items awaiting review`}>
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-600 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded-full bg-slate-950 text-amber-300 text-[10px] font-black border border-amber-300/60 shadow-2xs">
+                      {adminTasks.totalPending}
+                    </span>
+                  </span>
+                )}
               </button>
             )}
 
@@ -3333,7 +3390,7 @@ export const App: React.FC = () => {
           userProfile?.isAdmin ? (
             <ModerationScreen
               userProfile={userProfile}
-              flaggedPosts={posts.filter((p) => p.isQuarantined)}
+              flaggedPosts={posts.filter((p) => p.isQuarantined || p.status === 'UnderReview' || reports.some((r) => r.postId === p.id && r.status === 'PENDING'))}
               reports={reports}
               approvedMarketplaceItems={marketplaceItems}
               pendingMarketplaceItems={pendingMarketplaceItems}
@@ -3345,6 +3402,11 @@ export const App: React.FC = () => {
               onApproveVerification={handleApproveVerification}
               onRejectVerification={handleRevokeVerification}
               onRevokeVerification={handleRevokeVerification}
+              onUpdateVerificationRequestStatus={(id, status) => {
+                if (status === 'REJECTED') {
+                  handleRevokeVerification(id);
+                }
+              }}
               onDeletePost={handleDeletePost}
             onUpdateBadge={(badgeType, badgeTitle) => {
               if (userProfile) {
@@ -3587,6 +3649,45 @@ export const App: React.FC = () => {
             );
           }
 
+          if (item.type === 'followersDirectory') {
+            const targetNick = (item as any).targetNickname || userProfile?.nickname || '';
+            return (
+              <FollowersListModal
+                key={`modal_followers_${idx}`}
+                targetNickname={targetNick}
+                initialTab="followers"
+                allFollows={allFollows}
+                allUsers={allUsers}
+                currentUserNickname={userProfile?.nickname}
+                zIndex={stackZIndex}
+                onToggleFollow={handleToggleFollow}
+                onSelectUser={(selectedNick) => {
+                  closeModalUI();
+                  const dummyPost: Post = {
+                    id: `author_${selectedNick}`,
+                    authorNickname: selectedNick,
+                    authorAvatarKey: 'caduceus',
+                    authorBadgeType: 'NONE' as any,
+                    authorBadgeTitle: '',
+                    authorPoints: 0,
+                    timeAgo: '',
+                    category: 'General',
+                    categoryTag: 'General',
+                    content: '',
+                    text: '',
+                    timestamp: new Date().toISOString(),
+                    likesCount: 0,
+                    commentsCount: 0,
+                    isQuarantined: false,
+                    createdAt: '',
+                  };
+                  openAuthorProfile(dummyPost);
+                }}
+                onClose={closeModalUI}
+              />
+            );
+          }
+
           return null;
         })
       ) : (
@@ -3693,13 +3794,14 @@ export const App: React.FC = () => {
           )}
 
           {/* Followers / Connections Directory Modal */}
-          {showFollowersDirectoryModal && userProfile && (
+          {showFollowersDirectoryModal && (
             <FollowersListModal
-              targetNickname={userProfile.nickname}
+              targetNickname={userProfile?.nickname || ''}
               initialTab="followers"
               allFollows={allFollows}
               allUsers={allUsers}
-              currentUserNickname={userProfile.nickname}
+              currentUserNickname={userProfile?.nickname}
+              zIndex={80}
               onToggleFollow={handleToggleFollow}
               onSelectUser={(selectedNick) => {
                 closeModalUI();

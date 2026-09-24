@@ -99,6 +99,20 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     markAllNotificationsAsRead(userProfile.nickname);
   };
 
+  const isFollowerNotification = (n: CampusNotification) => {
+    if (!n) return false;
+    const typeUpper = (n.type || '').toUpperCase();
+    if (typeUpper === 'FOLLOW' || typeUpper === 'FOLLOWER' || typeUpper === 'FOLLOWERS' || typeUpper === 'NEW_FOLLOWER') return true;
+    const actionUpper = (n.actionType || '').toUpperCase();
+    if (actionUpper === 'VIEW_FOLLOWERS' || actionUpper === 'VIEW_CONNECTIONS' || actionUpper === 'FOLLOWERS' || actionUpper === 'FOLLOW') return true;
+    const titleLower = (n.title || '').toLowerCase();
+    if (titleLower.includes('follower') || titleLower.includes('follow')) return true;
+    const msgLower = (n.message || '').toLowerCase();
+    if (msgLower.includes('follows you') || msgLower.includes('followed you') || msgLower.includes('follow you')) return true;
+    if (Array.isArray(n.followerNicknames) && n.followerNicknames.length > 0) return true;
+    return false;
+  };
+
   const handleNotificationClick = (n: CampusNotification) => {
     // 1. Mark as read immediately in state & persistent storage
     setReadNotifIds((prev) => ({ ...prev, [n.id]: true }));
@@ -124,7 +138,7 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     }
 
     // 2. Follower notifications navigate directly to connection directory
-    if (n.type === 'FOLLOW' || n.actionType === 'VIEW_FOLLOWERS') {
+    if (isFollowerNotification(n)) {
       if (onOpenFollowersDirectory) {
         onOpenFollowersDirectory();
       }
@@ -139,7 +153,31 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
   };
 
   const isOfficial = (n: CampusNotification) => {
-    return n.type === 'ADMIN' || n.type === 'VERIFICATION' || (n.type as any) === 'CONVERSION' || n.type === 'ADMIN_TRADE_DESK';
+    if (isFollowerNotification(n)) return false;
+    const typeUpper = (n.type || '').toUpperCase();
+    return (
+      typeUpper === 'ADMIN' ||
+      typeUpper === 'OFFICIAL' ||
+      typeUpper === 'VERIFICATION' ||
+      typeUpper === 'CONVERSION' ||
+      typeUpper === 'ADMIN_TRADE_DESK'
+    );
+  };
+
+  const getCleanTitle = (n: CampusNotification) => {
+    let t = n.title || 'Notification';
+    if (t.toLowerCase().includes('@modula') || t.toLowerCase().includes('message from admin')) {
+      return 'Official Platform Update';
+    }
+    return t;
+  };
+
+  const getCleanMessage = (n: CampusNotification) => {
+    let m = n.message || '';
+    m = m.replace(/@modula\s+sent you a message/gi, 'Official update');
+    m = m.replace(/Message from Admin/gi, 'Official Platform Update');
+    m = m.replace(/—\s*FUHSI Campus Council & Secretariat/gi, '— FUHSI Connect Administration');
+    return m;
   };
 
   const filtered = allNotifications.filter((n) => {
@@ -150,8 +188,11 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
   const unreadCount = allNotifications.filter((n) => !n.isRead).length;
   const officialCount = allNotifications.filter(isOfficial).length;
 
-  const renderIcon = (type: string, size = 18) => {
-    switch (type) {
+  const renderIcon = (n: CampusNotification, size = 18) => {
+    if (isFollowerNotification(n)) {
+      return <UserPlus size={size} className="text-teal-700" />;
+    }
+    switch (n.type as string) {
       case 'VERIFICATION':
       case 'CONVERSION':
         return <ShieldCheck size={size} className="text-emerald-700" />;
@@ -171,8 +212,11 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     }
   };
 
-  const renderIconBg = (type: string) => {
-    switch (type) {
+  const renderIconBg = (n: CampusNotification) => {
+    if (isFollowerNotification(n)) {
+      return 'bg-teal-100 border-teal-200';
+    }
+    switch (n.type as string) {
       case 'VERIFICATION':
       case 'CONVERSION':
         return 'bg-emerald-100 border-emerald-200';
@@ -272,21 +316,21 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
                 }`}
               >
                 <div className="shrink-0 mt-0.5">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center border shadow-2xs ${renderIconBg(n.type)}`}>
-                    {renderIcon(n.type, 18)}
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center border shadow-2xs ${renderIconBg(n)}`}>
+                    {renderIcon(n, 18)}
                   </div>
                 </div>
 
                 <div className="flex-1 min-w-0 space-y-1">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className={`text-xs leading-snug ${!n.isRead ? 'font-black text-slate-900' : 'font-semibold text-slate-800'}`}>
-                      {n.title}
+                      {getCleanTitle(n)}
                     </h3>
                     <span className="text-[10px] text-slate-400 font-semibold shrink-0">{displayTime}</span>
                   </div>
 
                   <p className={`text-xs leading-relaxed line-clamp-2 ${!n.isRead ? 'text-slate-700 font-medium' : 'text-slate-500 font-normal'}`}>
-                    {n.message}
+                    {getCleanMessage(n)}
                   </p>
                 </div>
 
@@ -318,12 +362,12 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
             {/* Modal Header */}
             <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
               <div className="flex items-center gap-3">
-                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center border shadow-xs ${renderIconBg(selectedNotifForModal.type)}`}>
-                  {renderIcon(selectedNotifForModal.type, 22)}
+                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center border shadow-xs ${renderIconBg(selectedNotifForModal)}`}>
+                  {renderIcon(selectedNotifForModal, 22)}
                 </div>
                 <div>
                   <h2 className="text-base font-black text-slate-900 leading-tight">
-                    {selectedNotifForModal.title}
+                    {getCleanTitle(selectedNotifForModal)}
                   </h2>
                   <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mt-0.5">
                     <Clock size={12} />
@@ -345,7 +389,7 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
             {/* Modal Content / Full Message */}
             <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
               <p className="text-sm text-slate-700 leading-relaxed font-normal whitespace-pre-line bg-slate-50/70 p-4 rounded-2xl border border-slate-100">
-                {selectedNotifForModal.message}
+                {getCleanMessage(selectedNotifForModal)}
               </p>
             </div>
 

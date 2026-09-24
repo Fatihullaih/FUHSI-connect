@@ -26,6 +26,8 @@ export const DEFAULT_SERVER_DB = {
   chatReports: [],
   chatRestrictions: [],
   follows: [],
+  marketplaceReports: [],
+  helpDeskInquiries: [],
   deletedUserIds: [] as string[],
   deletedUserNicknames: [] as string[],
   deletedPostIds: [] as string[],

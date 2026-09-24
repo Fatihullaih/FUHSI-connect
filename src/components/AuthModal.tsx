@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import fuhsiLogo from '../assets/images/fuhsi_logo_1785485694958.jpg';
-import { UserProfile } from '../types';
+import { UserProfile, HelpDeskInquiry } from '../types';
 import { getStoredUsers, upsertUser, updateUserPassword, unmarkUserPermanentlyDeleted, isUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
 import { fetchServerDb, mergeUsers, pushServerDbSync } from '../utils/apiSync';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { validateMatricCredentials, checkMatricUniqueness, normalizeMatricNumber } from '../utils/matricValidation';
 import { saveUserToFirestore, fetchUsersFromFirestore } from '../lib/firestoreSync';
+import { saveHelpDeskInquiry } from '../utils/helpDeskUtils';
 import { AvatarIcon } from './AvatarIcon';
 import { 
   ShieldCheck, 
@@ -89,6 +90,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // Help Desk / Support Ticket Form State
   const [emailCopied, setEmailCopied] = useState(false);
+  const [helpDeskMsg, setHelpDeskMsg] = useState('');
+  const [helpDeskSubmitted, setHelpDeskSubmitted] = useState(false);
 
   // Register Form State
   const [accountType, setAccountType] = useState<'Student' | 'Guest'>('Student');
@@ -1372,11 +1375,67 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           )}`
                         : `mailto:fuhsiconnectsupport@gmail.com?subject=FUHSI%20Connect%20Support%20%2F%20Complaint&body=Hello%20Help%20Desk%2C%0A%0AMy%20Username%20is%3A%20%0A%0AMy%20Issue%20%2F%20Complaint%20details%3A%0A`
                     }
-                    className="w-full py-2.5 px-4 bg-teal-700 hover:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <Mail size={15} />
+                    <Mail size={14} />
                     <span>Open in Email App</span>
                   </a>
+                </div>
+
+                {/* Direct In-App Ticket Submission Form */}
+                <div className="pt-3 border-t border-teal-200/80 space-y-2 text-xs">
+                  <span className="font-extrabold text-teal-950 block">
+                    Or Submit a Direct Ticket to the Help Desk Queue:
+                  </span>
+                  {helpDeskSubmitted ? (
+                    <div className="p-3 bg-emerald-100 text-emerald-950 rounded-xl border border-emerald-300 font-bold text-center animate-in fade-in">
+                      ✓ Your Help Desk ticket has been logged and sent to the Admin Console. You will receive an official update soon.
+                    </div>
+                  ) : (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!helpDeskMsg.trim()) return;
+                        const ticketId = `HD-${Math.floor(1000 + Math.random() * 9000)}`;
+                        const newTicket: HelpDeskInquiry = {
+                          id: `ticket_${Date.now()}`,
+                          ticketId,
+                          fullName: realName || nickname || 'Student Member',
+                          email: studentEmail || `${(nickname || 'student').replace(/^@/, '')}@fuhsi.edu.ng`,
+                          nickname: nickname ? (nickname.startsWith('@') ? nickname : `@${nickname}`) : undefined,
+                          matricNumber: matricNumber || matricConflictValue || undefined,
+                          department: department || undefined,
+                          level: level || undefined,
+                          category: matricConflictValue ? 'LOGIN_ISSUE' : 'REGISTRATION_APPEAL',
+                          categoryLabel: matricConflictValue ? 'Matric Number Ownership Conflict' : 'Registration Appeal',
+                          message: helpDeskMsg.trim(),
+                          status: 'PENDING',
+                          createdAt: new Date().toISOString(),
+                        };
+                        saveHelpDeskInquiry(newTicket);
+                        setHelpDeskSubmitted(true);
+                        setHelpDeskMsg('');
+                      }}
+                      className="space-y-2"
+                    >
+                      <textarea
+                        value={helpDeskMsg}
+                        onChange={(e) => setHelpDeskMsg(e.target.value)}
+                        placeholder="Describe your issue or appeal in detail (include your full name, username, and matric number)..."
+                        rows={3}
+                        className="w-full p-2.5 rounded-xl border border-teal-300 bg-white text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
+                        required
+                      />
+                      <button
+                        type="submit"
+                        disabled={!helpDeskMsg.trim()}
+                        className="w-full py-2.5 px-4 bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-black text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Send size={13} />
+                        <span>Submit Ticket to Admin Queue</span>
+                      </button>
+                    </form>
+                  )}
                 </div>
               </div>
 

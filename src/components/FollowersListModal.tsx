@@ -16,6 +16,7 @@ interface FollowersListModalProps {
   onToggleFollow?: (targetNickname: string) => void;
   onSelectUser?: (userNickname: string) => void;
   onClose: () => void;
+  zIndex?: number;
 }
 
 export const FollowersListModal: React.FC<FollowersListModalProps> = ({
@@ -27,6 +28,7 @@ export const FollowersListModal: React.FC<FollowersListModalProps> = ({
   onToggleFollow,
   onSelectUser,
   onClose,
+  zIndex,
 }) => {
   const [activeTab, setActiveTab] = useState<'followers' | 'following'>(initialTab);
   const cleanTarget = normalizeHandle(targetNickname);
@@ -59,7 +61,10 @@ export const FollowersListModal: React.FC<FollowersListModalProps> = ({
   }, [activeList, activeTab, allUsers]);
 
   return (
-    <div className="fixed inset-0 z-80 w-full h-full bg-slate-100 dark:bg-slate-950 flex flex-col overflow-hidden animate-in fade-in duration-150">
+    <div 
+      className="fixed inset-0 w-full h-full bg-slate-100 dark:bg-slate-950 flex flex-col overflow-hidden animate-in fade-in duration-150"
+      style={{ zIndex: zIndex ?? 80 }}
+    >
       <div className="w-full h-full max-w-3xl mx-auto bg-white dark:bg-slate-900 flex flex-col shadow-2xl sm:border-x sm:border-slate-200 dark:sm:border-slate-800 overflow-hidden">
         {/* Header */}
         <div className="p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10">
