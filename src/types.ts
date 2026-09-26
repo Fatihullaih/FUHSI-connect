@@ -342,7 +342,7 @@ export interface VerificationRequest {
   amountPaid?: number;
   statement: string;
   timestamp: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  status: 'PENDING' | 'APPROVED' | 'DECLINED' | 'REVOKED' | 'REJECTED';
   assignedBadgeType?: BadgeType;
   assignedBadgeTitle?: string;
 }

@@ -12,6 +12,7 @@ import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/us
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
 import { ShareRepostModal } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
+import { LinkifiedText } from './LinkifiedText';
 
 interface PostDetailModalProps {
   post: Post;
@@ -299,9 +300,9 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           </div>
 
           {comment.content && (
-            <p className="text-xs text-slate-800 pt-1.5 leading-relaxed font-medium whitespace-pre-line pl-9">
-              {comment.content}
-            </p>
+            <div className="text-xs text-slate-800 pt-1.5 leading-relaxed font-medium pl-9 select-text">
+              <LinkifiedText text={comment.content} />
+            </div>
           )}
 
           {comment.imageUrl && (
@@ -651,9 +652,9 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <p className="text-slate-800 text-xs sm:text-sm leading-relaxed whitespace-pre-line font-medium pt-1">
-                    {post.content}
-                  </p>
+                  <div className="text-slate-800 text-xs sm:text-sm leading-relaxed font-medium pt-1 select-text">
+                    <LinkifiedText text={post.content} />
+                  </div>
                 )}
 
             {(() => {

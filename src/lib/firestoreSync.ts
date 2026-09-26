@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   setDoc,
   deleteDoc,
   onSnapshot,
@@ -525,6 +526,23 @@ export async function deleteVerificationRequestFromFirestore(requestId: string):
   } catch (err) {
     console.error('Error deleting verification request from Firestore:', err);
   }
+}
+
+export async function fetchPostByIdFromFirestore(postId: string): Promise<Post | null> {
+  if (!postId) return null;
+  try {
+    const postRef = doc(db, POSTS_COL, postId);
+    const snap = await getDoc(postRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data && !isDemoPost(data) && (!data.status || data.status !== 'DELETED')) {
+        return data as Post;
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching post by ID from Firestore:', err);
+  }
+  return null;
 }
 
 /**

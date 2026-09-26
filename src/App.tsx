@@ -2649,7 +2649,7 @@ export const App: React.FC = () => {
         if (isMatch) {
           const revokedReq: VerificationRequest = {
             ...v,
-            status: 'REJECTED' as const,
+            status: 'REVOKED' as const,
             assignedBadgeType: 'NONE',
             assignedBadgeTitle: '',
           };
@@ -2787,6 +2787,93 @@ export const App: React.FC = () => {
       window.dispatchEvent(new CustomEvent('fuhsi_user_profile_updated', { detail: { nickname: targetApplicantNick } }));
       window.dispatchEvent(new CustomEvent('fuhsi_verifications_updated', { detail: { nickname: targetApplicantNick } }));
       window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname: targetApplicantNick } }));
+    }
+  };
+
+  // Handler for Admin explicitly declining a pending verification request
+  const handleDeclineVerification = (reqIdOrNick: string) => {
+    const cleanInput = reqIdOrNick.toLowerCase().replace(/^@/, '');
+    let targetApplicantNick = reqIdOrNick;
+    const existingReq = verificationRequests.find(
+      (v) =>
+        v.id === reqIdOrNick ||
+        (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanInput
+    );
+    if (existingReq) {
+      targetApplicantNick = existingReq.applicantNickname;
+    }
+    const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
+
+    // 1. Update verification requests list
+    setVerificationRequests((prev) => {
+      const updatedList = prev.map((v) => {
+        const isMatch =
+          v.id === reqIdOrNick ||
+          (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanTarget ||
+          (v.applicantNickname || '').toLowerCase() === targetApplicantNick.toLowerCase();
+        if (isMatch) {
+          const declinedReq: VerificationRequest = {
+            ...v,
+            status: 'DECLINED' as const,
+            assignedBadgeType: 'NONE',
+            assignedBadgeTitle: '',
+          };
+          saveVerificationRequestToFirestore(declinedReq).catch((err) =>
+            console.error('Error saving declined verification to Firestore:', err)
+          );
+          return declinedReq;
+        }
+        return v;
+      });
+      try {
+        localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
+        pushServerDbSync({ verificationRequests: updatedList });
+      } catch (e) {}
+      return updatedList;
+    });
+
+    // 2. Send notification to applicant
+    try {
+      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+      const declineNotif = {
+        id: `verif_dec_${Date.now()}`,
+        type: 'ADMIN',
+        title: 'Verification Request Declined',
+        message: `Your verification application has been reviewed and declined at this time. You may review your verification credentials or reach out to the Admin Console for details.`,
+        timestamp: new Date().toISOString(),
+        isRead: false,
+      };
+      let existingNotifs = [];
+      const storedNotifs = localStorage.getItem(notifKey);
+      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
+      const updatedNotifs = [declineNotif, ...existingNotifs];
+      localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
+      pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
+    } catch (e) {}
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fuhsi_verifications_updated', { detail: { nickname: targetApplicantNick } }));
+      window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname: targetApplicantNick } }));
+    }
+  };
+
+  // Handler for Admin permanently deleting a verification record (from Revoked or Declined)
+  const handleDeleteVerification = async (reqId: string) => {
+    setVerificationRequests((prev) => {
+      const updated = prev.filter((r) => r.id !== reqId);
+      try {
+        localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updated));
+        pushServerDbSync({ verificationRequests: updated });
+      } catch (e) {}
+      return updated;
+    });
+    try {
+      await deleteVerificationRequestFromFirestore(reqId);
+    } catch (err) {
+      console.error('Error permanently deleting verification request from Firestore:', err);
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fuhsi_verifications_updated', { detail: { requestId: reqId } }));
     }
   };
 
@@ -3283,6 +3370,18 @@ export const App: React.FC = () => {
             onUndoRepost={handleUndoRepost}
             onQuote={handleQuotePost}
             onSelectPost={openPostDetail}
+            onOpenAdminConsole={(deskId, tab) => {
+              handleNavChange(6);
+              if (deskId) {
+                setTimeout(() => {
+                  window.dispatchEvent(
+                    new CustomEvent('fuhsi_open_admin_desk', {
+                      detail: { deskId, tab },
+                    })
+                  );
+                }, 120);
+              }
+            }}
           />
         )}
 
@@ -3340,6 +3439,18 @@ export const App: React.FC = () => {
               }
             }}
             onOpenFollowersDirectory={openFollowersDirectory}
+            onNavigateToAdminDesk={(deskId, tab) => {
+              handleNavChange(6);
+              if (deskId) {
+                setTimeout(() => {
+                  window.dispatchEvent(
+                    new CustomEvent('fuhsi_open_admin_desk', {
+                      detail: { deskId, tab },
+                    })
+                  );
+                }, 120);
+              }
+            }}
           />
         )}
 
@@ -3400,11 +3511,19 @@ export const App: React.FC = () => {
               onDeleteMarketplaceItem={handleDeleteMarketplaceItem}
               onResolveReport={(repId: string) => setReports((prev) => prev.filter((r) => r.id !== repId))}
               onApproveVerification={handleApproveVerification}
-              onRejectVerification={handleRevokeVerification}
+              onRejectVerification={handleDeclineVerification}
               onRevokeVerification={handleRevokeVerification}
+              onDeleteVerification={handleDeleteVerification}
               onUpdateVerificationRequestStatus={(id, status) => {
-                if (status === 'REJECTED') {
+                if (status === 'REVOKED') {
                   handleRevokeVerification(id);
+                } else if (status === 'DECLINED' || status === 'REJECTED') {
+                  handleDeclineVerification(id);
+                } else if (status === 'APPROVED') {
+                  const req = verificationRequests.find((r) => r.id === id);
+                  if (req) {
+                    handleApproveVerification(id, req.assignedBadgeType || 'GREEN', req.assignedBadgeTitle || '');
+                  }
                 }
               }}
               onDeletePost={handleDeletePost}

@@ -11,8 +11,10 @@ import {
   SquarePen,
   ArrowUp,
   Sparkles,
-  MessageSquarePlus
+  MessageSquarePlus,
+  Shield
 } from 'lucide-react';
+import { useAdminPendingCounts } from '../utils/adminAlertUtils';
 
 interface FeedScreenProps {
   userProfile?: UserProfile | null;
@@ -36,6 +38,7 @@ interface FeedScreenProps {
   onQuote?: (post: Post, caption: string) => void;
   onSelectPost?: (post: Post) => void;
   onDeleteComment?: (commentId: string) => void;
+  onOpenAdminConsole?: (deskId?: string, tab?: string) => void;
 
   // Legacy / alternative props compatibility
   comments?: Record<string, Comment[]>;
@@ -67,6 +70,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   onSelectPost,
   onDeleteComment,
   onCreatePost,
+  onOpenAdminConsole,
   comments = {},
   onVote,
   onBookmark,
@@ -75,6 +79,9 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
 }) => {
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [autoRefreshNotice, setAutoRefreshNotice] = useState<string | null>(null);
+
+  // Real-time admin pending tasks for attention indicator
+  const adminTasks = useAdminPendingCounts();
 
   // Finite scrolling state with clear end
   const [extraPosts, setExtraPosts] = useState<Post[]>([]);
@@ -215,6 +222,150 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
           <button onClick={() => setAutoRefreshNotice(null)} className="text-teal-200 hover:text-white font-black text-sm cursor-pointer">
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Admin Console Attention Banner for @modula (Admin) */}
+      {userProfile?.isAdmin && (
+        <div
+          onClick={() => onOpenAdminConsole?.()}
+          role="button"
+          tabIndex={0}
+          className={`rounded-2xl p-4 transition-all duration-300 cursor-pointer select-none border ${
+            adminTasks.hasPendingTasks
+              ? 'bg-amber-400 border-amber-300 shadow-md shadow-amber-400/40 animate-pulse text-slate-950'
+              : 'bg-amber-100/90 hover:bg-amber-200/90 border-amber-300/80 text-slate-900 shadow-xs'
+          }`}
+          title={
+            adminTasks.hasPendingTasks
+              ? `Admin Console: ${adminTasks.totalPending} pending task${adminTasks.totalPending === 1 ? '' : 's'} require your review`
+              : 'Admin Console: All caught up'
+          }
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center font-black shrink-0 ${
+                  adminTasks.hasPendingTasks ? 'bg-slate-950 text-amber-300' : 'bg-amber-500/30 text-amber-900'
+                }`}
+              >
+                <Shield size={20} className={adminTasks.hasPendingTasks ? 'fill-amber-300 text-amber-300' : 'text-amber-800'} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-black tracking-wide uppercase">
+                    ADMIN CONSOLE
+                  </h3>
+                  {adminTasks.hasPendingTasks ? (
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-950 text-amber-300 text-[11px] font-black shadow-xs">
+                      <span>🟡 Attention Needed</span>
+                      <span className="bg-amber-400 text-slate-950 px-1.5 py-0.2 rounded-full text-[10px] font-black">
+                        {adminTasks.totalPending}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-extrabold text-amber-800 bg-amber-200/70 px-2 py-0.5 rounded-full">
+                      All Caught Up
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs font-semibold mt-0.5 opacity-90">
+                  {adminTasks.hasPendingTasks
+                    ? `There is something new that needs your attention in the Admin Console (${adminTasks.totalPending} pending item${adminTasks.totalPending === 1 ? '' : 's'}). Click to review.`
+                    : 'Normal state — No pending items requiring attention. All tasks up to date.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1 text-xs font-black shrink-0 text-slate-950">
+              <span className="hidden sm:inline">Open Console</span>
+              <span className="text-base font-black">→</span>
+            </div>
+          </div>
+
+          {/* Quick pending breakdown pills (only shown when has pending tasks) */}
+          {adminTasks.hasPendingTasks && (
+            <div className="flex items-center gap-1.5 flex-wrap mt-3 pt-2.5 border-t border-slate-950/15 text-[11px] font-extrabold">
+              {adminTasks.studentAccounts > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenAdminConsole?.('student-accounts-desk', 'PENDING');
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  title="Open Student Accounts awaiting approval"
+                >
+                  Student Accounts: {adminTasks.studentAccounts} new
+                </button>
+              )}
+              {adminTasks.verificationRequests > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenAdminConsole?.('verification-requests-desk', 'PENDING');
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  title="Open Verification Requests awaiting review"
+                >
+                  Verification Requests: {adminTasks.verificationRequests} new
+                </button>
+              )}
+              {adminTasks.marketplaceManagement > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenAdminConsole?.('marketplace-management-desk');
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  title="Open Marketplace Management"
+                >
+                  Marketplace: {adminTasks.marketplaceManagement} pending
+                </button>
+              )}
+              {adminTasks.flaggedCommunityPosts > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenAdminConsole?.('flagged-posts-desk');
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  title="Open Flagged Community Posts"
+                >
+                  Flagged Posts: {adminTasks.flaggedCommunityPosts} new
+                </button>
+              )}
+              {adminTasks.chatModeration > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenAdminConsole?.('chat-moderation-desk');
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  title="Open Chat Moderation"
+                >
+                  Chat Moderation: {adminTasks.chatModeration} cases
+                </button>
+              )}
+              {adminTasks.helpDesk > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenAdminConsole?.('helpdesk-desk', 'PENDING');
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  title="Open Help Desk tickets awaiting review"
+                >
+                  Help Desk: {adminTasks.helpDesk} new
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 

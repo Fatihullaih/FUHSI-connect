@@ -10,7 +10,8 @@ import {
   Megaphone, 
   UserPlus, 
   X, 
-  Clock
+  Clock,
+  Shield
 } from 'lucide-react';
 import { 
   normalizeNickname, 
@@ -24,12 +25,37 @@ import {
   isChatMessageNotification
 } from '../utils/messagingUtils';
 
+export function getAdminDeskForNotification(n: CampusNotification | null): { deskId: string; tab?: string } | null {
+  if (!n) return null;
+  const str = `${n.type || ''} ${n.actionType || ''} ${n.title || ''} ${n.message || ''}`.toLowerCase();
+  if (str.includes('verif') || str.includes('badge') || str.includes('subscription') || str.includes('payment review') || str.includes('get verified')) {
+    return { deskId: 'verification-requests-desk', tab: 'PENDING' };
+  }
+  if (str.includes('student account') || str.includes('registration') || str.includes('matric') || str.includes('new student') || str.includes('account approval') || str.includes('pending approval')) {
+    return { deskId: 'student-accounts-desk', tab: 'PENDING' };
+  }
+  if (str.includes('marketplace') || str.includes('listing') || str.includes('trade') || str.includes('price review') || str.includes('trade desk') || str.includes('market report') || str.includes('trade report')) {
+    return { deskId: 'marketplace-management-desk' };
+  }
+  if (str.includes('flagged') || str.includes('quarantine') || str.includes('post report') || str.includes('community post') || str.includes('flagged post') || str.includes('content moderation')) {
+    return { deskId: 'flagged-posts-desk' };
+  }
+  if (str.includes('chat report') || str.includes('chat moderation') || str.includes('harassment') || str.includes('chat case') || str.includes('message report')) {
+    return { deskId: 'chat-moderation-desk' };
+  }
+  if (str.includes('help desk') || str.includes('appeal') || str.includes('inquiry') || str.includes('ticket') || str.includes('helpdesk')) {
+    return { deskId: 'helpdesk-desk', tab: 'PENDING' };
+  }
+  return null;
+}
+
 interface NotificationScreenProps {
   userProfile: UserProfile;
   allPosts?: Post[];
   onSelectPost?: (post: Post) => void;
   onOpenTradeChat?: (convId?: string) => void;
   onOpenFollowersDirectory?: () => void;
+  onNavigateToAdminDesk?: (deskId: string, tab?: string) => void;
 }
 
 export const NotificationScreen: React.FC<NotificationScreenProps> = ({ 
@@ -38,6 +64,7 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
   onSelectPost,
   onOpenTradeChat,
   onOpenFollowersDirectory,
+  onNavigateToAdminDesk,
 }) => {
   const [filter, setFilter] = useState<'ALL' | 'OFFICIAL'>('ALL');
   const [readNotifIds, setReadNotifIds] = useState<Record<string, boolean>>(() => {
@@ -145,7 +172,22 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
       return;
     }
 
-    // 3. Any other kind of notification opens in a modal so it can be read clearly
+    // 3. Admin task notifications navigate directly to the relevant Admin Console desk!
+    if (userProfile?.isAdmin) {
+      const adminTarget = getAdminDeskForNotification(n);
+      if (adminTarget) {
+        if (onNavigateToAdminDesk) {
+          onNavigateToAdminDesk(adminTarget.deskId, adminTarget.tab);
+        } else if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('fuhsi_open_admin_desk', { detail: adminTarget })
+          );
+        }
+        return;
+      }
+    }
+
+    // 4. Any other kind of notification opens in a modal so it can be read clearly
     setSelectedNotifForModal({
       ...n,
       isRead: true,
@@ -334,6 +376,25 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
                   </p>
                 </div>
 
+                {userProfile?.isAdmin && getAdminDeskForNotification(n) && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleNotificationClick(n);
+                      const target = getAdminDeskForNotification(n);
+                      if (target && onNavigateToAdminDesk) {
+                        onNavigateToAdminDesk(target.deskId, target.tab);
+                      }
+                    }}
+                    className="self-center px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] shrink-0 transition-colors shadow-2xs flex items-center gap-1 cursor-pointer"
+                    title="Open directly in Admin Console"
+                  >
+                    <Shield size={11} className="fill-slate-950" />
+                    <span className="hidden sm:inline">Open Desk</span>
+                  </button>
+                )}
+
                 {!n.isRead && (
                   <div className="w-2.5 h-2.5 rounded-full bg-teal-600 shrink-0 self-center shadow-xs" title="Unread" />
                 )}
@@ -394,7 +455,25 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
             </div>
 
             {/* Modal Footer */}
-            <div className="flex items-center justify-end pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 flex-wrap">
+              {userProfile?.isAdmin && getAdminDeskForNotification(selectedNotifForModal) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = getAdminDeskForNotification(selectedNotifForModal);
+                    setSelectedNotifForModal(null);
+                    if (target && onNavigateToAdminDesk) {
+                      onNavigateToAdminDesk(target.deskId, target.tab);
+                    }
+                  }}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
+                >
+                  <Shield size={14} className="fill-slate-950" />
+                  <span>Open in Admin Console →</span>
+                </button>
+              ) : (
+                <div />
+              )}
               <button
                 type="button"
                 onClick={() => setSelectedNotifForModal(null)}

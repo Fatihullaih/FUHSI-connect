@@ -10,6 +10,7 @@ import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/us
 import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
 import { ShareRepostModal, getDedicatedPostUrl } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
+import { LinkifiedText } from './LinkifiedText';
 import { 
   Heart, 
   MessageSquare, 
@@ -531,13 +532,13 @@ export const PostCard: React.FC<PostCardProps> = ({
           </div>
         ) : (
           <div className="mt-2">
-            <p 
+            <div 
               onClick={() => onCommentClick?.(post)}
-              className="text-slate-800 text-sm sm:text-base leading-relaxed whitespace-pre-line font-normal cursor-pointer hover:text-teal-950 transition-colors"
+              className="text-slate-800 text-sm sm:text-base leading-relaxed font-normal cursor-pointer hover:text-teal-950 transition-colors"
               title="Click to view full thread, comments & replies"
             >
-              {displayContent}
-            </p>
+              <LinkifiedText text={displayContent} />
+            </div>
             {isLongContent && (
               <button
                 type="button"
@@ -816,7 +817,9 @@ export const PostCard: React.FC<PostCardProps> = ({
                           )}
                         </div>
                       </div>
-                      <p className="text-slate-700 leading-relaxed pl-7">{comment.content}</p>
+                      <div className="text-slate-700 leading-relaxed pl-7">
+                        <LinkifiedText text={comment.content} />
+                      </div>
 
                       {deletingCommentId === comment.id && (
                         <div className="mt-2 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-2 animate-in fade-in">

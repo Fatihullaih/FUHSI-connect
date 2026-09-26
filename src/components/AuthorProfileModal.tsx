@@ -11,6 +11,7 @@ import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, findUserByNickname, isModulaAccount, formatJoinDate } from '../utils/userDbUtils';
 import { isUserFollowing, getFollowersCount, getFollowingCount, normalizeHandle } from '../utils/followUtils';
 import { canViewerSeeOnlineStatus, isUserOnline } from '../utils/presenceUtils';
+import { LinkifiedText } from './LinkifiedText';
 import { 
   X, 
   ArrowLeft,

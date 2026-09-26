@@ -27,10 +27,11 @@ interface ModerationScreenProps {
   onDeletePost?: (postId: string) => void;
   onUpdateBadge?: (badgeType: BadgeType, badgeTitle: string) => void;
   onUpdateReputationScore?: (newScore: number) => void;
-  onUpdateVerificationRequestStatus?: (id: string, status: 'APPROVED' | 'REJECTED') => void;
+  onUpdateVerificationRequestStatus?: (id: string, status: 'APPROVED' | 'DECLINED' | 'REVOKED' | 'REJECTED') => void;
   onApproveVerification?: (id: string, badgeType?: BadgeType, badgeTitle?: string) => void;
   onRejectVerification?: (id: string) => void;
   onRevokeVerification?: (id: string) => void;
+  onDeleteVerification?: (id: string) => void;
   onResolveReport?: (reportId: string) => void;
   onAdminApproveMarketplaceItem?: (id: string, approvedPrice: number, note: string) => void;
   onAdminRejectMarketplaceItem?: (id: string, note: string) => void;
@@ -56,6 +57,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   onApproveVerification = () => {},
   onRejectVerification = () => {},
   onRevokeVerification = () => {},
+  onDeleteVerification = () => {},
   onResolveReport = () => {},
   onAdminApproveMarketplaceItem = () => {},
   onAdminRejectMarketplaceItem = () => {},
@@ -158,7 +160,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   const [selectedReqColors, setSelectedReqColors] = useState<Record<string, BadgeType>>({});
   const [selectedReqTitles, setSelectedReqTitles] = useState<Record<string, string>>({});
   const [reassignSuccessMsg, setReassignSuccessMsg] = useState<Record<string, string>>({});
-  const [verifFilterTab, setVerifFilterTab] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [verifFilterTab, setVerifFilterTab] = useState<'PENDING' | 'APPROVED' | 'DECLINED' | 'REVOKED'>('PENDING');
   const [verifSearchQuery, setVerifSearchQuery] = useState('');
   const [verifCurrentPage, setVerifCurrentPage] = useState(1);
   const [selectedReqForView, setSelectedReqForView] = useState<VerificationRequest | null>(null);
@@ -175,6 +177,35 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   const [selectedTicketForView, setSelectedTicketForView] = useState<HelpDeskInquiry | null>(null);
   const [helpDeskFilter, setHelpDeskFilter] = useState<'PENDING' | 'RESOLVED' | 'ALL'>('PENDING');
   const [helpDeskSearchQuery, setHelpDeskSearchQuery] = useState('');
+
+  // Internal desk navigator: preserves Admin Console context without URL hash changes or browser history resets
+  const navigateToDesk = (deskId: string, tab?: string) => {
+    if (deskId === 'student-accounts-desk') {
+      if (tab) setActiveUserTab(tab as any);
+    } else if (deskId === 'verification-requests-desk') {
+      if (tab) setVerifFilterTab(tab as any);
+    } else if (deskId === 'helpdesk-desk') {
+      if (tab) setHelpDeskFilter(tab as any);
+    }
+    const el = document.getElementById(deskId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  // Listen to open admin desk events from dashboard alerts or notifications
+  useEffect(() => {
+    const handleOpenDesk = (e: any) => {
+      const { deskId, tab } = e.detail || {};
+      if (deskId) {
+        setTimeout(() => {
+          navigateToDesk(deskId, tab);
+        }, 100);
+      }
+    };
+    window.addEventListener('fuhsi_open_admin_desk', handleOpenDesk);
+    return () => window.removeEventListener('fuhsi_open_admin_desk', handleOpenDesk);
+  }, []);
 
   // Sync Help Desk inquiries
   useEffect(() => {
@@ -613,9 +644,10 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
         {/* 6 Section Breakdown Overview Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
           {/* 1. Student Accounts */}
-          <a
-            href="#student-accounts-desk"
-            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer ${
+          <button
+            type="button"
+            onClick={() => navigateToDesk('student-accounts-desk', 'PENDING')}
+            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
               adminTasks.studentAccounts > 0
                 ? 'bg-amber-50/80 border-amber-300 hover:bg-amber-100/90 shadow-2xs'
                 : 'bg-slate-50 border-slate-200/80 hover:bg-slate-100/70'
@@ -635,12 +667,13 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-slate-400 font-bold text-xs">0</span>
               )}
             </div>
-          </a>
+          </button>
 
           {/* 2. Verification Requests */}
-          <a
-            href="#verification-requests-desk"
-            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer ${
+          <button
+            type="button"
+            onClick={() => navigateToDesk('verification-requests-desk', 'PENDING')}
+            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
               adminTasks.verificationRequests > 0
                 ? 'bg-amber-50/80 border-amber-300 hover:bg-amber-100/90 shadow-2xs'
                 : 'bg-slate-50 border-slate-200/80 hover:bg-slate-100/70'
@@ -660,12 +693,13 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-slate-400 font-bold text-xs">0</span>
               )}
             </div>
-          </a>
+          </button>
 
           {/* 3. Marketplace Management */}
-          <a
-            href="#marketplace-management-desk"
-            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer ${
+          <button
+            type="button"
+            onClick={() => navigateToDesk('marketplace-management-desk')}
+            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
               adminTasks.marketplaceManagement > 0
                 ? 'bg-amber-50/80 border-amber-300 hover:bg-amber-100/90 shadow-2xs'
                 : 'bg-slate-50 border-slate-200/80 hover:bg-slate-100/70'
@@ -685,12 +719,13 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-slate-400 font-bold text-xs">0</span>
               )}
             </div>
-          </a>
+          </button>
 
           {/* 4. Flagged Community Posts */}
-          <a
-            href="#flagged-posts-desk"
-            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer ${
+          <button
+            type="button"
+            onClick={() => navigateToDesk('flagged-posts-desk')}
+            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
               adminTasks.flaggedCommunityPosts > 0
                 ? 'bg-rose-50/80 border-rose-300 hover:bg-rose-100/90 shadow-2xs'
                 : 'bg-slate-50 border-slate-200/80 hover:bg-slate-100/70'
@@ -710,12 +745,13 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-slate-400 font-bold text-xs">0</span>
               )}
             </div>
-          </a>
+          </button>
 
           {/* 5. Chat Moderation */}
-          <a
-            href="#chat-moderation-desk"
-            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer ${
+          <button
+            type="button"
+            onClick={() => navigateToDesk('chat-moderation-desk')}
+            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
               adminTasks.chatModeration > 0
                 ? 'bg-rose-50/80 border-rose-300 hover:bg-rose-100/90 shadow-2xs'
                 : 'bg-slate-50 border-slate-200/80 hover:bg-slate-100/70'
@@ -735,12 +771,13 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-slate-400 font-bold text-xs">0</span>
               )}
             </div>
-          </a>
+          </button>
 
           {/* 6. Help Desk */}
-          <a
-            href="#helpdesk-desk"
-            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer ${
+          <button
+            type="button"
+            onClick={() => navigateToDesk('helpdesk-desk', 'PENDING')}
+            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
               adminTasks.helpDesk > 0
                 ? 'bg-purple-50/80 border-purple-300 hover:bg-purple-100/90 shadow-2xs'
                 : 'bg-slate-50 border-slate-200/80 hover:bg-slate-100/70'
@@ -760,7 +797,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-slate-400 font-bold text-xs">0</span>
               )}
             </div>
-          </a>
+          </button>
         </div>
       </div>
 
@@ -938,7 +975,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                             <span className="text-[10px] font-bold text-slate-500">
                               · {isGuestAccount(user) ? 'Guest' : 'Student'}
                             </span>
-                            {user.department && (
+                            {!isGuestAccount(user) && user.department && (
                               <span className="text-[10px] text-slate-400 font-medium truncate max-w-[140px]">
                                 ({user.department} {user.level || ''})
                               </span>
@@ -946,12 +983,15 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                           </div>
 
                           <div className="text-[11px] text-slate-600 truncate mt-0.5 flex items-center gap-1.5 flex-wrap">
-                            <span className="font-semibold text-slate-800">{user.realName || 'Guest User'}</span>
-                            {user.matricNumber && (
+                            <span className="font-semibold text-slate-800">{user.realName || (isGuestAccount(user) ? 'Guest Member' : 'Student Member')}</span>
+                            {!isGuestAccount(user) && user.matricNumber && (
                               <span className="font-mono text-slate-500 font-semibold">· {user.matricNumber}</span>
                             )}
                             {user.studentEmail && (
                               <span className="text-slate-400 hidden md:inline">· {user.studentEmail}</span>
+                            )}
+                            {isGuestAccount(user) && user.emergencyHomePhone && (
+                              <span className="text-slate-400 hidden md:inline">· {user.emergencyHomePhone}</span>
                             )}
                           </div>
                         </div>
@@ -1149,7 +1189,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-slate-500 block text-[10px] uppercase font-bold">EMAIL ADDRESS</span>
                 <span className="font-bold text-slate-800 font-mono text-[11px]">{lookupResult.studentEmail || 'Not Provided'}</span>
               </div>
-              {lookupResult.accountType !== 'Guest' ? (
+              {!isGuestAccount(lookupResult) ? (
                 <>
                   <div>
                     <span className="text-slate-500 block text-[10px] uppercase font-bold">MATRICULATION NUMBER</span>
@@ -1157,13 +1197,13 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   </div>
                   <div>
                     <span className="text-slate-500 block text-[10px] uppercase font-bold">DEPARTMENT & LEVEL</span>
-                    <span className="font-bold text-slate-800">{lookupResult.department || 'FUHSI'} ({lookupResult.level || '100L'})</span>
+                    <span className="font-bold text-slate-800">{lookupResult.department || 'Not Provided'} ({lookupResult.level || 'Not Provided'})</span>
                   </div>
                 </>
               ) : (
                 <div>
-                  <span className="text-slate-500 block text-[10px] uppercase font-bold">STUDENT STATUS</span>
-                  <span className="font-bold text-slate-500 text-xs italic">Guest Member (Non-Student)</span>
+                  <span className="text-slate-500 block text-[10px] uppercase font-bold">ACCOUNT TYPE</span>
+                  <span className="font-bold text-amber-800 text-xs">Guest Account (Non-Student Member)</span>
                 </div>
               )}
             </div>
@@ -1290,17 +1330,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-bold border-b border-slate-100">
             <button
               type="button"
-              onClick={() => { setVerifFilterTab('ALL'); setVerifCurrentPage(1); }}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-                verifFilterTab === 'ALL'
-                  ? 'bg-slate-900 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              All Subscriptions ({verificationRequests.length})
-            </button>
-            <button
-              type="button"
               onClick={() => { setVerifFilterTab('PENDING'); setVerifCurrentPage(1); }}
               className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
                 verifFilterTab === 'PENDING'
@@ -1322,23 +1351,37 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
               }`}
             >
-              <span>✔️ Approved & Active</span>
+              <span>✔️ Approved</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20">
                 {verificationRequests.filter((r) => r.status === 'APPROVED').length}
               </span>
             </button>
             <button
               type="button"
-              onClick={() => { setVerifFilterTab('REJECTED'); setVerifCurrentPage(1); }}
+              onClick={() => { setVerifFilterTab('DECLINED'); setVerifCurrentPage(1); }}
               className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-                verifFilterTab === 'REJECTED'
+                verifFilterTab === 'DECLINED'
                   ? 'bg-rose-600 text-white shadow-xs'
                   : 'bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100'
               }`}
             >
-              <span>✖️ Declined / Revoked</span>
+              <span>❌ Declined</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20">
-                {verificationRequests.filter((r) => r.status === 'REJECTED').length}
+                {verificationRequests.filter((r) => r.status === 'DECLINED' || r.status === 'REJECTED').length}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setVerifFilterTab('REVOKED'); setVerifCurrentPage(1); }}
+              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                verifFilterTab === 'REVOKED'
+                  ? 'bg-orange-600 text-white shadow-xs'
+                  : 'bg-orange-50 text-orange-800 border border-orange-200 hover:bg-orange-100'
+              }`}
+            >
+              <span>🔄 Revoked</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20">
+                {verificationRequests.filter((r) => r.status === 'REVOKED').length}
               </span>
             </button>
           </div>
@@ -1351,7 +1394,8 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
             const filteredRequests = verificationRequests.filter((req) => {
               if (verifFilterTab === 'PENDING' && req.status !== 'PENDING') return false;
               if (verifFilterTab === 'APPROVED' && req.status !== 'APPROVED') return false;
-              if (verifFilterTab === 'REJECTED' && req.status !== 'REJECTED') return false;
+              if (verifFilterTab === 'DECLINED' && (req.status !== 'DECLINED' && req.status !== 'REJECTED')) return false;
+              if (verifFilterTab === 'REVOKED' && req.status !== 'REVOKED') return false;
 
               if (!cleanSearch) return true;
 
@@ -1376,12 +1420,12 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   {verifSearchQuery
                     ? `No verification requests matching "${verifSearchQuery}"`
                     : verifFilterTab === 'PENDING'
-                    ? 'No pending verification subscription requests awaiting review.'
+                    ? 'No pending verification requests awaiting review.'
                     : verifFilterTab === 'APPROVED'
-                    ? 'No approved active verified users yet.'
-                    : verifFilterTab === 'REJECTED'
-                    ? 'No declined or cancelled requests.'
-                    : 'No verification subscription requests found.'}
+                    ? 'No approved active verified requests.'
+                    : verifFilterTab === 'DECLINED'
+                    ? 'No declined verification requests.'
+                    : 'No revoked verification records.'}
                 </div>
               );
             }
@@ -1430,7 +1474,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                               size={13}
                             />
                             <span className="text-[10px] font-bold text-slate-500">
-                              · {req.accountType || 'Student'}
+                              · {req.accountType === 'Guest' ? 'Guest' : (req.accountType || 'Student')}
                             </span>
                             {req.positionTitle && (
                               <span className="text-[10px] font-semibold text-teal-800 bg-teal-50 px-1.5 py-0.2 rounded border border-teal-200 truncate max-w-[150px]">
@@ -1440,7 +1484,9 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                           </div>
 
                           <div className="text-[11px] text-slate-600 truncate mt-0.5 flex items-center gap-1.5 flex-wrap">
-                            <span className="font-mono text-slate-700 font-semibold">{req.matricNumber || req.department || 'FUHSI'}</span>
+                            {req.accountType !== 'Guest' && (req.matricNumber || req.department) && (
+                              <span className="font-mono text-slate-700 font-semibold">{req.matricNumber || req.department}</span>
+                            )}
                             <span className="text-slate-400 font-mono">· Ref: {req.paymentRef || 'PAY-OK'}</span>
                             <span className="text-emerald-700 font-bold">
                               (₦{(req.amountPaid || adminVerificationFee).toLocaleString()})
@@ -1452,10 +1498,11 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                         <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center flex-wrap">
                           <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
                             req.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
-                            req.status === 'REJECTED' ? 'bg-rose-100 text-rose-900 border-rose-300' :
+                            req.status === 'REVOKED' ? 'bg-orange-100 text-orange-900 border-orange-300' :
+                            req.status === 'DECLINED' || req.status === 'REJECTED' ? 'bg-rose-100 text-rose-900 border-rose-300' :
                             'bg-amber-100 text-amber-900 border-amber-300'
                           }`}>
-                            {req.status === 'APPROVED' ? 'Approved' : req.status === 'REJECTED' ? 'Declined' : 'Pending'}
+                            {req.status === 'APPROVED' ? 'Approved' : req.status === 'REVOKED' ? 'Revoked' : req.status === 'DECLINED' || req.status === 'REJECTED' ? 'Declined' : 'Pending'}
                           </span>
 
                           <button
@@ -1485,12 +1532,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (onRevokeVerification) {
-                                    onRevokeVerification(req.id);
-                                  } else {
-                                    onRejectVerification(req.id);
-                                  }
-                                  onUpdateVerificationRequestStatus(req.id, 'REJECTED');
+                                  onUpdateVerificationRequestStatus(req.id, 'DECLINED');
                                 }}
                                 className="py-1 px-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] transition-colors cursor-pointer"
                               >
@@ -1503,34 +1545,72 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                             <button
                               type="button"
                               onClick={() => {
-                                if (window.confirm(`Are you sure you want to completely revoke verification and remove the badge for ${req.applicantNickname}?`)) {
-                                  if (onRevokeVerification) {
-                                    onRevokeVerification(req.id);
-                                  } else {
-                                    onRejectVerification(req.id);
-                                  }
-                                  onUpdateVerificationRequestStatus(req.id, 'REJECTED');
+                                if (window.confirm(`Are you sure you want to revoke verification and remove the active badge for ${req.applicantNickname}?`)) {
+                                  onRevokeVerification(req.id);
+                                  onUpdateVerificationRequestStatus(req.id, 'REVOKED');
                                 }
                               }}
                               className="py-1 px-2.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] transition-colors flex items-center gap-1 cursor-pointer"
-                              title="Revoke verification and remove badge totally"
+                              title="Revoke verification and remove badge immediately"
                             >
                               <XCircle size={12} />
                               <span>Revoke</span>
                             </button>
                           )}
 
-                          {req.status === 'REJECTED' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
-                                onUpdateVerificationRequestStatus(req.id, 'APPROVED');
-                              }}
-                              className="py-1 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-[11px] transition-colors cursor-pointer"
-                            >
-                              Re-Approve
-                            </button>
+                          {req.status === 'REVOKED' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                                  onUpdateVerificationRequestStatus(req.id, 'APPROVED');
+                                }}
+                                className="py-1 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-[11px] transition-colors cursor-pointer"
+                                title="Reassign and approve verification"
+                              >
+                                Reassign & Approve
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm(`Permanently delete this verification record for ${req.applicantNickname}? This cannot be undone.`)) {
+                                    onDeleteVerification(req.id);
+                                  }
+                                }}
+                                className="py-1 px-2 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 font-bold text-[11px] transition-colors cursor-pointer"
+                                title="Permanently delete record"
+                              >
+                                Delete
+                              </button>
+                            </>
+                          )}
+
+                          {(req.status === 'DECLINED' || req.status === 'REJECTED') && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                                  onUpdateVerificationRequestStatus(req.id, 'APPROVED');
+                                }}
+                                className="py-1 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-[11px] transition-colors cursor-pointer"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm(`Permanently delete this verification record for ${req.applicantNickname}? This cannot be undone.`)) {
+                                    onDeleteVerification(req.id);
+                                  }
+                                }}
+                                className="py-1 px-2 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 font-bold text-[11px] transition-colors cursor-pointer"
+                                title="Permanently delete record"
+                              >
+                                Delete
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -2018,7 +2098,9 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                         />
                       )}
                     </div>
-                    <p className="text-xs text-slate-500 font-medium">Complete Student Registration Record</p>
+                    <p className="text-xs text-slate-500 font-medium">
+                      {isGuestAccount(student) ? 'Guest Account Registration Record' : 'Complete Student Registration Record'}
+                    </p>
                   </div>
                 </div>
                 <button
@@ -2038,34 +2120,42 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 </div>
                 <div>
                   <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Account Type</span>
-                  <span className="font-bold text-teal-800">{isGuestAccount(student) ? 'Guest Account' : (student.accountType || 'Student')}</span>
+                  <span className="font-bold text-teal-800">{isGuestAccount(student) ? 'Guest' : (student.accountType || 'Student')}</span>
                 </div>
                 <div>
                   <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Full Real Name</span>
                   <span className="font-bold text-slate-900">{student.realName || 'Not Provided'}</span>
                 </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Matriculation Number</span>
-                  <span className="font-mono font-bold text-slate-900">{student.matricNumber || 'Not Provided'}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Department</span>
-                  <span className="font-bold text-slate-900">{student.department || 'FUHSI General'}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Academic Level</span>
-                  <span className="font-bold text-slate-900">{student.level || '100L'}</span>
-                </div>
+                {!isGuestAccount(student) && (
+                  <>
+                    <div>
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Matriculation Number</span>
+                      <span className="font-mono font-bold text-slate-900">{student.matricNumber || 'Not Provided'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Department</span>
+                      <span className="font-bold text-slate-900">{student.department || 'Not Provided'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Academic Level</span>
+                      <span className="font-bold text-slate-900">{student.level || 'Not Provided'}</span>
+                    </div>
+                  </>
+                )}
                 <div>
                   <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Email Address</span>
                   <span className="font-mono text-slate-800 break-all">{student.studentEmail || 'Not Provided'}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Emergency Phone</span>
+                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">
+                    {isGuestAccount(student) ? 'Phone Number' : 'Emergency Phone'}
+                  </span>
                   <span className="font-bold text-teal-800 font-mono">{student.emergencyHomePhone || 'Not Provided'}</span>
                 </div>
                 <div className="sm:col-span-2">
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Student Biography</span>
+                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">
+                    {isGuestAccount(student) ? 'Biography / Profile Notes' : 'Student Biography'}
+                  </span>
                   <p className="text-slate-700 italic mt-0.5 whitespace-pre-wrap">{student.bio || 'No biography entered yet.'}</p>
                 </div>
                 <div>
@@ -2231,18 +2321,22 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Real Name</span>
                   <span className="font-bold text-slate-900">{req.realName || 'Not Provided'}</span>
                 </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Matric Number</span>
-                  <span className="font-mono font-bold text-slate-900">{req.matricNumber || 'Not Provided'}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Department</span>
-                  <span className="font-bold text-slate-900">{req.department || 'FUHSI'}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Level</span>
-                  <span className="font-bold text-slate-900">{req.level || '100L'}</span>
-                </div>
+                {req.accountType !== 'Guest' && (
+                  <>
+                    <div>
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Matric Number</span>
+                      <span className="font-mono font-bold text-slate-900">{req.matricNumber || 'Not Provided'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Department</span>
+                      <span className="font-bold text-slate-900">{req.department || 'Not Provided'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Level</span>
+                      <span className="font-bold text-slate-900">{req.level || 'Not Provided'}</span>
+                    </div>
+                  </>
+                )}
                 <div>
                   <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Payment Reference</span>
                   <span className="font-mono font-bold text-emerald-800">{req.paymentRef || 'PAY-VERIF-SUCCESS'}</span>
@@ -2269,10 +2363,11 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Current Status</span>
                   <span className={`inline-block mt-0.5 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border ${
                     req.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
-                    req.status === 'REJECTED' ? 'bg-rose-100 text-rose-900 border-rose-300' :
+                    req.status === 'REVOKED' ? 'bg-orange-100 text-orange-900 border-orange-300' :
+                    req.status === 'DECLINED' || req.status === 'REJECTED' ? 'bg-rose-100 text-rose-900 border-rose-300' :
                     'bg-amber-100 text-amber-900 border-amber-300'
                   }`}>
-                    {req.status === 'APPROVED' ? 'Approved & Active' : req.status === 'REJECTED' ? 'Declined / Revoked' : 'Pending Review'}
+                    {req.status === 'APPROVED' ? 'Approved & Active' : req.status === 'REVOKED' ? 'Revoked' : req.status === 'DECLINED' || req.status === 'REJECTED' ? 'Declined' : 'Pending Review'}
                   </span>
                 </div>
               </div>
@@ -2366,13 +2461,8 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          if (onRevokeVerification) {
-                            onRevokeVerification(req.id);
-                          } else {
-                            onRejectVerification(req.id);
-                          }
-                          onUpdateVerificationRequestStatus(req.id, 'REJECTED');
-                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'REJECTED' } : null);
+                          onUpdateVerificationRequestStatus(req.id, 'DECLINED');
+                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'DECLINED' } : null);
                         }}
                         className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors cursor-pointer"
                       >
@@ -2397,14 +2487,10 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          if (window.confirm(`Are you sure you want to completely revoke verification and remove the badge for ${req.applicantNickname}?`)) {
-                            if (onRevokeVerification) {
-                              onRevokeVerification(req.id);
-                            } else {
-                              onRejectVerification(req.id);
-                            }
-                            onUpdateVerificationRequestStatus(req.id, 'REJECTED');
-                            setSelectedReqForView((prev) => prev ? { ...prev, status: 'REJECTED', assignedBadgeType: 'NONE', assignedBadgeTitle: '' } : null);
+                          if (window.confirm(`Are you sure you want to revoke verification and remove the active badge for ${req.applicantNickname}?`)) {
+                            onRevokeVerification(req.id);
+                            onUpdateVerificationRequestStatus(req.id, 'REVOKED');
+                            setSelectedReqForView((prev) => prev ? { ...prev, status: 'REVOKED', assignedBadgeType: 'NONE', assignedBadgeTitle: '' } : null);
                           }
                         }}
                         className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors flex items-center gap-1 cursor-pointer"
@@ -2415,19 +2501,66 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                     </>
                   )}
 
-                  {req.status === 'REJECTED' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
-                        onUpdateVerificationRequestStatus(req.id, 'APPROVED');
-                        setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: currentBadgeColor, assignedBadgeTitle: currentBadgeTitle.trim() } : null);
-                      }}
-                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
-                    >
-                      <CheckCircle2 size={13} />
-                      <span>Re-Approve Verification</span>
-                    </button>
+                  {req.status === 'REVOKED' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                          onUpdateVerificationRequestStatus(req.id, 'APPROVED');
+                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: currentBadgeColor, assignedBadgeTitle: currentBadgeTitle.trim() } : null);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                      >
+                        <CheckCircle2 size={13} />
+                        <span>Reassign & Approve</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(`Permanently delete this verification record for ${req.applicantNickname}? This cannot be undone.`)) {
+                            onDeleteVerification(req.id);
+                            setSelectedReqForView(null);
+                          }
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 size={13} />
+                        <span>Delete Permanently</span>
+                      </button>
+                    </>
+                  )}
+
+                  {(req.status === 'DECLINED' || req.status === 'REJECTED') && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                          onUpdateVerificationRequestStatus(req.id, 'APPROVED');
+                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: currentBadgeColor, assignedBadgeTitle: currentBadgeTitle.trim() } : null);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                      >
+                        <CheckCircle2 size={13} />
+                        <span>Approve Verification</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(`Permanently delete this verification record for ${req.applicantNickname}? This cannot be undone.`)) {
+                            onDeleteVerification(req.id);
+                            setSelectedReqForView(null);
+                          }
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 size={13} />
+                        <span>Delete Record</span>
+                      </button>
+                    </>
                   )}
 
                   <button
@@ -2480,14 +2613,18 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Username</span>
                 <span className="font-bold text-teal-800">{selectedTicketForView.nickname || 'Not Provided'}</span>
               </div>
-              <div>
-                <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Matric Number</span>
-                <span className="font-mono font-bold text-slate-900">{selectedTicketForView.matricNumber || 'Not Provided'}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Department</span>
-                <span className="font-bold text-slate-900">{selectedTicketForView.department || 'FUHSI'}</span>
-              </div>
+              {selectedTicketForView.matricNumber && (
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Matric Number</span>
+                  <span className="font-mono font-bold text-slate-900">{selectedTicketForView.matricNumber}</span>
+                </div>
+              )}
+              {selectedTicketForView.department && (
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Department</span>
+                  <span className="font-bold text-slate-900">{selectedTicketForView.department}</span>
+                </div>
+              )}
               <div>
                 <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Email Address</span>
                 <span className="font-mono text-slate-800 break-all">{selectedTicketForView.email}</span>
