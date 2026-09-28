@@ -573,7 +573,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
       )}
 
       {blockToast && (
-        <div className="p-3.5 bg-slate-900 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg animate-in fade-in">
+        <div className="p-3.5 bg-rose-900/90 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg animate-in fade-in">
           <Ban className="w-4 h-4 text-rose-400 shrink-0" />
           <span>{blockToast}</span>
         </div>

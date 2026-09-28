@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   html, body, #root {
     max-width: 100vw;
@@ -16,6 +18,53 @@
   html.dark body {
     background-color: #0f172a;
     color: #f8fafc;
+  }
+
+  html.light body {
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  /* Daylight campus light theme overrides */
+  html.light .bg-white {
+    background-color: #ffffff !important;
+    color: #0f172a;
+  }
+  html.light .bg-slate-50 {
+    background-color: #f8fafc !important;
+    color: #0f172a;
+  }
+  html.light .bg-slate-100 {
+    background-color: #f1f5f9 !important;
+    color: #0f172a;
+  }
+  html.light .text-slate-900,
+  html.light .text-slate-800 {
+    color: #0f172a !important;
+  }
+  html.light .text-slate-700,
+  html.light .text-slate-600 {
+    color: #334155 !important;
+  }
+  html.light .text-slate-500 {
+    color: #64748b !important;
+  }
+  html.light .border-slate-200,
+  html.light .border-slate-200\/90,
+  html.light .border-slate-200\/80,
+  html.light .border-slate-100 {
+    border-color: #e2e8f0 !important;
+  }
+  html.light input,
+  html.light textarea,
+  html.light select {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+  }
+  html.light input::placeholder,
+  html.light textarea::placeholder {
+    color: #94a3b8 !important;
   }
 
   /* Low-light campus accessibility dark theme overrides */

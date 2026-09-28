@@ -192,14 +192,14 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
       )}
 
       {/* Header Banner */}
-      <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-md">
+      <div className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-600/20 text-emerald-400 flex items-center justify-center font-bold">
+              <div className="w-8 h-8 rounded-xl bg-emerald-600/15 dark:bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold">
                 <ShieldCheck className="w-5 h-5" />
               </div>
-              <h2 className="font-extrabold text-base sm:text-lg tracking-tight text-white flex items-center gap-2">
+              <h2 className="font-extrabold text-base sm:text-lg tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
                 <span>Admin Marketplace Management</span>
                 {totalPendingMarketplace > 0 && (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-slate-950 animate-pulse shadow-2xs">
@@ -208,25 +208,25 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
                 )}
               </h2>
             </div>
-            <p className="text-xs text-slate-400 mt-1 font-medium">
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-medium">
               Monitor campus listings, review fraud reports, manage problem sellers, and oversee peer-to-peer trade safety.
             </p>
           </div>
 
-          <div className="bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700 text-center shrink-0">
-            <span className="block text-[10px] font-bold text-slate-400 uppercase">Live Listings</span>
-            <span className="font-extrabold text-base text-emerald-400">{approvedMarketplaceItems.length}</span>
+          <div className="bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-center shrink-0">
+            <span className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Live Listings</span>
+            <span className="font-extrabold text-base text-emerald-600 dark:text-emerald-400">{approvedMarketplaceItems.length}</span>
           </div>
         </div>
 
         {/* Sub Navigation Tabs */}
-        <div className="flex gap-2 overflow-x-auto no-scrollbar pt-4 border-t border-slate-800/80 mt-4">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar pt-4 border-t border-slate-200 dark:border-slate-800/80 mt-4">
           <button
             onClick={() => setActiveSubTab('REPORTS')}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${
               activeSubTab === 'REPORTS'
                 ? 'bg-rose-600 text-white shadow-sm'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
             }`}
           >
             <Flag size={13} />

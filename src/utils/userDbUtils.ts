@@ -1,7 +1,7 @@
-import { UserProfile } from '../types';
+import { UserProfile, BadgeType, VerificationRequest } from '../types';
 import { INITIAL_USER_PROFILE } from '../data/initialData';
 import { pushServerDbSync, mergeUsers } from './apiSync';
-import { saveUserToFirestore, saveUsersBatchToFirestore } from '../lib/firestoreSync';
+import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
 import { isDemoUser } from './postGenerator';
 import { getUserBadgeInfo } from './verificationUtils';
 
@@ -643,4 +643,185 @@ export function updateUserPassword(identifierOrEmail: string, newPassword: strin
     return true;
   }
   return false;
+}
+
+/**
+ * Universally updates or reassigns verification badge color and custom title for any student or user.
+ * Syncs instantly across fuhsi_users_db, active user, fuhsi_verifications_db, fuhsi_posts_db, fuhsi_comments_db,
+ * Firestore, server DB, and fires 'fuhsi_badge_updated' event for instant real-time reactivity.
+ */
+export function updateUserBadgeAndVerification(
+  targetNicknameOrId: string,
+  badgeType: BadgeType = 'BLUE',
+  badgeTitle: string = '',
+  isVerified: boolean = true
+): { success: boolean; user?: UserProfile } {
+  if (!targetNicknameOrId) return { success: false };
+
+  const cleanTarget = targetNicknameOrId.trim().toLowerCase().replace(/^@/, '');
+  const cleanTitle = (badgeTitle || '').trim();
+  const effectiveBadgeType: BadgeType = isVerified ? (badgeType || 'BLUE') : 'NONE';
+
+  // 1. Update user in fuhsi_users_db
+  const users = getStoredUsers();
+  let updatedUser: UserProfile | undefined = undefined;
+
+  const updatedUsers = users.map((u) => {
+    const uNick = (u.nickname || '').trim().toLowerCase().replace(/^@/, '');
+    const uId = (u.id || '').trim().toLowerCase();
+    const uEmail = (u.studentEmail || '').trim().toLowerCase();
+
+    if (uNick === cleanTarget || uId === cleanTarget || uEmail === cleanTarget) {
+      updatedUser = {
+        ...u,
+        isVerified,
+        verificationStatus: isVerified ? 'approved' : 'unverified',
+        badgeType: effectiveBadgeType,
+        badgeTitle: isVerified ? cleanTitle : '',
+      };
+      saveUserToFirestore(updatedUser).catch((err) => console.error('Error saving updated badge to Firestore:', err));
+      return updatedUser;
+    }
+    return u;
+  });
+
+  if (updatedUser) {
+    saveStoredUsers(updatedUsers);
+  }
+
+  // 2. Update active user profile in localStorage if matching
+  try {
+    const activeStr = localStorage.getItem('fuhsi_active_user');
+    if (activeStr) {
+      const active = JSON.parse(activeStr);
+      const aNick = (active.nickname || '').trim().toLowerCase().replace(/^@/, '');
+      const aId = (active.id || '').trim().toLowerCase();
+      if (aNick === cleanTarget || aId === cleanTarget) {
+        const updatedActive = {
+          ...active,
+          isVerified,
+          verificationStatus: isVerified ? 'approved' : 'unverified',
+          badgeType: effectiveBadgeType,
+          badgeTitle: isVerified ? cleanTitle : '',
+        };
+        localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedActive));
+      }
+    }
+  } catch (e) {
+    console.error('Error updating active user badge:', e);
+  }
+
+  // 3. Update or create verification request record in fuhsi_verifications_db
+  try {
+    const vStr = localStorage.getItem('fuhsi_verifications_db');
+    let vList: VerificationRequest[] = vStr ? JSON.parse(vStr) : [];
+    let matchedVerif = false;
+
+    vList = vList.map((req) => {
+      const reqNick = (req.applicantNickname || '').trim().toLowerCase().replace(/^@/, '');
+      const reqId = (req.id || '').trim().toLowerCase();
+      if (reqNick === cleanTarget || reqId === cleanTarget) {
+        matchedVerif = true;
+        const updatedReq: VerificationRequest = {
+          ...req,
+          status: isVerified ? 'APPROVED' : 'REVOKED',
+          assignedBadgeType: effectiveBadgeType,
+          assignedBadgeTitle: isVerified ? cleanTitle : '',
+        };
+        saveVerificationRequestToFirestore(updatedReq).catch((err) => console.error(err));
+        return updatedReq;
+      }
+      return req;
+    });
+
+    if (!matchedVerif && isVerified && updatedUser) {
+      // Create an approved verification dossier record
+      const newReq: VerificationRequest = {
+        id: `verif_admin_${Date.now()}_${cleanTarget}`,
+        applicantNickname: updatedUser.nickname || `@${cleanTarget}`,
+        realName: updatedUser.realNameHidden || updatedUser.realName || cleanTarget,
+        studentEmail: updatedUser.studentEmail || `${cleanTarget}@fuhsi.edu.ng`,
+        accountType: isGuestAccount(updatedUser) ? 'Guest' : 'Student',
+        category: 'Official Admin Verification & Honor Badge',
+        department: updatedUser.department || 'FUHSI',
+        level: updatedUser.level || '300L',
+        matricNumber: updatedUser.matricNumber || '',
+        positionTitle: cleanTitle,
+        evidenceText: 'Admin directly assigned and verified identity credentials.',
+        evidenceImages: [],
+        timestamp: new Date().toISOString(),
+        status: 'APPROVED',
+        assignedBadgeType: effectiveBadgeType,
+        assignedBadgeTitle: cleanTitle,
+      };
+      vList.unshift(newReq);
+      saveVerificationRequestToFirestore(newReq).catch((err) => console.error(err));
+    }
+
+    localStorage.setItem('fuhsi_verifications_db', JSON.stringify(vList));
+    pushServerDbSync({ verificationRequests: vList });
+  } catch (e) {
+    console.error('Error syncing verifications db with new badge:', e);
+  }
+
+  // 4. Update posts author badges in fuhsi_posts_db
+  try {
+    const pStr = localStorage.getItem('fuhsi_posts_db');
+    if (pStr) {
+      const pList: any[] = JSON.parse(pStr);
+      const updatedPList = pList.map((p) => {
+        const pNick = (p.authorNickname || '').trim().toLowerCase().replace(/^@/, '');
+        if (pNick === cleanTarget) {
+          return {
+            ...p,
+            isVerified,
+            authorIsVerified: isVerified,
+            authorBadgeType: effectiveBadgeType,
+            authorBadgeTitle: isVerified ? cleanTitle : '',
+          };
+        }
+        return p;
+      });
+      localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPList));
+    }
+  } catch (e) {}
+
+  // 5. Update comments author badges in fuhsi_comments_db
+  try {
+    const cStr = localStorage.getItem('fuhsi_comments_db');
+    if (cStr) {
+      const cList: any[] = JSON.parse(cStr);
+      const updatedCList = cList.map((c) => {
+        const cNick = (c.authorNickname || '').trim().toLowerCase().replace(/^@/, '');
+        if (cNick === cleanTarget) {
+          return {
+            ...c,
+            isVerified,
+            authorIsVerified: isVerified,
+            authorBadgeType: effectiveBadgeType,
+            authorBadgeTitle: isVerified ? cleanTitle : '',
+          };
+        }
+        return c;
+      });
+      localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedCList));
+    }
+  } catch (e) {}
+
+  // 6. Dispatch custom event for real-time reactivity across active views
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('fuhsi_badge_updated', {
+        detail: {
+          targetNickname: cleanTarget,
+          badgeType: effectiveBadgeType,
+          badgeTitle: isVerified ? cleanTitle : '',
+          isVerified,
+          user: updatedUser,
+        },
+      })
+    );
+  }
+
+  return { success: true, user: updatedUser };
 }

@@ -187,23 +187,23 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 w-full h-full bg-slate-100 flex flex-col overflow-hidden animate-in fade-in duration-150">
-      <div className="w-full h-full max-w-3xl mx-auto bg-white flex flex-col shadow-2xl sm:border-x sm:border-slate-200 overflow-hidden">
+    <div className="fixed inset-0 z-50 w-full h-full bg-slate-100 dark:bg-slate-950 flex flex-col overflow-hidden animate-in fade-in duration-150">
+      <div className="w-full h-full max-w-3xl mx-auto bg-white dark:bg-slate-900 flex flex-col shadow-2xl sm:border-x sm:border-slate-200 dark:sm:border-slate-800 overflow-hidden">
         
         {/* Top Bar Navigation */}
-        <div className="bg-slate-950 text-white p-4 sm:px-6 flex items-center justify-between border-b border-slate-800 shrink-0 z-10">
+        <div className="bg-teal-800 dark:bg-slate-950 text-white p-4 sm:px-6 flex items-center justify-between border-b border-teal-900/40 dark:border-slate-800 shrink-0 z-10">
           <div className="flex items-center gap-2.5">
             <button
               onClick={onClose}
-              className="p-1.5 -ml-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
+              className="p-1.5 -ml-1.5 rounded-xl bg-teal-900/60 hover:bg-teal-900 text-teal-100 hover:text-white dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
               title="Return to previous page"
             >
               <ArrowLeft size={18} />
               <span>Back</span>
             </button>
-            <div className="h-4 w-px bg-slate-800 mx-1 hidden sm:block" />
+            <div className="h-4 w-px bg-teal-700/60 dark:bg-slate-800 mx-1 hidden sm:block" />
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-400/30 flex items-center justify-center text-sky-400">
+              <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300">
                 <ShieldCheck className="w-4 h-4" />
               </div>
               <h2 className="font-black text-sm sm:text-base text-white tracking-tight">
@@ -213,7 +213,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-full bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            className="p-2 rounded-full bg-teal-900/60 hover:bg-teal-900 text-teal-200 hover:text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
             title="Close modal"
           >
             <X size={18} />
@@ -224,11 +224,11 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
 
           {/* Intro Description */}
-          <div className="bg-gradient-to-br from-slate-900 via-teal-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-sm space-y-2 border border-slate-800">
+          <div className="bg-gradient-to-br from-teal-800 via-teal-900 to-emerald-900 dark:from-teal-950 dark:via-slate-900 dark:to-slate-950 text-white rounded-2xl p-4 sm:p-5 shadow-sm space-y-2 border border-teal-700/40 dark:border-teal-800/40">
             <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
               Get Verified on FUHSI Connect
             </h1>
-            <p className="text-xs sm:text-sm text-slate-300 font-medium leading-relaxed">
+            <p className="text-xs sm:text-sm text-teal-100 dark:text-slate-300 font-medium leading-relaxed">
               Verification provides additional benefits and helps users access exclusive features on the platform, establishing high trust for students, campus executives, and student organizations.
             </p>
           </div>
@@ -383,18 +383,18 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
               )}
 
               {/* Verification Fee Display */}
-              <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+              <div className="bg-sky-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl p-4 border border-sky-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
                 <div>
-                  <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider block">
+                  <span className="text-[10px] font-bold text-sky-700 dark:text-sky-400 uppercase tracking-wider block">
                     Verification Fee
                   </span>
-                  <div className="text-xl font-black text-white mt-0.5">
+                  <div className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
                     ₦{feeAmount.toLocaleString()}
                   </div>
                 </div>
 
-                <div className="text-right text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
-                  <Lock size={12} className="text-emerald-400" />
+                <div className="text-right text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
+                  <Lock size={12} className="text-emerald-500 dark:text-emerald-400" />
                   <span>Secure Payment Gateway</span>
                 </div>
               </div>
@@ -404,7 +404,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2.5 rounded-full border border-slate-300 text-slate-700 font-extrabold text-xs hover:bg-slate-50 transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-full border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-extrabold text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -415,7 +415,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                     e.preventDefault();
                     // Inactive at the moment per user request - clicking does nothing
                   }}
-                  className="bg-black hover:bg-slate-800 text-white px-6 py-3 rounded-full text-xs font-black transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
+                  className="bg-teal-700 hover:bg-teal-800 text-white px-6 py-3 rounded-full text-xs font-black transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
                 >
                   <CreditCard size={16} />
                   <span>Subscribe & Pay ₦{feeAmount.toLocaleString()}</span>
@@ -430,7 +430,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="bg-black hover:bg-slate-800 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
+                className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
               >
                 Close Window
               </button>
@@ -443,10 +443,10 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
       {/* Interactive Payment Gateway Modal */}
       {showPaymentGateway && (
-        <div className="fixed inset-0 z-60 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-white max-w-md w-full rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 max-w-md w-full rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200">
             {/* Payment Header */}
-            <div className="bg-slate-900 text-white p-4 flex items-center justify-between">
+            <div className="bg-teal-800 dark:bg-slate-950 text-white p-4 flex items-center justify-between border-b border-teal-900/40 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <Lock className="w-4 h-4 text-emerald-400" />
                 <span className="font-extrabold text-xs tracking-wider uppercase">FUHSI Connect Secure Pay</span>

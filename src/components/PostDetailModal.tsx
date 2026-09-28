@@ -903,7 +903,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
           {/* Comment Image Attachment Preview */}
           {commentImage && (
-            <div className="relative inline-block rounded-xl overflow-hidden border border-slate-300 max-h-32 bg-slate-900 group">
+            <div className="relative inline-block rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 max-h-32 bg-slate-100 dark:bg-slate-900 group">
               <img src={commentImage} alt="Comment image attachment" className="max-h-32 w-auto object-cover" />
               <button
                 type="button"

@@ -1128,7 +1128,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
                     <a
                       href={`mailto:fuhsiconnectsupport@gmail.com?subject=Support%20Request&body=Hello%20FUHSI%20Connect%20Support%2C%0A%0AMy%20Username%3A%20${encodeURIComponent(userProfile?.nickname || '')}%0AMy%20Department%3A%20${encodeURIComponent(userProfile?.department || '')}%0A%0ADescription%20of%20my%20issue%20or%20inquiry%3A%0A`}
-                      className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
+                      className="w-full py-2.5 px-4 bg-teal-800 hover:bg-teal-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
                     >
                       <Mail size={15} />
                       <span>Open in Email App</span>
@@ -1246,7 +1246,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     }`}
                   >
                     <div className="flex items-start gap-3.5">
-                      <div className="w-10 h-10 rounded-xl bg-indigo-900/60 text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
                         <Moon size={20} />
                       </div>
                       <div>

@@ -25,6 +25,7 @@ export function applyTheme(theme: ThemeMode): void {
   if (typeof document === 'undefined') return;
 
   const root = document.documentElement;
+  const body = document.body;
   let isDark = false;
 
   if (theme === 'dark') {
@@ -38,8 +39,20 @@ export function applyTheme(theme: ThemeMode): void {
 
   if (isDark) {
     root.classList.add('dark');
+    root.classList.remove('light');
+    if (body) {
+      body.classList.add('dark');
+      body.classList.remove('light');
+    }
+    root.setAttribute('data-theme', 'dark');
   } else {
     root.classList.remove('dark');
+    root.classList.add('light');
+    if (body) {
+      body.classList.remove('dark');
+      body.classList.add('light');
+    }
+    root.setAttribute('data-theme', 'light');
   }
 
   // Update theme-color meta tag for PWA/Mobile top bar

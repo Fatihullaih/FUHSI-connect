@@ -479,7 +479,7 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedNotifForModal(null)}
-                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors cursor-pointer"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold transition-colors cursor-pointer"
               >
                 Close
               </button>

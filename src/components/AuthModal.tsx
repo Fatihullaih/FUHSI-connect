@@ -1330,7 +1330,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           )}`
                         : `mailto:fuhsiconnectsupport@gmail.com?subject=Support%20Request&body=Hello%20Support%20Team%2C%0A%0AMy%20Username%20is%3A%20%0A%0AMy%20Issue%20%2F%20Complaint%20details%3A%0A`
                     }
-                    className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2.5 px-4 bg-teal-800 hover:bg-teal-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Mail size={14} />
                     <span>Open in Email App</span>

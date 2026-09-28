@@ -180,10 +180,35 @@ export const App: React.FC = () => {
         setActiveThemeMode(e.detail);
       }
     };
+    const handleBadgeUpdate = (e: any) => {
+      const detail = e.detail;
+      if (detail && detail.targetNickname) {
+        try {
+          const raw = localStorage.getItem('fuhsi_active_user');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && (parsed.nickname || '').trim().toLowerCase().replace(/^@/, '') === detail.targetNickname) {
+              setUserProfile(parsed);
+            }
+          }
+        } catch (err) {}
+        try {
+          const pRaw = localStorage.getItem('fuhsi_posts_db');
+          if (pRaw) setPosts(JSON.parse(pRaw));
+          const cRaw = localStorage.getItem('fuhsi_comments_db');
+          if (cRaw) setComments(JSON.parse(cRaw));
+          const vRaw = localStorage.getItem('fuhsi_verifications_db');
+          if (vRaw) setVerificationRequests(JSON.parse(vRaw));
+        } catch (err) {}
+        setNotifTrigger((prev) => prev + 1);
+      }
+    };
     window.addEventListener('fuhsi-theme-changed', handleThemeEvent);
+    window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
     return () => {
       cleanup();
       window.removeEventListener('fuhsi-theme-changed', handleThemeEvent);
+      window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
     };
   }, []);
 
@@ -3271,7 +3296,7 @@ export const App: React.FC = () => {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-2 sm:p-4">
+      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-2 sm:p-4">
         <AuthModal
           isOpen={true}
           canClose={false}
@@ -3283,7 +3308,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-['Plus_Jakarta_Sans',sans-serif] flex flex-col justify-between selection:bg-teal-500 selection:text-white">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-['Plus_Jakarta_Sans',sans-serif] flex flex-col justify-between selection:bg-teal-500 selection:text-white">
       {/* Top App Header with Twitter-style Profile Picture Avatar on Left */}
       <header className="sticky top-0 z-30 bg-teal-800 text-white shadow-xs border-b border-teal-900/40">
         <div className="max-w-2xl mx-auto px-3.5 py-2 flex items-center justify-between">
@@ -3390,7 +3415,7 @@ export const App: React.FC = () => {
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-600 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
                     </span>
-                    <span className="px-1.5 py-0.2 rounded-full bg-slate-950 text-amber-300 text-[10px] font-black border border-amber-300/60 shadow-2xs">
+                    <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 dark:bg-slate-950 dark:text-amber-300 text-[10px] font-black border border-amber-300 dark:border-amber-300/60 shadow-2xs">
                       {adminTasks.totalPending}
                     </span>
                   </span>
@@ -3611,17 +3636,17 @@ export const App: React.FC = () => {
             }}
           />
         ) : (
-          <div className="max-w-md mx-auto my-12 p-6 bg-white rounded-2xl border border-rose-200 shadow-xl text-center space-y-4">
-            <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto font-bold text-2xl">
+          <div className="max-w-md mx-auto my-12 p-6 bg-white dark:bg-slate-900 rounded-2xl border border-rose-200 dark:border-rose-900 shadow-xl text-center space-y-4">
+            <div className="w-14 h-14 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center mx-auto font-bold text-2xl">
               🛡️
             </div>
-            <h2 className="text-lg font-extrabold text-slate-900">Access Restricted</h2>
-            <p className="text-xs text-slate-600 leading-relaxed">
+            <h2 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">Access Restricted</h2>
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
               This management console is restricted to authorized personnel. Please return to the campus feed.
             </p>
             <button
               onClick={() => setNavIndex(0)}
-              className="px-5 py-2.5 rounded-xl bg-slate-900 text-white font-extrabold text-xs hover:bg-slate-800 transition-colors cursor-pointer shadow-md"
+              className="px-5 py-2.5 rounded-xl bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white font-extrabold text-xs transition-colors cursor-pointer shadow-md"
             >
               Return to Public Campus Feed
             </button>
@@ -4109,13 +4134,13 @@ export const App: React.FC = () => {
       )}
 
       {/* Bottom Footer Sticky Navigation Bar - Feed, Search, Hub&Fund, Notification, Chats, Ranking */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/80 shadow-lg">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800 shadow-lg">
         <div className="max-w-md mx-auto flex items-center justify-around py-2 px-1 sm:px-2">
           {/* 1. Feed */}
           <button
             onClick={() => handleNavChange(0)}
             className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer ${
-              navIndex === 0 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+              navIndex === 0 ? 'text-teal-700 dark:text-teal-400 font-extrabold scale-105 shadow-xs bg-teal-50/70 dark:bg-teal-950/60' : 'text-slate-500 dark:text-slate-400 hover:text-teal-800 dark:hover:text-teal-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
             }`}
           >
             <DynamicFeedIcon className="w-5 h-5 transition-transform group-hover:scale-105" />
@@ -4126,7 +4151,7 @@ export const App: React.FC = () => {
           <button
             onClick={() => handleNavChange(1)}
             className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer ${
-              navIndex === 1 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+              navIndex === 1 ? 'text-teal-700 dark:text-teal-400 font-extrabold scale-105 shadow-xs bg-teal-50/70 dark:bg-teal-950/60' : 'text-slate-500 dark:text-slate-400 hover:text-teal-800 dark:hover:text-teal-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
             }`}
           >
             <Search className="w-5 h-5 transition-transform group-hover:scale-105" />
@@ -4138,7 +4163,7 @@ export const App: React.FC = () => {
             <button
               onClick={() => handleNavChange(2)}
               className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer ${
-                navIndex === 2 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+                navIndex === 2 ? 'text-teal-700 dark:text-teal-400 font-extrabold scale-105 shadow-xs bg-teal-50/70 dark:bg-teal-950/60' : 'text-slate-500 dark:text-slate-400 hover:text-teal-800 dark:hover:text-teal-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
               }`}
             >
               <StorefrontIcon className="w-5 h-5 transition-transform group-hover:scale-105" />
@@ -4150,7 +4175,7 @@ export const App: React.FC = () => {
           <button
             onClick={() => handleNavChange(3)}
             className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer relative ${
-              navIndex === 3 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+              navIndex === 3 ? 'text-teal-700 dark:text-teal-400 font-extrabold scale-105 shadow-xs bg-teal-50/70 dark:bg-teal-950/60' : 'text-slate-500 dark:text-slate-400 hover:text-teal-800 dark:hover:text-teal-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
             }`}
           >
             <div className="relative">
@@ -4169,7 +4194,7 @@ export const App: React.FC = () => {
             <button
               onClick={() => handleNavChange(4)}
               className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer relative ${
-                navIndex === 4 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+                navIndex === 4 ? 'text-teal-700 dark:text-teal-400 font-extrabold scale-105 shadow-xs bg-teal-50/70 dark:bg-teal-950/60' : 'text-slate-500 dark:text-slate-400 hover:text-teal-800 dark:hover:text-teal-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
               }`}
             >
               <div className="relative">
@@ -4188,7 +4213,7 @@ export const App: React.FC = () => {
           <button
             onClick={() => handleNavChange(5)}
             className={`group flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transform-gpu transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer ${
-              navIndex === 5 ? 'text-teal-700 font-extrabold scale-105 shadow-xs bg-teal-50/70' : 'text-slate-500 hover:text-teal-800 hover:bg-slate-50'
+              navIndex === 5 ? 'text-teal-700 dark:text-teal-400 font-extrabold scale-105 shadow-xs bg-teal-50/70 dark:bg-teal-950/60' : 'text-slate-500 dark:text-slate-400 hover:text-teal-800 dark:hover:text-teal-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
             }`}
           >
             <LeaderboardIcon className="w-5 h-5 transition-transform group-hover:scale-105" />

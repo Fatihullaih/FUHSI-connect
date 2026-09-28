@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeType, CampusNotification } from '../types';
-import { getStoredUsers, saveStoredUsers, isGuestAccount, markUserPermanentlyDeleted } from '../utils/userDbUtils';
+import { getStoredUsers, saveStoredUsers, isGuestAccount, markUserPermanentlyDeleted, updateUserBadgeAndVerification } from '../utils/userDbUtils';
 import { pushServerDbSync } from '../utils/apiSync';
 import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
 import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User } from 'lucide-react';
@@ -171,6 +171,50 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [selectedStudentForView, setSelectedStudentForView] = useState<UserProfile | null>(null);
 
+  // Dedicated Student Badge & Title Reassigner State
+  const [studentBadgeColor, setStudentBadgeColor] = useState<BadgeType>('GREEN');
+  const [studentBadgeTitle, setStudentBadgeTitle] = useState('');
+
+  const openStudentDossier = (u: UserProfile) => {
+    setSelectedStudentForView(u);
+    const bInfo = getUserBadgeInfo(u.nickname, u);
+    setStudentBadgeColor(
+      (bInfo.badgeType && bInfo.badgeType !== 'NONE' ? bInfo.badgeType : (u.badgeType && u.badgeType !== 'NONE' ? u.badgeType : 'GREEN')) as BadgeType
+    );
+    setStudentBadgeTitle(bInfo.badgeTitle || u.badgeTitle || '');
+  };
+
+  const handleSaveStudentBadge = (student: UserProfile) => {
+    const nick = student.nickname || '';
+    const color = studentBadgeColor || 'BLUE';
+    const title = (studentBadgeTitle || '').trim();
+
+    updateUserBadgeAndVerification(nick, color, title, true);
+    onApproveVerification?.(nick, color, title);
+
+    setSelectedStudentForView((prev) =>
+      prev ? { ...prev, isVerified: true, verificationStatus: 'approved', badgeType: color, badgeTitle: title } : null
+    );
+    refreshUsersList();
+
+    setApprovalToast(`✓ Verification badge (${color}) & title "${title || 'Verified'}" successfully assigned to ${nick}!`);
+    setTimeout(() => setApprovalToast(null), 4000);
+  };
+
+  const handleRevokeStudentBadge = (student: UserProfile) => {
+    const nick = student.nickname || '';
+    updateUserBadgeAndVerification(nick, 'NONE', '', false);
+    onRevokeVerification?.(nick);
+
+    setSelectedStudentForView((prev) =>
+      prev ? { ...prev, isVerified: false, verificationStatus: 'unverified', badgeType: 'NONE', badgeTitle: '' } : null
+    );
+    refreshUsersList();
+
+    setApprovalToast(`Verification badge revoked for ${nick}.`);
+    setTimeout(() => setApprovalToast(null), 4000);
+  };
+
   // Internal desk navigator: preserves Admin Console context without URL hash changes or browser history resets
   const navigateToDesk = (deskId: string, tab?: string) => {
     if (deskId === 'student-accounts-desk') {
@@ -269,8 +313,17 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
 
   useEffect(() => {
     refreshUsersList();
-    const interval = setInterval(refreshUsersList, 1500);
-    return () => clearInterval(interval);
+    const interval = setInterval(refreshUsersList, 2500);
+
+    const handleBadgeEvent = () => {
+      refreshUsersList();
+    };
+    window.addEventListener('fuhsi_badge_updated', handleBadgeEvent);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('fuhsi_badge_updated', handleBadgeEvent);
+    };
   }, []);
 
   const [approvalToast, setApprovalToast] = useState<string | null>(null);
@@ -575,7 +628,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       )}
 
       {/* Moderation Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-lg border border-indigo-900/50">
+      <div className="bg-gradient-to-r from-teal-800 via-indigo-900 to-teal-900 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900 text-white rounded-2xl p-4 shadow-lg border border-teal-700/50 dark:border-indigo-900/50">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-indigo-300">
             <Shield className="w-6 h-6" />
@@ -961,9 +1014,9 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
 
                         <button
                           type="button"
-                          onClick={() => setSelectedStudentForView(user)}
+                          onClick={() => openStudentDossier(user)}
                           className="py-1 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
-                          title="View complete student record"
+                          title="View complete student record & assign badges"
                         >
                           <Eye size={12} />
                           <span>View</span>
@@ -1197,14 +1250,14 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
         </div>
 
         {/* Fee Configuration Bar */}
-        <div className="bg-slate-900 text-white rounded-2xl p-3.5 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl p-3.5 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold">
               ₦
             </div>
             <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Verification Subscription Fee</span>
-              <span className="text-xs font-bold text-slate-200">Current Price Charged to Students on "Get Verified" Page</span>
+              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">Verification Subscription Fee</span>
+              <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Current Price Charged to Students on "Get Verified" Page</span>
             </div>
           </div>
 
@@ -1215,7 +1268,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 type="number"
                 value={adminVerificationFee}
                 onChange={(e) => setAdminVerificationFee(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-full text-xs font-black rounded-xl bg-slate-950 border border-slate-700 pl-7 pr-3 py-2 text-white focus:outline-none focus:border-emerald-500"
+                className="w-full text-xs font-black rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 pl-7 pr-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
               />
             </div>
             <button
@@ -1930,6 +1983,75 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                 </div>
               </div>
 
+              {/* Assign / Reassign Badge Section for Student Account */}
+              <div className="bg-sky-50/70 dark:bg-sky-950/30 p-3.5 rounded-xl border border-sky-200 dark:border-sky-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-extrabold text-xs text-sky-950 dark:text-sky-200 flex items-center gap-1.5">
+                    <Award size={14} className="text-sky-700 dark:text-sky-400" />
+                    <span>Assign / Reassign Verification Badge & Custom Title</span>
+                  </h4>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">Preview:</span>
+                    <VerificationBadge
+                      isVerified={true}
+                      badgeType={studentBadgeColor}
+                      title={studentBadgeTitle}
+                      size={15}
+                      showTitle={Boolean(studentBadgeTitle)}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">Badge Color</label>
+                    <select
+                      value={studentBadgeColor}
+                      onChange={(e) => setStudentBadgeColor(e.target.value as BadgeType)}
+                      className="w-full bg-white dark:bg-slate-900 text-xs rounded-xl border border-slate-300 dark:border-slate-700 p-2 font-bold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="GREEN">Green (Campus Leader / Standard)</option>
+                      <option value="BLUE">Blue (Honor / General Verified)</option>
+                      <option value="GOLD">Gold (Executive / High Achievement)</option>
+                      <option value="ORANGE">Orange (Department Representative)</option>
+                      <option value="PURPLE">Purple (Distinguished Scholar)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">Custom Title (Optional)</label>
+                    <input
+                      type="text"
+                      value={studentBadgeTitle}
+                      onChange={(e) => setStudentBadgeTitle(e.target.value)}
+                      placeholder="e.g. SUG President, 400L Class Rep..."
+                      className="w-full bg-white dark:bg-slate-900 text-xs rounded-xl border border-slate-300 dark:border-slate-700 p-2 font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleSaveStudentBadge(student)}
+                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95"
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>Save Badge & Verify Account</span>
+                  </button>
+                  {bInfo.isVerified && (
+                    <button
+                      type="button"
+                      onClick={() => handleRevokeStudentBadge(student)}
+                      className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <XCircle size={13} />
+                      <span>Remove Badge</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Actions toolbar inside modal */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
                 <button
@@ -2198,9 +2320,18 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                          const nick = req.applicantNickname;
+                          const color = currentBadgeColor;
+                          const title = currentBadgeTitle.trim();
+                          updateUserBadgeAndVerification(nick, color, title, true);
+                          onApproveVerification(req.id, color, title);
                           onUpdateVerificationRequestStatus(req.id, 'APPROVED');
-                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: currentBadgeColor, assignedBadgeTitle: currentBadgeTitle.trim() } : null);
+                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: color, assignedBadgeTitle: title } : null);
+                          setSelectedReqColors((prev) => ({ ...prev, [req.id]: color }));
+                          setSelectedReqTitles((prev) => ({ ...prev, [req.id]: title }));
+                          refreshUsersList();
+                          setApprovalToast(`✓ Application approved: ${nick} granted ${color} badge & title "${title || 'Verified'}"!`);
+                          setTimeout(() => setApprovalToast(null), 4000);
                         }}
                         className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
                       >
@@ -2226,10 +2357,19 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
-                          alert(`Updated badge assignment to ${currentBadgeColor} with title "${currentBadgeTitle.trim()}".`);
+                          const nick = req.applicantNickname;
+                          const color = currentBadgeColor;
+                          const title = currentBadgeTitle.trim();
+                          updateUserBadgeAndVerification(nick, color, title, true);
+                          onApproveVerification(req.id, color, title);
+                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: color, assignedBadgeTitle: title } : null);
+                          setSelectedReqColors((prev) => ({ ...prev, [req.id]: color }));
+                          setSelectedReqTitles((prev) => ({ ...prev, [req.id]: title }));
+                          refreshUsersList();
+                          setApprovalToast(`✓ Badge changes saved: ${nick} is now ${color} with title "${title || 'Verified'}"!`);
+                          setTimeout(() => setApprovalToast(null), 4000);
                         }}
-                        className="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-xs cursor-pointer"
+                        className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs shadow-xs cursor-pointer transition-all active:scale-95"
                       >
                         Save Badge Changes
                       </button>
@@ -2238,9 +2378,14 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                         type="button"
                         onClick={() => {
                           if (window.confirm(`Are you sure you want to revoke verification and remove the active badge for ${req.applicantNickname}?`)) {
+                            const nick = req.applicantNickname;
+                            updateUserBadgeAndVerification(nick, 'NONE', '', false);
                             onRevokeVerification(req.id);
                             onUpdateVerificationRequestStatus(req.id, 'REVOKED');
                             setSelectedReqForView((prev) => prev ? { ...prev, status: 'REVOKED', assignedBadgeType: 'NONE', assignedBadgeTitle: '' } : null);
+                            refreshUsersList();
+                            setApprovalToast(`Verification revoked and badge removed for ${nick}.`);
+                            setTimeout(() => setApprovalToast(null), 4000);
                           }
                         }}
                         className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors flex items-center gap-1 cursor-pointer"
@@ -2256,9 +2401,18 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          onApproveVerification(req.id, currentBadgeColor, currentBadgeTitle.trim());
+                          const nick = req.applicantNickname;
+                          const color = currentBadgeColor;
+                          const title = currentBadgeTitle.trim();
+                          updateUserBadgeAndVerification(nick, color, title, true);
+                          onApproveVerification(req.id, color, title);
                           onUpdateVerificationRequestStatus(req.id, 'APPROVED');
-                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: currentBadgeColor, assignedBadgeTitle: currentBadgeTitle.trim() } : null);
+                          setSelectedReqForView((prev) => prev ? { ...prev, status: 'APPROVED', assignedBadgeType: color, assignedBadgeTitle: title } : null);
+                          setSelectedReqColors((prev) => ({ ...prev, [req.id]: color }));
+                          setSelectedReqTitles((prev) => ({ ...prev, [req.id]: title }));
+                          refreshUsersList();
+                          setApprovalToast(`✓ Verification reassigned: ${nick} is verified with ${color} badge!`);
+                          setTimeout(() => setApprovalToast(null), 4000);
                         }}
                         className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
                       >

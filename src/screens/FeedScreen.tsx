@@ -252,10 +252,10 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
             <div className="flex items-center gap-3">
               <div
                 className={`w-10 h-10 rounded-xl flex items-center justify-center font-black shrink-0 ${
-                  adminTasks.hasPendingTasks ? 'bg-slate-950 text-amber-300' : 'bg-amber-500/30 text-amber-900'
+                  adminTasks.hasPendingTasks ? 'bg-amber-500 text-white dark:bg-slate-950 dark:text-amber-300 shadow-xs' : 'bg-amber-500/30 text-amber-900'
                 }`}
               >
-                <Shield size={20} className={adminTasks.hasPendingTasks ? 'fill-amber-300 text-amber-300' : 'text-amber-800'} />
+                <Shield size={20} className={adminTasks.hasPendingTasks ? 'fill-white text-white dark:fill-amber-300 dark:text-amber-300' : 'text-amber-800'} />
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -263,9 +263,9 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                     ADMIN CONSOLE
                   </h3>
                   {adminTasks.hasPendingTasks ? (
-                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-950 text-amber-300 text-[11px] font-black shadow-xs">
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-600 dark:bg-slate-950 text-white dark:text-amber-300 text-[11px] font-black shadow-xs">
                       <span>🟡 Attention Needed</span>
-                      <span className="bg-amber-400 text-slate-950 px-1.5 py-0.2 rounded-full text-[10px] font-black">
+                      <span className="bg-white text-amber-800 dark:bg-amber-400 dark:text-slate-950 px-1.5 py-0.2 rounded-full text-[10px] font-black">
                         {adminTasks.totalPending}
                       </span>
                     </span>
@@ -299,7 +299,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                     e.stopPropagation();
                     onOpenAdminConsole?.('student-accounts-desk', 'PENDING');
                   }}
-                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  className="px-2 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white dark:bg-slate-950 dark:hover:bg-slate-900 dark:text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
                   title="Open Student Accounts awaiting approval"
                 >
                   Student Accounts: {adminTasks.studentAccounts} new
@@ -312,7 +312,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                     e.stopPropagation();
                     onOpenAdminConsole?.('verification-requests-desk', 'PENDING');
                   }}
-                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  className="px-2 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white dark:bg-slate-950 dark:hover:bg-slate-900 dark:text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
                   title="Open Verification Requests awaiting review"
                 >
                   Verification Requests: {adminTasks.verificationRequests} new
@@ -325,7 +325,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                     e.stopPropagation();
                     onOpenAdminConsole?.('marketplace-management-desk');
                   }}
-                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  className="px-2 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white dark:bg-slate-950 dark:hover:bg-slate-900 dark:text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
                   title="Open Marketplace Management"
                 >
                   Marketplace: {adminTasks.marketplaceManagement} pending
@@ -338,7 +338,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                     e.stopPropagation();
                     onOpenAdminConsole?.('flagged-posts-desk');
                   }}
-                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  className="px-2 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white dark:bg-slate-950 dark:hover:bg-slate-900 dark:text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
                   title="Open Flagged Community Posts"
                 >
                   Flagged Posts: {adminTasks.flaggedCommunityPosts} new
@@ -351,7 +351,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                     e.stopPropagation();
                     onOpenAdminConsole?.('chat-moderation-desk');
                   }}
-                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
+                  className="px-2 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white dark:bg-slate-950 dark:hover:bg-slate-900 dark:text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
                   title="Open Chat Moderation"
                 >
                   Chat Moderation: {adminTasks.chatModeration} cases
@@ -464,7 +464,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
       {showBackToTop && (
         <button
           onClick={scrollToTop}
-          className="fixed bottom-20 left-4 sm:left-8 z-40 bg-slate-900/90 hover:bg-slate-900 active:scale-95 text-white rounded-full p-3 shadow-xl flex items-center gap-1.5 transition-all border border-slate-700/60 cursor-pointer"
+          className="fixed bottom-20 left-4 sm:left-8 z-40 bg-teal-800/90 dark:bg-slate-800/90 hover:bg-teal-900 dark:hover:bg-slate-700 active:scale-95 text-white rounded-full p-3 shadow-xl flex items-center gap-1.5 transition-all border border-teal-700/60 dark:border-slate-700/60 cursor-pointer backdrop-blur-xs"
           title="Back to Top"
         >
           <ArrowUp className="w-5 h-5 text-white" />

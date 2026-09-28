@@ -25,10 +25,12 @@ export function getUserBadgeInfo(nicknameOrId?: string, fallbackUser?: UserProfi
 
   // Platform administrator (@modula) is always verified
   if (clean === 'modula' || fallbackUser?.nickname?.toLowerCase().replace(/^@/, '') === 'modula' || fallbackUser?.isAdmin) {
+    const adminType = (fallbackUser?.badgeType || user?.badgeType || 'BLUE').toUpperCase();
+    const adminTitle = (fallbackUser?.badgeTitle || user?.badgeTitle || '').trim();
     return {
       isVerified: true,
-      badgeType: 'BLUE',
-      badgeTitle: '',
+      badgeType: ['BLUE', 'GREEN', 'GOLD', 'ORANGE', 'PURPLE'].includes(adminType) ? adminType : 'BLUE',
+      badgeTitle: adminTitle,
     };
   }
 
@@ -65,7 +67,8 @@ export function getUserBadgeInfo(nicknameOrId?: string, fallbackUser?: UserProfi
       const userReqs = vList.filter(
         (req) => (req.applicantNickname || '').trim().toLowerCase().replace(/^@/, '') === clean
       );
-      approvedVerifReq = userReqs.find(
+      // Pick the most recent approved verification dossier
+      approvedVerifReq = [...userReqs].reverse().find(
         (req) =>
           req.status === 'APPROVED' &&
           req.requestType !== 'STUDENT_CONVERSION' &&
@@ -113,47 +116,31 @@ export function getUserBadgeInfo(nicknameOrId?: string, fallbackUser?: UserProfi
     };
   }
 
-  // Determine Badge Color: Honor exact assigned color without alteration
-  let rawType = (
-    approvedVerifReq?.assignedBadgeType ||
-    user?.badgeType ||
-    'BLUE'
-  ).toUpperCase();
-
-  if (rawType === 'VERIFIED' || rawType === 'NONE' || !rawType) {
-    rawType = 'BLUE';
+  // Determine Badge Color: Honor exact assigned color from latest approved dossier or user record
+  let rawType = 'BLUE';
+  if (approvedVerifReq?.assignedBadgeType && ['BLUE', 'GREEN', 'GOLD', 'ORANGE', 'PURPLE'].includes(approvedVerifReq.assignedBadgeType.toUpperCase())) {
+    rawType = approvedVerifReq.assignedBadgeType.toUpperCase();
+  } else if (user?.badgeType && ['BLUE', 'GREEN', 'GOLD', 'ORANGE', 'PURPLE'].includes(user.badgeType.toUpperCase())) {
+    rawType = user.badgeType.toUpperCase();
+  } else if (user?.badgeType && user.badgeType !== 'NONE') {
+    rawType = user.badgeType.toUpperCase();
   }
 
-  // Determine Badge Title: ONLY show what was explicitly assigned by the Admin.
-  // Never invent, auto-assign, or inject a generic default title.
+  // Determine Badge Title: ONLY show what was explicitly assigned by Admin
   let rawTitle = '';
-  if (approvedVerifReq?.assignedBadgeTitle !== undefined && approvedVerifReq?.assignedBadgeTitle !== null) {
+  if (approvedVerifReq?.assignedBadgeTitle && String(approvedVerifReq.assignedBadgeTitle).trim()) {
     rawTitle = String(approvedVerifReq.assignedBadgeTitle).trim();
-  } else if (user?.badgeTitle) {
+  } else if (user?.badgeTitle && user.badgeTitle.trim()) {
     rawTitle = String(user.badgeTitle).trim();
   }
 
-  // Filter out any legacy automatic placeholder strings so they don't display as titles
-  const isGenericPlaceholder =
+  // Filter out internal non-title negative status keywords
+  const isInternalStatus =
     rawTitle.toLowerCase().includes('decline') ||
     rawTitle.toLowerCase().includes('pending') ||
-    rawTitle.toLowerCase().includes('reject') ||
-    [
-      'FUHSI Student',
-      'Student',
-      'Verified',
-      'Verified Student',
-      'Member',
-      'Campus Member',
-      'Official Admin',
-      'Executive Council',
-      'Admin Official',
-      'FUHSI Official',
-      'Student Executive',
-      'Guest',
-    ].includes(rawTitle);
+    rawTitle.toLowerCase().includes('reject');
 
-  if (isGenericPlaceholder) {
+  if (isInternalStatus) {
     rawTitle = '';
   }
 
