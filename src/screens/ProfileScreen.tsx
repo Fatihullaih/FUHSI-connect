@@ -1127,7 +1127,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     </div>
 
                     <a
-                      href={`mailto:fuhsiconnectsupport@gmail.com?subject=FUHSI%20Connect%20Help%20%2F%20Support%20Request&body=Hello%20FUHSI%20Connect%20Support%2C%0A%0AMy%20Username%3A%20${encodeURIComponent(userProfile?.nickname || '')}%0AMy%20Department%3A%20${encodeURIComponent(userProfile?.department || '')}%0A%0ADescription%20of%20my%20issue%20or%20inquiry%3A%0A`}
+                      href={`mailto:fuhsiconnectsupport@gmail.com?subject=Support%20Request&body=Hello%20FUHSI%20Connect%20Support%2C%0A%0AMy%20Username%3A%20${encodeURIComponent(userProfile?.nickname || '')}%0AMy%20Department%3A%20${encodeURIComponent(userProfile?.department || '')}%0A%0ADescription%20of%20my%20issue%20or%20inquiry%3A%0A`}
                       className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
                     >
                       <Mail size={15} />

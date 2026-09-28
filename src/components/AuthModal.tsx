@@ -1328,7 +1328,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           )}&body=${encodeURIComponent(
                             `Hello FUHSI Connect Support,\n\nI am appealing a matriculation number conflict on FUHSI Connect.\n\nMatriculation Number: ${matricConflictValue}\nFull Name: ${realName || 'N/A'}\nDepartment: ${department || 'N/A'}\nLevel: ${level || 'N/A'}\nDesired Username: ${nickname || 'N/A'}\nEmail Address: ${studentEmail || 'N/A'}\n\nThe system stated that this matriculation number is already associated with an account. I am the rightful student owner of this matriculation number and request verification and access.\n\nThank you,\n${realName || nickname || 'Student'}`
                           )}`
-                        : `mailto:fuhsiconnectsupport@gmail.com?subject=FUHSI%20Connect%20Support%20%2F%20Complaint&body=Hello%20Support%20Team%2C%0A%0AMy%20Username%20is%3A%20%0A%0AMy%20Issue%20%2F%20Complaint%20details%3A%0A`
+                        : `mailto:fuhsiconnectsupport@gmail.com?subject=Support%20Request&body=Hello%20Support%20Team%2C%0A%0AMy%20Username%20is%3A%20%0A%0AMy%20Issue%20%2F%20Complaint%20details%3A%0A`
                     }
                     className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
