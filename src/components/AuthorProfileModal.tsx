@@ -663,9 +663,9 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                         </div>
                       </div>
 
-                      <p className="text-slate-800 font-semibold leading-relaxed pl-3.5 border-l-2 border-teal-500/50">
-                        {comment.content}
-                      </p>
+                      <div className="text-slate-800 font-semibold leading-relaxed pl-3.5 border-l-2 border-teal-500/50">
+                        <LinkifiedText text={comment.content} />
+                      </div>
 
                       <div className="text-[10px] text-slate-400 font-medium text-right">
                         {formatRelativeTime(comment.timestamp)}

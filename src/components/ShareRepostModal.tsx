@@ -24,9 +24,9 @@ interface ShareRepostModalProps {
 }
 
 export const getDedicatedPostUrl = (postId: string): string => {
-  if (typeof window === 'undefined') return `/post/${postId}`;
+  if (typeof window === 'undefined') return `/?post=${postId}`;
   const origin = window.location.origin;
-  return `${origin}/post/${encodeURIComponent(postId)}`;
+  return `${origin}/?post=${encodeURIComponent(postId)}`;
 };
 
 export const ShareRepostModal: React.FC<ShareRepostModalProps> = ({

@@ -4,6 +4,7 @@ import { compressImageFile } from '../utils/imageUtils';
 import { isGuestAccount } from '../utils/userDbUtils';
 import { VerificationModal } from './VerificationModal';
 import { INITIAL_USER_PROFILE } from '../data/initialData';
+import { LinkifiedText, tokenizeTextForLinks } from './LinkifiedText';
 import { 
   X, 
   ArrowLeft,
@@ -257,10 +258,21 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               rows={4}
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              placeholder="What's happening?"
+              placeholder="What's happening? (You can paste thread links or website URLs here)"
               autoFocus
               className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-teal-500 focus:bg-white transition-colors resize-none placeholder:text-slate-400 font-medium"
             />
+            {content && tokenizeTextForLinks(content).some((t) => t.type === 'link') && (
+              <div className="mt-2 p-2.5 rounded-xl bg-teal-50/70 border border-teal-200/80 text-xs animate-in fade-in">
+                <div className="text-[10px] uppercase font-black tracking-wider text-teal-800 mb-1 flex items-center gap-1">
+                  <Sparkles size={11} className="text-teal-600 shrink-0" />
+                  <span>Interactive Link & Thread Preview</span>
+                </div>
+                <div className="text-slate-800 leading-relaxed font-normal">
+                  <LinkifiedText text={content} />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Attachments Actions (Image, Poll) */}

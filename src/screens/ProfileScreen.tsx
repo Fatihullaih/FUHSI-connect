@@ -4,6 +4,7 @@ import { compressImageFile, optimizeAvatarImage } from '../utils/imageUtils';
 import { calculateUserPoints, getUserPointsBreakdown } from '../utils/reputationUtils';
 import { getFollowersCount, getFollowingCount, normalizeHandle } from '../utils/followUtils';
 import { FollowersListModal } from '../components/FollowersListModal';
+import { LinkifiedText } from '../components/LinkifiedText';
 import { 
   User, 
   Lock, 
@@ -39,7 +40,9 @@ import {
   Globe,
   Check,
   Eye,
-  Shield
+  Shield,
+  HelpCircle,
+  Copy
 } from 'lucide-react';
 import { ThemeMode, getStoredTheme, setStoredTheme } from '../utils/themeUtils';
 import { formatJoinDate } from '../utils/userDbUtils';
@@ -53,7 +56,7 @@ import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { ImageCropModal } from '../components/ImageCropModal';
 
-export type SettingsSubpage = 'main' | 'edit_profile' | 'display_mode' | 'privacy_visibility' | 'delete_account' | 'logout_confirm';
+export type SettingsSubpage = 'main' | 'edit_profile' | 'display_mode' | 'privacy_visibility' | 'help_support' | 'delete_account' | 'logout_confirm';
 
 interface ProfileScreenProps {
   userProfile: UserProfile | null;
@@ -143,6 +146,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
   const [isEditingSettings, setIsEditingSettings] = useState(false);
   const [settingsSubpage, setSettingsSubpage] = useState<SettingsSubpage>('main');
+  const [supportEmailCopied, setSupportEmailCopied] = useState(false);
   const [showPictureModal, setShowPictureModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [showFollowersModal, setShowFollowersModal] = useState<{ open: boolean; tab: 'followers' | 'following' } | null>(null);
@@ -956,6 +960,33 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     <ChevronRight size={18} className="text-slate-400 group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors shrink-0" />
                   </button>
 
+                  {/* 💬 Help & Support */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSupportEmailCopied(false);
+                      setSettingsSubpage('help_support');
+                    }}
+                    className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-teal-500 dark:hover:border-teal-400 hover:bg-teal-50/40 dark:hover:bg-teal-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-11 h-11 rounded-2xl bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 flex items-center justify-center text-lg shrink-0 border border-teal-200/60 dark:border-teal-800/60">
+                        <HelpCircle size={19} className="text-teal-600 dark:text-teal-400" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 group-hover:text-teal-700 dark:group-hover:text-teal-300 transition-colors">
+                            Help & Support
+                          </h3>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                          Contact fuhsiconnectsupport@gmail.com for assistance
+                        </p>
+                      </div>
+                    </div>
+                    <ChevronRight size={18} className="text-slate-400 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors shrink-0" />
+                  </button>
+
                   {/* ⚠️ Delete Account */}
                   {onDeleteAccount && (
                     <button
@@ -1009,6 +1040,115 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   )}
                 </div>
               </>
+            )}
+
+            {settingsSubpage === 'help_support' && (
+              /* DEDICATED HELP & SUPPORT SUBPAGE */
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10">
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsSubpage('main')}
+                      className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
+                      title="Return to Settings"
+                    >
+                      <ArrowLeft size={18} />
+                      <span>Settings</span>
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden sm:block" />
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 flex items-center justify-center text-sm">
+                        <HelpCircle size={15} />
+                      </div>
+                      <h2 className="font-black text-slate-900 dark:text-slate-100 text-sm sm:text-base">
+                        Help & Support
+                      </h2>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleCancelEdit();
+                      setIsEditingSettings(false);
+                    }}
+                    className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+                  {/* Hero Support Box */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-teal-50/70 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800/70 space-y-2.5">
+                    <div className="flex items-center gap-2.5 text-teal-950 dark:text-teal-100 font-black text-sm sm:text-base">
+                      <div className="w-8 h-8 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <Mail size={16} />
+                      </div>
+                      <span>FUHSI Connect Support</span>
+                    </div>
+                    <p className="text-xs text-teal-900 dark:text-teal-200 leading-relaxed font-medium">
+                      If you need help with your account, have questions, encounter technical difficulties, or wish to report an issue, please reach out to our team directly via our official support email.
+                    </p>
+                  </div>
+
+                  {/* Support Email Card */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-3">
+                    <div className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                      Official Contact Email
+                    </div>
+                    <div className="flex items-center justify-between gap-2 p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <span className="font-mono font-bold text-xs sm:text-sm text-teal-900 dark:text-teal-200 select-all break-all">
+                        fuhsiconnectsupport@gmail.com
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText('fuhsiconnectsupport@gmail.com');
+                          setSupportEmailCopied(true);
+                          setTimeout(() => setSupportEmailCopied(false), 2500);
+                        }}
+                        className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer shadow-2xs active:scale-95"
+                        title="Copy Email Address"
+                      >
+                        {supportEmailCopied ? (
+                          <>
+                            <Check size={13} className="text-emerald-300" />
+                            <span>Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={13} />
+                            <span>Copy</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    <a
+                      href={`mailto:fuhsiconnectsupport@gmail.com?subject=FUHSI%20Connect%20Help%20%2F%20Support%20Request&body=Hello%20FUHSI%20Connect%20Support%2C%0A%0AMy%20Username%3A%20${encodeURIComponent(userProfile?.nickname || '')}%0AMy%20Department%3A%20${encodeURIComponent(userProfile?.department || '')}%0A%0ADescription%20of%20my%20issue%20or%20inquiry%3A%0A`}
+                      className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
+                    >
+                      <Mail size={15} />
+                      <span>Open in Email App</span>
+                    </a>
+                  </div>
+
+                  {/* Tips Card */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 shadow-xs space-y-2.5">
+                    <h4 className="text-xs font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                      <Info size={15} className="text-teal-600 dark:text-teal-400" />
+                      <span>When emailing support, please remember:</span>
+                    </h4>
+                    <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-1.5 list-disc pl-4 font-medium">
+                      <li>Include your registered username (e.g. <strong className="text-slate-900 dark:text-slate-100">{userProfile?.nickname || '@username'}</strong>) in your message.</li>
+                      <li>For matriculation number, name update, or verification disputes, attach proof of enrollment or student ID.</li>
+                      <li>Our team will review your message and assist you promptly.</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
             )}
 
             {settingsSubpage === 'display_mode' && (
@@ -2204,7 +2344,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           </div>
                         </div>
 
-                        <p 
+                        <div 
                           onClick={() => {
                             if (parentPost && onCommentClick) {
                               onCommentClick(parentPost);
@@ -2212,8 +2352,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           }}
                           className="text-slate-800 font-semibold leading-relaxed pl-3.5 border-l-2 border-teal-500/50 cursor-pointer"
                         >
-                          {reply.content}
-                        </p>
+                          <LinkifiedText text={reply.content} />
+                        </div>
 
                         <div className="text-[10px] text-slate-400 font-medium text-right">
                           {formatRelativeTime(reply.timestamp)}

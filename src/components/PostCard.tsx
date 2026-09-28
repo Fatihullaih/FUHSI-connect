@@ -57,6 +57,7 @@ interface PostCardProps {
   onQuote?: (post: Post, caption: string) => void;
   onSelectPost?: (post: Post) => void;
   onDeleteComment?: (commentId: string) => void;
+  onOpenPostById?: (postId: string) => void;
   repostedByNick?: string;
   // Alternative legacy props
   onVote?: (postId: string, voteType: 'up' | 'down') => void;
@@ -84,6 +85,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   onQuote,
   onSelectPost,
   onDeleteComment,
+  onOpenPostById,
   repostedByNick,
   onVote,
   onBookmark,
@@ -228,7 +230,8 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   const handleShare = () => {
-    navigator.clipboard?.writeText?.(window.location.href);
+    const postUrl = getDedicatedPostUrl(post.id);
+    navigator.clipboard?.writeText?.(postUrl);
     setCopiedShare(true);
     setTimeout(() => setCopiedShare(false), 2000);
   };
@@ -537,7 +540,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               className="text-slate-800 text-sm sm:text-base leading-relaxed font-normal cursor-pointer hover:text-teal-950 transition-colors"
               title="Click to view full thread, comments & replies"
             >
-              <LinkifiedText text={displayContent} />
+              <LinkifiedText text={displayContent} onOpenPostById={onOpenPostById} />
             </div>
             {isLongContent && (
               <button
@@ -683,9 +686,9 @@ export const PostCard: React.FC<PostCardProps> = ({
                 {post.quotedPost.timeAgo || formatRelativeTime(post.quotedPost.timestamp)}
               </span>
             </div>
-            <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
-              {post.quotedPost.content || post.quotedPost.text}
-            </p>
+            <div className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
+              <LinkifiedText text={post.quotedPost.content || post.quotedPost.text || ''} onOpenPostById={onOpenPostById} />
+            </div>
             {post.quotedPost.imageUrl && (
               <div className="h-32 w-full rounded-xl overflow-hidden border border-slate-200 mt-2">
                 <img src={post.quotedPost.imageUrl} alt="Quoted attachment" className="w-full h-full object-cover" />
@@ -818,7 +821,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                         </div>
                       </div>
                       <div className="text-slate-700 leading-relaxed pl-7">
-                        <LinkifiedText text={comment.content} />
+                        <LinkifiedText text={comment.content} onOpenPostById={onOpenPostById} />
                       </div>
 
                       {deletingCommentId === comment.id && (

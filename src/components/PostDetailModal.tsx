@@ -33,6 +33,7 @@ interface PostDetailModalProps {
   onUndoRepost?: (post: Post) => void;
   onQuote?: (post: Post, caption: string) => void;
   onSelectPost?: (post: Post) => void;
+  onOpenPostById?: (postId: string) => void;
 }
 
 export const PostDetailModal: React.FC<PostDetailModalProps> = ({
@@ -54,6 +55,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   onUndoRepost,
   onQuote,
   onSelectPost,
+  onOpenPostById,
 }) => {
   if (!post) return null;
 
@@ -301,7 +303,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
           {comment.content && (
             <div className="text-xs text-slate-800 pt-1.5 leading-relaxed font-medium pl-9 select-text">
-              <LinkifiedText text={comment.content} />
+              <LinkifiedText text={comment.content} onOpenPostById={onOpenPostById} />
             </div>
           )}
 
@@ -653,7 +655,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                   </div>
                 ) : (
                   <div className="text-slate-800 text-xs sm:text-sm leading-relaxed font-medium pt-1 select-text">
-                    <LinkifiedText text={post.content} />
+                    <LinkifiedText text={post.content || (post as any).text || ''} onOpenPostById={onOpenPostById} />
                   </div>
                 )}
 
@@ -797,9 +799,9 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                     {post.quotedPost.timeAgo || formatRelativeTime(post.quotedPost.timestamp)}
                   </span>
                 </div>
-                <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
-                  {post.quotedPost.content || (post.quotedPost as any).text}
-                </p>
+                <div className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
+                  <LinkifiedText text={post.quotedPost.content || (post.quotedPost as any).text || ''} onOpenPostById={onOpenPostById} />
+                </div>
                 {post.quotedPost.imageUrl && (
                   <div className="h-32 w-full rounded-xl overflow-hidden border border-slate-200 mt-2">
                     <img src={post.quotedPost.imageUrl} alt="Quoted attachment" className="w-full h-full object-cover" />

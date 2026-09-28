@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Post, Comment, PostCategory, UserProfile, FollowRecord } from '../types';
 import { PostCard } from '../components/PostCard';
 import { generateMorePosts, isDemoPost } from '../utils/postGenerator';
@@ -39,6 +39,7 @@ interface FeedScreenProps {
   onSelectPost?: (post: Post) => void;
   onDeleteComment?: (commentId: string) => void;
   onOpenAdminConsole?: (deskId?: string, tab?: string) => void;
+  onOpenPostById?: (postId: string) => void;
 
   // Legacy / alternative props compatibility
   comments?: Record<string, Comment[]>;
@@ -71,6 +72,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   onDeleteComment,
   onCreatePost,
   onOpenAdminConsole,
+  onOpenPostById,
   comments = {},
   onVote,
   onBookmark,
@@ -80,8 +82,12 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [autoRefreshNotice, setAutoRefreshNotice] = useState<string | null>(null);
 
-  // Real-time admin pending tasks for attention indicator
-  const adminTasks = useAdminPendingCounts();
+  // Real-time admin pending tasks for attention indicator (exact matching real records)
+  const flaggedPosts = useMemo(
+    () => posts.filter((p) => p.isQuarantined || p.status === 'UnderReview' || p.isFlagged),
+    [posts]
+  );
+  const adminTasks = useAdminPendingCounts(undefined, undefined, undefined, flaggedPosts);
 
   // Finite scrolling state with clear end
   const [extraPosts, setExtraPosts] = useState<Post[]>([]);
@@ -351,19 +357,6 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                   Chat Moderation: {adminTasks.chatModeration} cases
                 </button>
               )}
-              {adminTasks.helpDesk > 0 && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenAdminConsole?.('helpdesk-desk', 'PENDING');
-                  }}
-                  className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold transition-colors cursor-pointer shadow-xs"
-                  title="Open Help Desk tickets awaiting review"
-                >
-                  Help Desk: {adminTasks.helpDesk} new
-                </button>
-              )}
             </div>
           )}
         </div>
@@ -419,6 +412,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                 onQuote={onQuote}
                 onSelectPost={onSelectPost}
                 onDeleteComment={onDeleteComment}
+                onOpenPostById={onOpenPostById}
                 onVote={onVote}
                 onBookmark={onBookmark}
                 onAddComment={onAddComment}

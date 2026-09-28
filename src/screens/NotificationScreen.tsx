@@ -43,9 +43,6 @@ export function getAdminDeskForNotification(n: CampusNotification | null): { des
   if (str.includes('chat report') || str.includes('chat moderation') || str.includes('harassment') || str.includes('chat case') || str.includes('message report')) {
     return { deskId: 'chat-moderation-desk' };
   }
-  if (str.includes('help desk') || str.includes('appeal') || str.includes('inquiry') || str.includes('ticket') || str.includes('helpdesk')) {
-    return { deskId: 'helpdesk-desk', tab: 'PENDING' };
-  }
   return null;
 }
 
@@ -96,11 +93,16 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     };
   }, [userProfile?.nickname]);
 
-  // Platform notifications (strictly excluding private chat messages)
+  // Platform notifications (strictly excluding private chat messages and legacy help desk tickets)
   const customUserNotifications: CampusNotification[] = useMemo(() => {
     if (!userProfile?.nickname) return [];
     const notifs = getUserNotifications(userProfile.nickname);
-    return notifs.filter((n) => !isChatMessageNotification(n));
+    return notifs.filter((n) => {
+      if (isChatMessageNotification(n)) return false;
+      const str = `${n.type || ''} ${n.actionType || ''} ${n.title || ''} ${n.message || ''}`.toLowerCase();
+      if (str.includes('help desk') || str.includes('helpdesk')) return false;
+      return true;
+    });
   }, [userProfile?.nickname, refreshTrigger]);
 
   // Combine notifications and annotate with live read/unread status

@@ -8,58 +8,18 @@ import {
 
 export const HELPDESK_STORAGE_KEY = 'fuhsi_helpdesk_inquiries';
 
-export const INITIAL_HELPDESK_INQUIRIES: HelpDeskInquiry[] = [
-  {
-    id: 'ticket_appeal_101',
-    ticketId: 'HD-9842',
-    fullName: 'Adeyemi Toluwalase',
-    nickname: '@adeyemi_t',
-    email: 'adeyemi.t@fuhsi.edu.ng',
-    matricNumber: '24/MLS/032',
-    department: 'Medical Laboratory Science',
-    level: '200L',
-    category: 'REGISTRATION_APPEAL',
-    categoryLabel: 'Registration Approval Review',
-    message: 'Good day Admin, my account has been under pending approval for 48 hours. I submitted my valid matric number 24/MLS/032 and school email. Kindly approve my account.',
-    status: 'PENDING',
-    createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-  },
-  {
-    id: 'ticket_matric_102',
-    ticketId: 'HD-9843',
-    fullName: 'Olatunji Praise',
-    nickname: '@praise_o',
-    email: 'praise.o@fuhsi.edu.ng',
-    matricNumber: '24/NUR/109',
-    department: 'Nursing Science',
-    level: '100L',
-    category: 'LOGIN_ISSUE',
-    categoryLabel: 'Matric Number Ownership Conflict',
-    message: 'Hello Support, when attempting to register, the portal indicated that matric number 24/NUR/109 was already taken. I am the bona fide student and have attached my admission slip.',
-    status: 'PENDING',
-    createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-];
+export const INITIAL_HELPDESK_INQUIRIES: HelpDeskInquiry[] = [];
 
 /**
- * Retrieve all stored helpdesk inquiries from local storage with initial fallback
+ * Retrieve all stored helpdesk inquiries from local storage (empty by default, no fake notifications)
  */
 export function getStoredHelpDeskInquiries(): HelpDeskInquiry[] {
   try {
-    if (typeof localStorage === 'undefined') return INITIAL_HELPDESK_INQUIRIES;
-    const raw = localStorage.getItem(HELPDESK_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
-      }
-    }
-    // Initialize with defaults if empty
-    localStorage.setItem(HELPDESK_STORAGE_KEY, JSON.stringify(INITIAL_HELPDESK_INQUIRIES));
-    return INITIAL_HELPDESK_INQUIRIES;
+    if (typeof localStorage === 'undefined') return [];
+    localStorage.removeItem(HELPDESK_STORAGE_KEY);
+    return [];
   } catch (err) {
-    console.error('Error reading help desk inquiries:', err);
-    return INITIAL_HELPDESK_INQUIRIES;
+    return [];
   }
 }
 

@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { UserProfile, VerificationRequest, MarketplaceItem, Post, Report, ChatReport, HelpDeskInquiry } from '../types';
-import { getStoredUsers, isGuestAccount } from './userDbUtils';
+import { UserProfile, VerificationRequest, MarketplaceItem, Post, Report, ChatReport } from '../types';
+import { getStoredUsers } from './userDbUtils';
 import { getStoredMarketplaceReports } from './marketplaceUtils';
 import { getStoredChatReports } from './messagingUtils';
-import { getStoredHelpDeskInquiries } from './helpDeskUtils';
 
 export interface AdminTasksBreakdown {
   studentAccounts: number;
@@ -11,13 +10,12 @@ export interface AdminTasksBreakdown {
   marketplaceManagement: number;
   flaggedCommunityPosts: number;
   chatModeration: number;
-  helpDesk: number;
   totalPending: number;
   hasPendingTasks: boolean;
 }
 
 /**
- * Pure calculation function to get exact counts from actual records
+ * Pure calculation function to get exact counts from actual records without ghost notifications
  */
 export function calculateAdminPendingCounts(
   usersList?: UserProfile[],
@@ -25,8 +23,7 @@ export function calculateAdminPendingCounts(
   pendingMarketplaceList?: MarketplaceItem[],
   flaggedPostsList?: Post[],
   reportsList?: Report[],
-  chatReportsList?: ChatReport[],
-  helpDeskList?: HelpDeskInquiry[]
+  chatReportsList?: ChatReport[]
 ): AdminTasksBreakdown {
   // 1. Pending Student Accounts: Unapproved, non-admin, non-modula accounts
   const users = usersList && usersList.length > 0 ? usersList : getStoredUsers();
@@ -76,31 +73,49 @@ export function calculateAdminPendingCounts(
   const pendingMarketplace = pendingMarketplaceItemsCount + pendingMarketplaceReportsCount;
 
   // 4. Flagged Community Posts & Content Moderation Reports
+  // CRITICAL: Strictly count ONLY posts that actually exist and are currently under review or have pending reports
   let pendingFlagged = 0;
-  if (flaggedPostsList) {
-    pendingFlagged += flaggedPostsList.filter((p) => p.status === 'UnderReview').length;
-  }
-  if (reportsList) {
-    pendingFlagged += reportsList.filter((r) => r.status === 'PENDING').length;
-  } else {
-    try {
-      const stored = localStorage.getItem('fuhsi_reports_db');
-      if (stored) {
-        const parsed: Report[] = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          pendingFlagged += parsed.filter((r) => r.status === 'PENDING').length;
-        }
+  try {
+    const postsPool: Post[] = flaggedPostsList || (() => {
+      try {
+        const storedPostsRaw = localStorage.getItem('fuhsi_posts_db');
+        return storedPostsRaw ? JSON.parse(storedPostsRaw) : [];
+      } catch {
+        return [];
       }
-    } catch {}
+    })();
+
+    const reportsPool: Report[] = reportsList || (() => {
+      try {
+        const storedReportsRaw = localStorage.getItem('fuhsi_reports_db');
+        return storedReportsRaw ? JSON.parse(storedReportsRaw) : [];
+      } catch {
+        return [];
+      }
+    })();
+
+    const pendingReportPostIds = new Set(
+      reportsPool.filter((r) => r && r.status === 'PENDING').map((r) => r.postId)
+    );
+
+    // Strictly filter: post must exist and have genuine flagged status or a pending report
+    const actuallyFlagged = postsPool.filter((p) => {
+      if (!p || !p.id) return false;
+      const isQuarantined = Boolean(p.isQuarantined);
+      const isUnderReview = p.status === 'UnderReview';
+      const isFlagged = Boolean(p.isFlagged);
+      const hasPendingReport = pendingReportPostIds.has(p.id);
+      return isQuarantined || isUnderReview || isFlagged || hasPendingReport;
+    });
+
+    pendingFlagged = actuallyFlagged.length;
+  } catch {
+    pendingFlagged = 0;
   }
 
   // 5. Chat Moderation Cases
   const chatReports = chatReportsList || getStoredChatReports();
   const pendingChatReports = chatReports.filter((c) => c.status === 'PENDING').length;
-
-  // 6. Help Desk Inquiries & Registration Appeals
-  const helpDeskInquiries = helpDeskList || getStoredHelpDeskInquiries();
-  const pendingHelpDesk = helpDeskInquiries.filter((h) => h.status === 'PENDING').length;
 
   // Total
   const totalPending =
@@ -108,8 +123,7 @@ export function calculateAdminPendingCounts(
     pendingVerifs +
     pendingMarketplace +
     pendingFlagged +
-    pendingChatReports +
-    pendingHelpDesk;
+    pendingChatReports;
 
   return {
     studentAccounts: pendingStudents,
@@ -117,7 +131,6 @@ export function calculateAdminPendingCounts(
     marketplaceManagement: pendingMarketplace,
     flaggedCommunityPosts: pendingFlagged,
     chatModeration: pendingChatReports,
-    helpDesk: pendingHelpDesk,
     totalPending,
     hasPendingTasks: totalPending > 0,
   };
@@ -171,8 +184,6 @@ export function useAdminPendingCounts(
       'fuhsi_marketplace_report_updated',
       'fuhsi_chat_report_submitted',
       'fuhsi_chat_report_updated',
-      'fuhsi_helpdesk_inquiry_submitted',
-      'fuhsi_helpdesk_inquiry_updated',
       'fuhsi_post_flagged',
       'fuhsi_reports_updated',
     ];

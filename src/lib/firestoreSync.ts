@@ -364,6 +364,25 @@ export function subscribePosts(onUpdate: (posts: Post[]) => void) {
 }
 
 /**
+ * Fetch single post from Firestore by ID (deep-linking & sharing)
+ */
+export async function getPostFromFirestore(postId: string): Promise<Post | null> {
+  if (!postId || isPostDeletedLocally(postId)) return null;
+  try {
+    const snap = await getDoc(doc(db, POSTS_COL, postId));
+    if (snap.exists()) {
+      const p = snap.data() as Post;
+      if (!isDemoPost(p) && !isPostDeletedLocally(p.id)) {
+        return p;
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching post from Firestore:', err);
+  }
+  return null;
+}
+
+/**
  * Save single post to Firestore
  */
 export async function savePostToFirestore(post: Post): Promise<void> {

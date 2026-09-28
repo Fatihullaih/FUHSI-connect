@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import fuhsiLogo from '../assets/images/fuhsi_logo_1785485694958.jpg';
-import { UserProfile, HelpDeskInquiry } from '../types';
+import { UserProfile } from '../types';
 import { getStoredUsers, upsertUser, updateUserPassword, unmarkUserPermanentlyDeleted, isUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
 import { fetchServerDb, mergeUsers, pushServerDbSync } from '../utils/apiSync';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { validateMatricCredentials, checkMatricUniqueness, normalizeMatricNumber } from '../utils/matricValidation';
 import { saveUserToFirestore, fetchUsersFromFirestore } from '../lib/firestoreSync';
-import { saveHelpDeskInquiry } from '../utils/helpDeskUtils';
 import { AvatarIcon } from './AvatarIcon';
 import { 
   ShieldCheck, 
@@ -88,10 +87,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [pendingUserNotice, setPendingUserNotice] = useState<UserProfile | null>(null);
   const [accountNoticeType, setAccountNoticeType] = useState<'DECLINED' | 'PENDING' | null>(null);
 
-  // Help Desk / Support Ticket Form State
+  // Support Email State
   const [emailCopied, setEmailCopied] = useState(false);
-  const [helpDeskMsg, setHelpDeskMsg] = useState('');
-  const [helpDeskSubmitted, setHelpDeskSubmitted] = useState(false);
 
   // Register Form State
   const [accountType, setAccountType] = useState<'Student' | 'Guest'>('Student');
@@ -750,48 +747,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </p>
         </div>
 
-        {/* Top Switcher Tabs: Log In vs Sign Up / Register */}
-        {(mode === 'LOGIN' || mode === 'REGISTER') && (
-          <div className="px-5 pt-4 shrink-0 bg-white">
-            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200">
-              <button
-                type="button"
-                id="auth-tab-login"
-                onClick={() => {
-                  setErrorMessage('');
-                  setResetSuccessMessage('');
-                  setMode('LOGIN');
-                }}
-                className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  mode === 'LOGIN'
-                    ? 'bg-teal-700 text-white shadow-xs font-black'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-              >
-                <LogIn size={15} />
-                <span>Log In</span>
-              </button>
-              <button
-                type="button"
-                id="auth-tab-register"
-                onClick={() => {
-                  setErrorMessage('');
-                  setResetSuccessMessage('');
-                  setMode('REGISTER');
-                }}
-                className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  mode === 'REGISTER'
-                    ? 'bg-teal-700 text-white shadow-xs font-black'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-              >
-                <UserPlus size={15} />
-                <span>Sign Up / Register</span>
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Scrollable Form Body */}
         <div className="p-5 overflow-y-auto space-y-4 flex-1">
           {errorMessage && (
@@ -803,11 +758,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {(matricConflictDetected || errorMessage.includes('already associated with an account')) ? (
                 <div className="pt-2 border-t border-rose-200/80 space-y-2">
                   <div className="flex items-center gap-1.5 text-rose-900 font-bold">
-                    <LifeBuoy size={14} className="text-rose-600" />
+                    <Mail size={14} className="text-rose-600" />
                     <span>Need Help?</span>
                   </div>
                   <p className="text-[11px] text-rose-950 font-medium leading-relaxed">
-                    If this is your official FUHSI matriculation number and you believe another account was created with it, you can submit an appeal to the Help Desk for ownership review.
+                    If this is your official FUHSI matriculation number and you believe another account was created with it, you can contact Support at fuhsiconnectsupport@gmail.com for ownership review.
                   </p>
                   <button
                     type="button"
@@ -817,11 +772,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     }}
                     className="w-full py-2 px-3 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-lg text-xs font-black transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                   >
-                    <LifeBuoy size={14} />
-                    <span>Need Help? Contact Help Desk</span>
+                    <Mail size={14} />
+                    <span>Need Help? Contact Support</span>
                   </button>
                 </div>
-              ) : (accountNoticeType === 'DECLINED' || accountNoticeType === 'PENDING' || errorMessage.includes('Help Desk') || errorMessage.includes('Registration')) ? (
+              ) : (accountNoticeType === 'DECLINED' || accountNoticeType === 'PENDING' || errorMessage.includes('Help Desk') || errorMessage.includes('Support') || errorMessage.includes('Registration')) ? (
                 <div className="pt-1 flex items-center gap-2">
                   <button
                     type="button"
@@ -831,8 +786,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     }}
                     className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
-                    <LifeBuoy size={14} />
-                    <span>(Need help? Contact Help Desk?)</span>
+                    <Mail size={14} />
+                    <span>(Need help? Contact Support)</span>
                   </button>
                 </div>
               ) : null}
@@ -1134,8 +1089,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     }}
                     className="text-[11px] font-bold text-slate-500 hover:text-teal-700 hover:underline flex items-center justify-center gap-1 mx-auto cursor-pointer"
                   >
-                    <LifeBuoy size={13} />
-                    <span>(Need help? Contact Help Desk?)</span>
+                    <Mail size={13} />
+                    <span>Need help? Contact Support</span>
                   </button>
                 </div>
               </div>
@@ -1284,8 +1239,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     }}
                     className="text-[11px] font-bold text-slate-500 hover:text-teal-700 hover:underline flex items-center justify-center gap-1 mx-auto cursor-pointer"
                   >
-                    <LifeBuoy size={13} />
-                    <span>(Need help? Contact Help Desk?)</span>
+                    <Mail size={13} />
+                    <span>Need help? Contact Support</span>
                   </button>
                 </div>
               </div>
@@ -1295,11 +1250,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <div className="p-4 bg-teal-50 border border-teal-200 rounded-2xl space-y-3">
                 <div className="flex items-center gap-2.5 text-teal-950 font-black text-sm">
                   <div className="w-8 h-8 rounded-full bg-teal-600 text-white flex items-center justify-center shadow-xs shrink-0">
-                    <LifeBuoy size={17} />
+                    <Mail size={17} />
                   </div>
                   <div>
-                    <h3 className="font-extrabold text-teal-950 text-sm">Help Desk Support</h3>
-                    <p className="text-[11px] font-semibold text-teal-700">(Need help? Contact Help Desk?)</p>
+                    <h3 className="font-extrabold text-teal-950 text-sm">Official Support</h3>
+                    <p className="text-[11px] font-semibold text-teal-700">fuhsiconnectsupport@gmail.com</p>
                   </div>
                 </div>
 
@@ -1345,7 +1300,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 {matricConflictValue ? (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1">
                     <div className="text-xs font-black text-amber-900 flex items-center gap-1.5">
-                      <LifeBuoy size={14} className="text-amber-700" />
+                      <Mail size={14} className="text-amber-700" />
                       <span>Matriculation Conflict Appeal</span>
                     </div>
                     <p className="text-[11px] text-amber-950 leading-relaxed font-semibold">
@@ -1371,71 +1326,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         ? `mailto:fuhsiconnectsupport@gmail.com?subject=${encodeURIComponent(
                             `Matric Number Conflict Appeal - ${matricConflictValue}`
                           )}&body=${encodeURIComponent(
-                            `Hello FUHSI Help Desk,\n\nI am appealing a matriculation number conflict on FUHSI Connect.\n\nMatriculation Number: ${matricConflictValue}\nFull Name: ${realName || 'N/A'}\nDepartment: ${department || 'N/A'}\nLevel: ${level || 'N/A'}\nDesired Username: ${nickname || 'N/A'}\nEmail Address: ${studentEmail || 'N/A'}\n\nThe system stated that this matriculation number is already associated with an account. I am the rightful student owner of this matriculation number and request verification and access.\n\nThank you,\n${realName || nickname || 'Student'}`
+                            `Hello FUHSI Connect Support,\n\nI am appealing a matriculation number conflict on FUHSI Connect.\n\nMatriculation Number: ${matricConflictValue}\nFull Name: ${realName || 'N/A'}\nDepartment: ${department || 'N/A'}\nLevel: ${level || 'N/A'}\nDesired Username: ${nickname || 'N/A'}\nEmail Address: ${studentEmail || 'N/A'}\n\nThe system stated that this matriculation number is already associated with an account. I am the rightful student owner of this matriculation number and request verification and access.\n\nThank you,\n${realName || nickname || 'Student'}`
                           )}`
-                        : `mailto:fuhsiconnectsupport@gmail.com?subject=FUHSI%20Connect%20Support%20%2F%20Complaint&body=Hello%20Help%20Desk%2C%0A%0AMy%20Username%20is%3A%20%0A%0AMy%20Issue%20%2F%20Complaint%20details%3A%0A`
+                        : `mailto:fuhsiconnectsupport@gmail.com?subject=FUHSI%20Connect%20Support%20%2F%20Complaint&body=Hello%20Support%20Team%2C%0A%0AMy%20Username%20is%3A%20%0A%0AMy%20Issue%20%2F%20Complaint%20details%3A%0A`
                     }
-                    className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Mail size={14} />
                     <span>Open in Email App</span>
                   </a>
-                </div>
-
-                {/* Direct In-App Ticket Submission Form */}
-                <div className="pt-3 border-t border-teal-200/80 space-y-2 text-xs">
-                  <span className="font-extrabold text-teal-950 block">
-                    Or Submit a Direct Ticket to the Help Desk Queue:
-                  </span>
-                  {helpDeskSubmitted ? (
-                    <div className="p-3 bg-emerald-100 text-emerald-950 rounded-xl border border-emerald-300 font-bold text-center animate-in fade-in">
-                      ✓ Your Help Desk ticket has been logged and sent to the Admin Console. You will receive an official update soon.
-                    </div>
-                  ) : (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        if (!helpDeskMsg.trim()) return;
-                        const ticketId = `HD-${Math.floor(1000 + Math.random() * 9000)}`;
-                        const newTicket: HelpDeskInquiry = {
-                          id: `ticket_${Date.now()}`,
-                          ticketId,
-                          fullName: realName || nickname || 'Student Member',
-                          email: studentEmail || `${(nickname || 'student').replace(/^@/, '')}@fuhsi.edu.ng`,
-                          nickname: nickname ? (nickname.startsWith('@') ? nickname : `@${nickname}`) : undefined,
-                          matricNumber: matricNumber || matricConflictValue || undefined,
-                          department: department || undefined,
-                          level: level || undefined,
-                          category: matricConflictValue ? 'LOGIN_ISSUE' : 'REGISTRATION_APPEAL',
-                          categoryLabel: matricConflictValue ? 'Matric Number Ownership Conflict' : 'Registration Appeal',
-                          message: helpDeskMsg.trim(),
-                          status: 'PENDING',
-                          createdAt: new Date().toISOString(),
-                        };
-                        saveHelpDeskInquiry(newTicket);
-                        setHelpDeskSubmitted(true);
-                        setHelpDeskMsg('');
-                      }}
-                      className="space-y-2"
-                    >
-                      <textarea
-                        value={helpDeskMsg}
-                        onChange={(e) => setHelpDeskMsg(e.target.value)}
-                        placeholder="Describe your issue or appeal in detail (include your full name, username, and matric number)..."
-                        rows={3}
-                        className="w-full p-2.5 rounded-xl border border-teal-300 bg-white text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
-                        required
-                      />
-                      <button
-                        type="submit"
-                        disabled={!helpDeskMsg.trim()}
-                        className="w-full py-2.5 px-4 bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-black text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <Send size={13} />
-                        <span>Submit Ticket to Admin Queue</span>
-                      </button>
-                    </form>
-                  )}
                 </div>
               </div>
 

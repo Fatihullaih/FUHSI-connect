@@ -37,6 +37,7 @@ import {
   subscribeMarketplaceApproved,
   subscribeAllDirectMessages,
   subscribeFollows,
+  getPostFromFirestore,
   savePostToFirestore,
   deletePostFromFirestore,
   saveCommentToFirestore,
@@ -1175,8 +1176,9 @@ export const App: React.FC = () => {
       return [...prev, { type: 'postDetail', post }];
     });
     try {
-      const targetUrl = `/post/${encodeURIComponent(post.id)}`;
-      if (window.location.pathname !== targetUrl) {
+      const targetUrl = `/?post=${encodeURIComponent(post.id)}`;
+      const currentUrl = `${window.location.pathname}${window.location.search}`;
+      if (!currentUrl.includes(encodeURIComponent(post.id))) {
         window.history.pushState({ type: 'modal', modalType: 'postDetail', id: post.id, time: Date.now() }, '', targetUrl);
       } else {
         window.history.replaceState({ type: 'modal', modalType: 'postDetail', id: post.id, time: Date.now() }, '', targetUrl);
@@ -1296,7 +1298,7 @@ export const App: React.FC = () => {
           setShowAuthModal(false);
           setShowPwaModal(false);
           setShowFollowersDirectoryModal(false);
-          if (window.location.pathname.startsWith('/post/')) {
+          if (window.location.pathname.startsWith('/post/') || window.location.search.includes('post=')) {
             try {
               window.history.replaceState(null, '', '/');
             } catch (e) { console.error(e); }
@@ -1305,7 +1307,7 @@ export const App: React.FC = () => {
         }
         const newStack = [...prevStack];
         const popped = newStack.pop();
-        if (popped?.type === 'postDetail' && window.location.pathname.startsWith('/post/')) {
+        if (popped?.type === 'postDetail' && (window.location.pathname.startsWith('/post/') || window.location.search.includes('post='))) {
           try {
             window.history.replaceState(null, '', '/');
           } catch (e) { console.error(e); }
@@ -1338,7 +1340,7 @@ export const App: React.FC = () => {
 
           const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
           setSelectedPost(lastPost ? (lastPost as any).post : null);
-          if (!lastPost && window.location.pathname.startsWith('/post/')) {
+          if (!lastPost && (window.location.pathname.startsWith('/post/') || window.location.search.includes('post='))) {
             try {
               window.history.replaceState(null, '', '/');
             } catch (e) { console.error(e); }
@@ -1356,7 +1358,7 @@ export const App: React.FC = () => {
           return newStack;
         }
 
-        if (window.location.pathname.startsWith('/post/')) {
+        if (window.location.pathname.startsWith('/post/') || window.location.search.includes('post=')) {
           try {
             window.history.replaceState(null, '', '/');
           } catch (e) { console.error(e); }
@@ -1382,16 +1384,18 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Deep linking: Handle /post/:id or ?postId=... URL routing
+  // Deep linking: Handle /post/:id or ?post=... or #post/... URL routing
   const deepLinkHandledRef = useRef<string | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       const pathname = window.location.pathname || '';
       const searchParams = new URLSearchParams(window.location.search);
+      const hash = window.location.hash || '';
       const pathMatch = pathname.match(/\/post\/([^/?#]+)/);
       const queryId = searchParams.get('post') || searchParams.get('postId');
-      const targetId = pathMatch ? decodeURIComponent(pathMatch[1]) : queryId;
+      const hashMatch = hash.match(/#\/?post[/=]([^/?#]+)/);
+      const targetId = pathMatch ? decodeURIComponent(pathMatch[1]) : (queryId ? decodeURIComponent(queryId) : (hashMatch ? decodeURIComponent(hashMatch[1]) : null));
 
       if (targetId && deepLinkHandledRef.current !== targetId) {
         let found = posts.find((p) => p.id === targetId);
@@ -1410,11 +1414,66 @@ export const App: React.FC = () => {
         if (found) {
           deepLinkHandledRef.current = targetId;
           openPostDetail(found);
+        } else {
+          // Asynchronously fetch post from Firestore when opening direct shared post link
+          getPostFromFirestore(targetId).then((fetchedPost) => {
+            if (fetchedPost) {
+              deepLinkHandledRef.current = targetId;
+              setPosts((prev) => [fetchedPost, ...prev.filter((p) => p.id !== fetchedPost.id)]);
+              openPostDetail(fetchedPost);
+            }
+          }).catch((err) => {
+            console.error('Error fetching deep-linked post from Firestore:', err);
+          });
         }
       }
     } catch (e) {
       console.error('Deep link routing error:', e);
     }
+  }, [posts, openPostDetail]);
+
+  // Global listener for opening posts from in-app thread links
+  useEffect(() => {
+    const handleOpenPostEvent = (e: any) => {
+      const postId = e.detail?.postId;
+      if (!postId) return;
+
+      const found = posts.find((p) => p.id === postId);
+      if (found) {
+        openPostDetail(found);
+        return;
+      }
+
+      try {
+        const cachedRaw = localStorage.getItem('fuhsi_posts_db');
+        if (cachedRaw) {
+          const cachedPosts: Post[] = JSON.parse(cachedRaw);
+          const cached = cachedPosts.find((p) => p.id === postId);
+          if (cached) {
+            openPostDetail(cached);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+
+      getPostFromFirestore(postId)
+        .then((fetched) => {
+          if (fetched) {
+            setPosts((prev) => [fetched, ...prev.filter((p) => p.id !== fetched.id)]);
+            openPostDetail(fetched);
+          } else {
+            console.warn(`Thread ${postId} not found or may have been removed`);
+          }
+        })
+        .catch((err) => {
+          console.warn(`Thread ${postId} could not be opened:`, err);
+        });
+    };
+
+    window.addEventListener('fuhsi_open_post_modal', handleOpenPostEvent);
+    return () => window.removeEventListener('fuhsi_open_post_modal', handleOpenPostEvent);
   }, [posts, openPostDetail]);
 
   // Handlers for Feed
@@ -3139,11 +3198,15 @@ export const App: React.FC = () => {
   }, [appTotalMembers, notifTrigger]);
 
   // Real-time Admin Tasks & Pending Activity Counter (Central Data Source of Truth)
+  const actualFlaggedPosts = useMemo(
+    () => posts.filter((p) => p && p.id && (p.isQuarantined || p.status === 'UnderReview' || p.isFlagged || reports.some((r) => r.postId === p.id && r.status === 'PENDING'))),
+    [posts, reports]
+  );
   const adminTasks = useAdminPendingCounts(
     allUsers,
     verificationRequests,
     pendingMarketplaceItems,
-    posts,
+    actualFlaggedPosts,
     reports
   );
 
@@ -3370,6 +3433,11 @@ export const App: React.FC = () => {
             onUndoRepost={handleUndoRepost}
             onQuote={handleQuotePost}
             onSelectPost={openPostDetail}
+            onOpenPostById={(postId) => {
+              const p = posts.find((x) => x.id === postId);
+              if (p) openPostDetail(p);
+              else window.dispatchEvent(new CustomEvent('fuhsi_open_post_modal', { detail: { postId } }));
+            }}
             onOpenAdminConsole={(deskId, tab) => {
               handleNavChange(6);
               if (deskId) {
@@ -3590,6 +3658,11 @@ export const App: React.FC = () => {
                 onUndoRepost={handleUndoRepost}
                 onQuote={handleQuotePost}
                 onSelectPost={openPostDetail}
+                onOpenPostById={(targetPostId) => {
+                  const p = posts.find((x) => x.id === targetPostId);
+                  if (p) openPostDetail(p);
+                  else window.dispatchEvent(new CustomEvent('fuhsi_open_post_modal', { detail: { postId: targetPostId } }));
+                }}
                 onAuthorClick={(author) => {
                   const dummyPost: Post = {
                     id: `author_${author.nickname}`,
@@ -3968,6 +4041,11 @@ export const App: React.FC = () => {
               onUndoRepost={handleUndoRepost}
               onQuote={handleQuotePost}
               onSelectPost={openPostDetail}
+              onOpenPostById={(targetPostId) => {
+                const p = posts.find((x) => x.id === targetPostId);
+                if (p) openPostDetail(p);
+                else window.dispatchEvent(new CustomEvent('fuhsi_open_post_modal', { detail: { postId: targetPostId } }));
+              }}
               onAuthorClick={(author) => {
                 const dummyPost: Post = {
                   id: `author_${author.nickname}`,

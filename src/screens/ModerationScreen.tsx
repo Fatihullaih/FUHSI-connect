@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeType, CampusNotification, HelpDeskInquiry } from '../types';
+import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeType, CampusNotification } from '../types';
 import { getStoredUsers, saveStoredUsers, isGuestAccount, markUserPermanentlyDeleted } from '../utils/userDbUtils';
 import { pushServerDbSync } from '../utils/apiSync';
 import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
-import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User, LifeBuoy } from 'lucide-react';
+import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User } from 'lucide-react';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { AdminTradeDesk } from '../components/AdminTradeDesk';
@@ -11,7 +11,6 @@ import { AdminChatReportsDesk } from '../components/AdminChatReportsDesk';
 import { INITIAL_VERIFICATION_CANDIDATES, INITIAL_USER_PROFILE } from '../data/initialData';
 import { sendUserNotification, normalizeNickname, formatMessageTime } from '../utils/messagingUtils';
 import { useAdminPendingCounts } from '../utils/adminAlertUtils';
-import { getStoredHelpDeskInquiries, updateHelpDeskInquiryStatus, deleteHelpDeskInquiry } from '../utils/helpDeskUtils';
 
 interface ModerationScreenProps {
   userProfile?: UserProfile | null;
@@ -172,20 +171,12 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [selectedStudentForView, setSelectedStudentForView] = useState<UserProfile | null>(null);
 
-  // Help Desk Tickets State & Search
-  const [helpDeskList, setHelpDeskList] = useState<HelpDeskInquiry[]>(() => getStoredHelpDeskInquiries());
-  const [selectedTicketForView, setSelectedTicketForView] = useState<HelpDeskInquiry | null>(null);
-  const [helpDeskFilter, setHelpDeskFilter] = useState<'PENDING' | 'RESOLVED' | 'ALL'>('PENDING');
-  const [helpDeskSearchQuery, setHelpDeskSearchQuery] = useState('');
-
   // Internal desk navigator: preserves Admin Console context without URL hash changes or browser history resets
   const navigateToDesk = (deskId: string, tab?: string) => {
     if (deskId === 'student-accounts-desk') {
       if (tab) setActiveUserTab(tab as any);
     } else if (deskId === 'verification-requests-desk') {
       if (tab) setVerifFilterTab(tab as any);
-    } else if (deskId === 'helpdesk-desk') {
-      if (tab) setHelpDeskFilter(tab as any);
     }
     const el = document.getElementById(deskId);
     if (el) {
@@ -205,19 +196,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
     };
     window.addEventListener('fuhsi_open_admin_desk', handleOpenDesk);
     return () => window.removeEventListener('fuhsi_open_admin_desk', handleOpenDesk);
-  }, []);
-
-  // Sync Help Desk inquiries
-  useEffect(() => {
-    const handleHelpDeskUpdate = () => {
-      setHelpDeskList(getStoredHelpDeskInquiries());
-    };
-    window.addEventListener('fuhsi_helpdesk_inquiry_submitted', handleHelpDeskUpdate);
-    window.addEventListener('fuhsi_helpdesk_inquiry_updated', handleHelpDeskUpdate);
-    return () => {
-      window.removeEventListener('fuhsi_helpdesk_inquiry_submitted', handleHelpDeskUpdate);
-      window.removeEventListener('fuhsi_helpdesk_inquiry_updated', handleHelpDeskUpdate);
-    };
   }, []);
 
   // Central live Admin Tasks & Pending Activity counter
@@ -641,8 +619,8 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
           )}
         </div>
 
-        {/* 6 Section Breakdown Overview Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+        {/* 5 Section Breakdown Overview Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 text-xs">
           {/* 1. Student Accounts */}
           <button
             type="button"
@@ -766,32 +744,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
               {adminTasks.chatModeration > 0 ? (
                 <span className="px-2 py-0.5 rounded-md font-black text-xs bg-rose-600 text-white shadow-2xs animate-pulse">
                   {adminTasks.chatModeration} cases
-                </span>
-              ) : (
-                <span className="text-slate-400 font-bold text-xs">0</span>
-              )}
-            </div>
-          </button>
-
-          {/* 6. Help Desk */}
-          <button
-            type="button"
-            onClick={() => navigateToDesk('helpdesk-desk', 'PENDING')}
-            className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
-              adminTasks.helpDesk > 0
-                ? 'bg-purple-50/80 border-purple-300 hover:bg-purple-100/90 shadow-2xs'
-                : 'bg-slate-50 border-slate-200/80 hover:bg-slate-100/70'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="font-extrabold text-slate-800 text-xs">Help Desk</span>
-              <LifeBuoy size={14} className={adminTasks.helpDesk > 0 ? 'text-purple-600' : 'text-slate-400'} />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-slate-500 font-medium">Appeals & Inquiries</span>
-              {adminTasks.helpDesk > 0 ? (
-                <span className="px-2 py-0.5 rounded-md font-black text-xs bg-purple-600 text-white shadow-2xs animate-pulse">
-                  {adminTasks.helpDesk} new
                 </span>
               ) : (
                 <span className="text-slate-400 font-bold text-xs">0</span>
@@ -1750,208 +1702,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
         )}
       </div>
 
-      {/* HELP DESK & STUDENT INQUIRIES DESK */}
-      <div id="helpdesk-desk" className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-          <div>
-            <h2 className="font-extrabold text-slate-900 text-sm sm:text-base flex items-center gap-2 text-purple-950">
-              <LifeBuoy className="w-4 h-4 text-purple-600" />
-              <span>Help Desk & Student Inquiries Queue</span>
-              {adminTasks.helpDesk > 0 && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-600 text-white animate-pulse shadow-2xs">
-                  {adminTasks.helpDesk} new
-                </span>
-              )}
-            </h2>
-            <p className="text-xs text-slate-500 font-medium mt-0.5">
-              Review student registration appeals, matriculation conflicts, login issues, and direct support inquiries.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0 self-start sm:self-center">
-            <button
-              onClick={() => setHelpDeskFilter('PENDING')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                helpDeskFilter === 'PENDING'
-                  ? 'bg-purple-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Pending ({helpDeskList.filter((h) => h.status === 'PENDING').length})
-            </button>
-            <button
-              onClick={() => setHelpDeskFilter('RESOLVED')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                helpDeskFilter === 'RESOLVED'
-                  ? 'bg-emerald-700 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Resolved ({helpDeskList.filter((h) => h.status === 'RESOLVED').length})
-            </button>
-            <button
-              onClick={() => setHelpDeskFilter('ALL')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                helpDeskFilter === 'ALL'
-                  ? 'bg-slate-800 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              All ({helpDeskList.length})
-            </button>
-          </div>
-        </div>
-
-        {/* Search Field */}
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-          <input
-            type="text"
-            value={helpDeskSearchQuery}
-            onChange={(e) => setHelpDeskSearchQuery(e.target.value)}
-            placeholder="Search tickets by ticket ID, student name, @username, or matric..."
-            className="w-full pl-10 pr-9 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-900 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all placeholder:text-slate-400"
-          />
-          {helpDeskSearchQuery && (
-            <button
-              onClick={() => setHelpDeskSearchQuery('')}
-              className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 rounded-full"
-              title="Clear search"
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
-
-        {/* Tickets List */}
-        {(() => {
-          const q = helpDeskSearchQuery.trim().toLowerCase();
-          const filteredTickets = helpDeskList.filter((ticket) => {
-            if (helpDeskFilter === 'PENDING' && ticket.status !== 'PENDING') return false;
-            if (helpDeskFilter === 'RESOLVED' && ticket.status !== 'RESOLVED') return false;
-            if (!q) return true;
-            return (
-              (ticket.ticketId || '').toLowerCase().includes(q) ||
-              (ticket.fullName || '').toLowerCase().includes(q) ||
-              (ticket.nickname || '').toLowerCase().includes(q) ||
-              (ticket.matricNumber || '').toLowerCase().includes(q) ||
-              (ticket.email || '').toLowerCase().includes(q) ||
-              (ticket.message || '').toLowerCase().includes(q) ||
-              (ticket.categoryLabel || '').toLowerCase().includes(q)
-            );
-          });
-
-          if (filteredTickets.length === 0) {
-            return (
-              <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
-                {helpDeskSearchQuery
-                  ? `No help desk inquiries matching "${helpDeskSearchQuery}"`
-                  : helpDeskFilter === 'PENDING'
-                  ? 'No pending student inquiries or appeals awaiting review!'
-                  : 'No tickets found in this view.'}
-              </div>
-            );
-          }
-
-          return (
-            <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
-              {filteredTickets.map((ticket) => (
-                <div
-                  key={ticket.id}
-                  className="p-3 sm:px-3.5 hover:bg-slate-50/90 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono font-bold text-purple-900 bg-purple-50 px-2 py-0.5 rounded border border-purple-200 text-[11px]">
-                        {ticket.ticketId}
-                      </span>
-                      <span className="font-extrabold text-slate-900 text-xs">{ticket.fullName}</span>
-                      {ticket.nickname && (
-                        <span className="font-bold text-teal-800 text-[11px]">({ticket.nickname})</span>
-                      )}
-                      <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                        {ticket.categoryLabel}
-                      </span>
-                      {ticket.matricNumber && (
-                        <span className="font-mono text-[10px] text-slate-500 font-semibold">
-                          · {ticket.matricNumber}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-slate-600 line-clamp-1 mt-1 font-medium">
-                      "{ticket.message}"
-                    </p>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      Submitted: {formatMessageTime(ticket.createdAt)}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center flex-wrap">
-                    <span
-                      className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
-                        ticket.status === 'RESOLVED'
-                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
-                          : 'bg-purple-100 text-purple-900 border-purple-300'
-                      }`}
-                    >
-                      {ticket.status === 'RESOLVED' ? 'Resolved' : 'Pending'}
-                    </span>
-
-                    <button
-                      type="button"
-                      onClick={() => setSelectedTicketForView(ticket)}
-                      className="py-1 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
-                      title="View complete inquiry dossier"
-                    >
-                      <Eye size={12} />
-                      <span>View</span>
-                    </button>
-
-                    {ticket.nickname && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleOpenQueryModal(
-                            ticket.nickname!,
-                            ticket.fullName,
-                            ticket.email,
-                            `Help Desk [${ticket.ticketId}] Response`
-                          )
-                        }
-                        className="py-1 px-2.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
-                        title="Send official update reply"
-                      >
-                        <MessageSquare size={12} />
-                        <span>Reply</span>
-                      </button>
-                    )}
-
-                    {ticket.status === 'PENDING' ? (
-                      <button
-                        type="button"
-                        onClick={() => updateHelpDeskInquiryStatus(ticket.id, 'RESOLVED', 'Resolved by Admin')}
-                        className="py-1 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer shadow-xs"
-                      >
-                        <CheckCircle2 size={12} />
-                        <span>Resolve</span>
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => updateHelpDeskInquiryStatus(ticket.id, 'PENDING')}
-                        className="py-1 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[11px] transition-colors cursor-pointer"
-                      >
-                        Re-open
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
-      </div>
-
       {/* MODAL: SUGGEST PRICE ADVISORY */}
       {advisoryItem && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2577,132 +2327,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
         );
       })()}
 
-      {/* MODAL: FULL HELP DESK TICKET DETAILS */}
-      {selectedTicketForView && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-100 space-y-4 my-8">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-800 font-bold flex items-center justify-center">
-                  <LifeBuoy className="w-5 h-5 text-purple-700" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-900 text-base">
-                    Ticket {selectedTicketForView.ticketId}
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium">
-                    {selectedTicketForView.categoryLabel}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedTicketForView(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200/80">
-              <div>
-                <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Student Name</span>
-                <span className="font-bold text-slate-900 text-sm">{selectedTicketForView.fullName}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Username</span>
-                <span className="font-bold text-teal-800">{selectedTicketForView.nickname || 'Not Provided'}</span>
-              </div>
-              {selectedTicketForView.matricNumber && (
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Matric Number</span>
-                  <span className="font-mono font-bold text-slate-900">{selectedTicketForView.matricNumber}</span>
-                </div>
-              )}
-              {selectedTicketForView.department && (
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Department</span>
-                  <span className="font-bold text-slate-900">{selectedTicketForView.department}</span>
-                </div>
-              )}
-              <div>
-                <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Email Address</span>
-                <span className="font-mono text-slate-800 break-all">{selectedTicketForView.email}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Current Status</span>
-                <span className={`inline-block mt-0.5 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border ${
-                  selectedTicketForView.status === 'RESOLVED'
-                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
-                    : 'bg-purple-100 text-purple-900 border-purple-300'
-                }`}>
-                  {selectedTicketForView.status === 'RESOLVED' ? 'Resolved' : 'Pending Review'}
-                </span>
-              </div>
-              <div className="sm:col-span-2">
-                <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Student Statement / Appeal</span>
-                <p className="text-slate-800 font-medium mt-1 bg-white p-3 rounded-xl border border-slate-200 whitespace-pre-wrap">
-                  {selectedTicketForView.message}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
-              {selectedTicketForView.nickname && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nick = selectedTicketForView.nickname!;
-                    const name = selectedTicketForView.fullName;
-                    const mail = selectedTicketForView.email;
-                    const ticketId = selectedTicketForView.ticketId;
-                    setSelectedTicketForView(null);
-                    handleOpenQueryModal(nick, name, mail, `Help Desk [${ticketId}] Official Resolution`);
-                  }}
-                  className="px-3.5 py-2 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <MessageSquare size={13} />
-                  <span>Send Official Update / Query</span>
-                </button>
-              )}
-
-              <div className="flex items-center gap-2 ml-auto">
-                {selectedTicketForView.status === 'PENDING' ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      updateHelpDeskInquiryStatus(selectedTicketForView.id, 'RESOLVED', 'Resolved by Admin');
-                      setSelectedTicketForView((prev) => prev ? { ...prev, status: 'RESOLVED' } : null);
-                    }}
-                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
-                  >
-                    <CheckCircle2 size={13} />
-                    <span>Mark as Resolved</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      updateHelpDeskInquiryStatus(selectedTicketForView.id, 'PENDING');
-                      setSelectedTicketForView((prev) => prev ? { ...prev, status: 'PENDING' } : null);
-                    }}
-                    className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
-                  >
-                    Re-open Ticket
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setSelectedTicketForView(null)}
-                  className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* MODAL: FULL HELP DESK TICKET DETAILS REMOVED */}
     </div>
   );
 };

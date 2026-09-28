@@ -10,6 +10,7 @@ import {
   normalizeNickname,
   formatMessageTime 
 } from '../utils/messagingUtils';
+import { LinkifiedText } from './LinkifiedText';
 import { 
   Send, 
   ArrowLeft,
@@ -235,7 +236,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
           )}
 
-          <p className="whitespace-pre-line break-words">{msg.text}</p>
+          <div className="whitespace-pre-line break-words">
+            <LinkifiedText text={msg.text} />
+          </div>
 
           {/* Trade Item Attached Info */}
           {(msg.itemTitle || msg.meetupPoint) && (
