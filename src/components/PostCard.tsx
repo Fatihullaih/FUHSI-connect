@@ -134,13 +134,22 @@ export const PostCard: React.FC<PostCardProps> = ({
     return false;
   }, [userProfile, currentUserNickname]);
 
+  const [badgeTick, setBadgeTick] = useState(0);
+  useEffect(() => {
+    const handleBadgeUpdate = () => {
+      setBadgeTick((t) => t + 1);
+    };
+    window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+    return () => window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+  }, []);
+
   const authorUser = useMemo(() => {
     return findUserByNickname(post.authorNickname);
-  }, [post.authorNickname]);
+  }, [post.authorNickname, badgeTick]);
 
   const authorBadgeInfo = useMemo(() => {
     return getUserBadgeInfo(post.authorNickname || currentUserNickname, authorUser || (isMyPost ? userProfile : null));
-  }, [post.authorNickname, currentUserNickname, authorUser, isMyPost, userProfile]);
+  }, [post.authorNickname, currentUserNickname, authorUser, isMyPost, userProfile, badgeTick]);
 
   const isVerifiedUser = authorBadgeInfo.isVerified;
   const likesCount = getEffectiveLikesCount(post);

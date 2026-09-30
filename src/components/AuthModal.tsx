@@ -515,11 +515,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         bio: matchedUser.bio,
         avatarKey: matchedUser.avatarKey,
         avatarUrl: matchedUser.avatarUrl,
-        badgeType: matchedUser.badgeType || 'GREEN',
-        badgeTitle: matchedUser.badgeTitle || 'FUHSI Student',
+        badgeType: matchedUser.badgeType || 'NONE',
+        badgeTitle: (matchedUser.badgeTitle || '').trim(),
         reputationScore: matchedUser.reputationScore !== undefined ? matchedUser.reputationScore : 20,
         isVerified: Boolean(matchedUser.isVerified || matchedUser.verificationStatus === 'approved'),
-        verificationStatus: matchedUser.verificationStatus || (matchedUser.isVerified ? 'approved' : 'none'),
+        verificationStatus: matchedUser.verificationStatus || (matchedUser.isVerified ? 'approved' : 'unverified'),
         isApproved: matchedUser.isApproved !== false,
         isAdmin: Boolean(matchedUser.isAdmin),
         isPrivate: matchedUser.isPrivate,
@@ -535,19 +535,28 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (verifStr) {
           const verifs: any[] = JSON.parse(verifStr);
           const cleanNick = userToLogin.nickname?.toLowerCase().replace(/^@/, '');
-          const appVerif = verifs.find(
+          const userVerifs = verifs.filter(
             (v) =>
-              v.status === 'APPROVED' &&
               (v.applicantNickname?.toLowerCase().replace(/^@/, '') === cleanNick ||
-                v.applicantNickname?.toLowerCase() === userToLogin.nickname?.toLowerCase())
-          );
-          if (appVerif) {
+                v.applicantNickname?.toLowerCase() === userToLogin.nickname?.toLowerCase()) &&
+              v.requestType !== 'STUDENT_CONVERSION'
+          ).sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+          const latestReq = userVerifs[0];
+          if (latestReq && latestReq.status === 'APPROVED') {
             userToLogin = {
               ...userToLogin,
               isVerified: true,
               verificationStatus: 'approved' as const,
-              badgeType: appVerif.assignedBadgeType || userToLogin.badgeType || 'GREEN',
-              badgeTitle: appVerif.assignedBadgeTitle || userToLogin.badgeTitle || 'Verified',
+              badgeType: latestReq.assignedBadgeType || userToLogin.badgeType || 'BLUE',
+              badgeTitle: (latestReq.assignedBadgeTitle !== undefined ? latestReq.assignedBadgeTitle : userToLogin.badgeTitle || '').trim(),
+            };
+          } else if (latestReq && latestReq.status === 'REVOKED') {
+            userToLogin = {
+              ...userToLogin,
+              isVerified: false,
+              verificationStatus: 'unverified' as const,
+              badgeType: 'NONE' as const,
+              badgeTitle: '',
             };
           }
         }
@@ -1323,10 +1332,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <a
                     href={
                       matricConflictValue
-                        ? `mailto:fuhsiconnectsupport@gmail.com?subject=${encodeURIComponent(
-                            `Matric Number Conflict Appeal - ${matricConflictValue}`
-                          )}&body=${encodeURIComponent(
-                            `Hello FUHSI Connect Support,\n\nI am appealing a matriculation number conflict on FUHSI Connect.\n\nMatriculation Number: ${matricConflictValue}\nFull Name: ${realName || 'N/A'}\nDepartment: ${department || 'N/A'}\nLevel: ${level || 'N/A'}\nDesired Username: ${nickname || 'N/A'}\nEmail Address: ${studentEmail || 'N/A'}\n\nThe system stated that this matriculation number is already associated with an account. I am the rightful student owner of this matriculation number and request verification and access.\n\nThank you,\n${realName || nickname || 'Student'}`
+                        ? `mailto:fuhsiconnectsupport@gmail.com?subject=Support%20Request&body=${encodeURIComponent(
+                            `Hello FUHSI Connect Support,\n\nI am submitting a support request regarding a matriculation number conflict on FUHSI Connect.\n\nMatriculation Number: ${matricConflictValue}\nFull Name: ${realName || 'N/A'}\nDepartment: ${department || 'N/A'}\nLevel: ${level || 'N/A'}\nDesired Username: ${nickname || 'N/A'}\nEmail Address: ${studentEmail || 'N/A'}\n\nThe system stated that this matriculation number is already associated with an account. I am the rightful student owner of this matriculation number and request verification and access.\n\nThank you,\n${realName || nickname || 'Student'}`
                           )}`
                         : `mailto:fuhsiconnectsupport@gmail.com?subject=Support%20Request&body=Hello%20Support%20Team%2C%0A%0AMy%20Username%20is%3A%20%0A%0AMy%20Issue%20%2F%20Complaint%20details%3A%0A`
                     }

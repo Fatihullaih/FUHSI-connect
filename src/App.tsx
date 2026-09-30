@@ -55,6 +55,7 @@ import {
   cleanupModulaFirestoreDoc,
 } from './lib/firestoreSync';
 import { initTheme, getStoredTheme, setStoredTheme, ThemeMode } from './utils/themeUtils';
+import { getUserBadgeInfo, normalizeBadgeColor } from './utils/verificationUtils';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, BadgeType, PollOption, DirectMessage, FollowRecord } from './types';
 import { getStoredFollows, saveStoredFollows, toggleFollowState, recordFollowNotification } from './utils/followUtils';
 import { toggleUserLike, isItemLikedByUser, getEffectiveLikesCount } from './utils/reactionUtils';
@@ -188,7 +189,15 @@ export const App: React.FC = () => {
           if (raw) {
             const parsed = JSON.parse(raw);
             if (parsed && (parsed.nickname || '').trim().toLowerCase().replace(/^@/, '') === detail.targetNickname) {
-              setUserProfile(parsed);
+              const updatedUser = {
+                ...parsed,
+                isVerified: detail.isVerified,
+                verificationStatus: detail.isVerified ? 'approved' : 'unverified',
+                badgeType: detail.badgeType,
+                badgeTitle: detail.badgeTitle,
+              };
+              localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedUser));
+              setUserProfile(updatedUser);
             }
           }
         } catch (err) {}
@@ -568,6 +577,13 @@ export const App: React.FC = () => {
                   ? (prev.bio !== undefined ? prev.bio : (found.bio || '')) 
                   : (found.bio !== undefined ? found.bio : (prev.bio || ''));
 
+                const foundBadge = found.badgeType || 'NONE';
+                const prevBadge = prev.badgeType || 'NONE';
+                const foundTitle = (found.badgeTitle || '').trim();
+                const prevTitle = (prev.badgeTitle || '').trim();
+                const foundVerif = Boolean(found.isVerified || found.verificationStatus === 'approved');
+                const prevVerif = Boolean(prev.isVerified || prev.verificationStatus === 'approved');
+
                 if (
                   prev.id === found.id &&
                   prev.nickname === (preferLocal ? prev.nickname : (found.nickname || prev.nickname)) &&
@@ -580,12 +596,21 @@ export const App: React.FC = () => {
                   prev.level === (preferLocal ? prev.level : (found.level || prev.level)) &&
                   prev.department === (preferLocal ? prev.department : (found.department || prev.department)) &&
                   prev.reputationScore === (found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore) &&
-                  prev.isVerified === (found.isVerified !== undefined ? found.isVerified : prev.isVerified) &&
+                  prevVerif === foundVerif &&
+                  prevBadge === foundBadge &&
+                  prevTitle === foundTitle &&
                   prev.isApproved === (found.isApproved !== undefined ? found.isApproved : prev.isApproved) &&
                   prev.savedPassword === nextPass
                 ) {
                   return prev;
                 }
+
+                // Authoritative badge credentials from Admin / Firestore
+                const authoritativeBadgeType = found.badgeType || 'NONE';
+                const authoritativeBadgeTitle = found.badgeTitle || '';
+                const authoritativeIsVerified = Boolean(found.isVerified || found.verificationStatus === 'approved');
+                const authoritativeVerifStatus = found.verificationStatus || (authoritativeIsVerified ? 'approved' : 'unverified');
+
                 const updated: UserProfile = preferLocal
                   ? {
                       ...found,
@@ -604,7 +629,10 @@ export const App: React.FC = () => {
                       password: nextPass,
                       isApproved: found.isApproved !== undefined ? found.isApproved : prev.isApproved,
                       isDeclined: found.isDeclined !== undefined ? found.isDeclined : prev.isDeclined,
-                      isVerified: found.isVerified !== undefined ? found.isVerified : prev.isVerified,
+                      isVerified: authoritativeIsVerified,
+                      verificationStatus: authoritativeVerifStatus,
+                      badgeType: authoritativeBadgeType,
+                      badgeTitle: authoritativeBadgeTitle,
                       reputationScore: found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore,
                       updatedAt: prev.updatedAt || found.updatedAt || new Date().toISOString(),
                     }
@@ -625,12 +653,32 @@ export const App: React.FC = () => {
                       password: nextPass,
                       isApproved: found.isApproved !== undefined ? found.isApproved : prev.isApproved,
                       isDeclined: found.isDeclined !== undefined ? found.isDeclined : prev.isDeclined,
-                      isVerified: found.isVerified !== undefined ? found.isVerified : prev.isVerified,
+                      isVerified: authoritativeIsVerified,
+                      verificationStatus: authoritativeVerifStatus,
+                      badgeType: authoritativeBadgeType,
+                      badgeTitle: authoritativeBadgeTitle,
                       reputationScore: found.reputationScore !== undefined ? found.reputationScore : prev.reputationScore,
                       updatedAt: found.updatedAt || prev.updatedAt || new Date().toISOString(),
                     };
                 const finalUpdated = isModulaAccount(updated) ? sanitizeModulaProfile(updated) : updated;
                 localStorage.setItem('fuhsi_active_user', JSON.stringify(finalUpdated));
+
+                if (prev.badgeType !== authoritativeBadgeType || prev.badgeTitle !== authoritativeBadgeTitle || prev.isVerified !== authoritativeIsVerified) {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(
+                      new CustomEvent('fuhsi_badge_updated', {
+                        detail: {
+                          targetNickname: (finalUpdated.nickname || '').toLowerCase().replace(/^@/, ''),
+                          badgeType: authoritativeBadgeType,
+                          badgeTitle: authoritativeBadgeTitle,
+                          isVerified: authoritativeIsVerified,
+                          user: finalUpdated,
+                        },
+                      })
+                    );
+                  }
+                }
+
                 return finalUpdated;
               });
             }
@@ -700,6 +748,116 @@ export const App: React.FC = () => {
       const validVerifs = (fsVerifs || []).filter((v) => !isDemoVerificationRequest(v));
       localStorage.setItem('fuhsi_verifications_db', JSON.stringify(validVerifs));
       setVerificationRequests(validVerifs);
+
+      // Reconcile active user badge credentials with approved verification dossier
+      const activeStr = localStorage.getItem('fuhsi_active_user');
+      if (activeStr) {
+        try {
+          const activeUser = JSON.parse(activeStr);
+          const cleanActiveNick = (activeUser.nickname || '').toLowerCase().replace(/^@/, '');
+          const userVerifs = [...validVerifs]
+            .filter(
+              (v) =>
+                (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanActiveNick &&
+                v.requestType !== 'STUDENT_CONVERSION'
+            )
+            .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+          const matchingReq = userVerifs[0];
+
+          if (matchingReq && matchingReq.status === 'APPROVED') {
+            const assignedColor = normalizeBadgeColor(matchingReq.assignedBadgeType || 'BLUE');
+            const cleanAssignedTitle = (matchingReq.assignedBadgeTitle || '').trim();
+
+            setUserProfile((prev) => {
+              if (!prev) return prev;
+              if (
+                prev.badgeType === assignedColor &&
+                (prev.badgeTitle || '').trim() === cleanAssignedTitle &&
+                prev.isVerified === true
+              ) {
+                return prev;
+              }
+              const updatedProfile: UserProfile = {
+                ...prev,
+                isVerified: true,
+                verificationStatus: 'approved' as const,
+                badgeType: assignedColor,
+                badgeTitle: cleanAssignedTitle,
+                updatedAt: new Date().toISOString(),
+              };
+              try {
+                localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedProfile));
+                const uStr = localStorage.getItem('fuhsi_users_db');
+                if (uStr) {
+                  const uList: UserProfile[] = JSON.parse(uStr);
+                  const nextUsers = uList.map((u) => {
+                    if ((u.nickname || '').toLowerCase().replace(/^@/, '') === cleanActiveNick || u.id === updatedProfile.id) {
+                      return { ...u, isVerified: true, verificationStatus: 'approved' as const, badgeType: assignedColor, badgeTitle: cleanAssignedTitle, updatedAt: updatedProfile.updatedAt };
+                    }
+                    return u;
+                  });
+                  localStorage.setItem('fuhsi_users_db', JSON.stringify(nextUsers));
+                }
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(
+                    new CustomEvent('fuhsi_badge_updated', {
+                      detail: {
+                        targetNickname: cleanActiveNick,
+                        badgeType: assignedColor,
+                        badgeTitle: cleanAssignedTitle,
+                        isVerified: true,
+                        user: updatedProfile,
+                      },
+                    })
+                  );
+                }
+              } catch (e) {}
+              return updatedProfile;
+            });
+          } else if (matchingReq && matchingReq.status === 'REVOKED') {
+            setUserProfile((prev) => {
+              if (!prev || (!prev.isVerified && prev.badgeType === 'NONE')) return prev;
+              const updatedProfile: UserProfile = {
+                ...prev,
+                isVerified: false,
+                verificationStatus: 'unverified' as const,
+                badgeType: 'NONE' as const,
+                badgeTitle: '',
+                updatedAt: new Date().toISOString(),
+              };
+              try {
+                localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedProfile));
+                const uStr = localStorage.getItem('fuhsi_users_db');
+                if (uStr) {
+                  const uList: UserProfile[] = JSON.parse(uStr);
+                  const nextUsers = uList.map((u) => {
+                    if ((u.nickname || '').toLowerCase().replace(/^@/, '') === cleanActiveNick || u.id === updatedProfile.id) {
+                      return { ...u, isVerified: false, verificationStatus: 'unverified' as const, badgeType: 'NONE' as const, badgeTitle: '', updatedAt: updatedProfile.updatedAt };
+                    }
+                    return u;
+                  });
+                  localStorage.setItem('fuhsi_users_db', JSON.stringify(nextUsers));
+                }
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(
+                    new CustomEvent('fuhsi_badge_updated', {
+                      detail: {
+                        targetNickname: cleanActiveNick,
+                        badgeType: 'NONE',
+                        badgeTitle: '',
+                        isVerified: false,
+                        user: updatedProfile,
+                      },
+                    })
+                  );
+                }
+              } catch (e) {}
+              return updatedProfile;
+            });
+          }
+        } catch (e) {}
+      }
+      setNotifTrigger((prev) => prev + 1);
     });
 
     // 5. Subscribe Marketplace Approved Items in real-time from Firestore
@@ -1039,22 +1197,52 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (userProfile && userProfile.nickname) {
       const cleanNick = userProfile.nickname.toLowerCase().replace(/^@/, '');
-      const appVerif = verificationRequests.find(
-        (v) =>
-          v.status === 'APPROVED' &&
-          v.requestType !== 'STUDENT_CONVERSION' &&
-          v.category !== 'Student Conversion Subscription' &&
-          (v.applicantNickname?.toLowerCase().replace(/^@/, '') === cleanNick ||
-            v.applicantNickname?.toLowerCase() === userProfile.nickname.toLowerCase())
-      );
-      if (appVerif && (!userProfile.isVerified || userProfile.verificationStatus !== 'approved')) {
-        setUserProfile((prev) => ({
-          ...prev,
-          isVerified: true,
-          verificationStatus: 'approved' as const,
-          badgeType: appVerif.assignedBadgeType || prev.badgeType || 'BLUE',
-          badgeTitle: appVerif.assignedBadgeTitle !== undefined ? (appVerif.assignedBadgeTitle || '').trim() : (prev.badgeTitle || '').trim(),
-        }));
+      const userReqs = verificationRequests
+        .filter(
+          (v) =>
+            v.requestType !== 'STUDENT_CONVERSION' &&
+            v.category !== 'Student Conversion Subscription' &&
+            (v.applicantNickname?.toLowerCase().replace(/^@/, '') === cleanNick ||
+              v.applicantNickname?.toLowerCase() === userProfile.nickname.toLowerCase())
+        )
+        .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+
+      const latestReq = userReqs[0];
+      if (latestReq && latestReq.status === 'APPROVED') {
+        const assignedColor = normalizeBadgeColor(latestReq.assignedBadgeType || 'BLUE');
+        const assignedTitle = (latestReq.assignedBadgeTitle !== undefined ? latestReq.assignedBadgeTitle : userProfile.badgeTitle || '').trim();
+        if (
+          !userProfile.isVerified ||
+          userProfile.verificationStatus !== 'approved' ||
+          userProfile.badgeType !== assignedColor ||
+          (userProfile.badgeTitle || '').trim() !== assignedTitle
+        ) {
+          const updated = {
+            ...userProfile,
+            isVerified: true,
+            verificationStatus: 'approved' as const,
+            badgeType: assignedColor,
+            badgeTitle: assignedTitle,
+          };
+          setUserProfile(updated);
+          try {
+            localStorage.setItem('fuhsi_active_user', JSON.stringify(updated));
+          } catch (e) {}
+        }
+      } else if (latestReq && latestReq.status === 'REVOKED') {
+        if (userProfile.isVerified || (userProfile.badgeType && userProfile.badgeType !== 'NONE')) {
+          const updated = {
+            ...userProfile,
+            isVerified: false,
+            verificationStatus: 'unverified' as const,
+            badgeType: 'NONE' as const,
+            badgeTitle: '',
+          };
+          setUserProfile(updated);
+          try {
+            localStorage.setItem('fuhsi_active_user', JSON.stringify(updated));
+          } catch (e) {}
+        }
       }
     }
   }, [verificationRequests, userProfile?.nickname]);
@@ -2553,19 +2741,23 @@ export const App: React.FC = () => {
       targetApplicantNick = existingReq.applicantNickname;
     }
     const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
+    const nowIso = new Date().toISOString();
 
     // 1. Update verification requests list
     setVerificationRequests((prev) => {
+      let matched = false;
       const updatedList = prev.map((v) => {
         const isMatch =
           v.id === reqIdOrNick ||
           (v.applicantNickname || '').toLowerCase().replace(/^@/, '') === cleanTarget;
         if (isMatch) {
+          matched = true;
           const approvedReq: VerificationRequest = {
             ...v,
             status: 'APPROVED' as const,
             assignedBadgeType: badgeType,
             assignedBadgeTitle: assignedTitle,
+            timestamp: nowIso,
           };
           saveVerificationRequestToFirestore(approvedReq).catch((err) =>
             console.error('Error saving approved verification to Firestore:', err)
@@ -2574,6 +2766,24 @@ export const App: React.FC = () => {
         }
         return v;
       });
+
+      if (!matched) {
+        const newApprovedReq: VerificationRequest = {
+          id: `verif_admin_${Date.now()}_${cleanTarget}`,
+          applicantNickname: targetApplicantNick.startsWith('@') ? targetApplicantNick : `@${targetApplicantNick}`,
+          applicantFullName: cleanTarget,
+          category: 'Admin Reassigned Verification & Honor Badge',
+          statement: 'Directly assigned and verified identity credentials by Administrator.',
+          timestamp: nowIso,
+          status: 'APPROVED',
+          assignedBadgeType: badgeType,
+          assignedBadgeTitle: assignedTitle,
+        };
+        updatedList.unshift(newApprovedReq);
+        saveVerificationRequestToFirestore(newApprovedReq).catch((err) =>
+          console.error('Error saving new approved verification to Firestore:', err)
+        );
+      }
 
       try {
         localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
@@ -2595,6 +2805,7 @@ export const App: React.FC = () => {
         verificationStatus: 'approved' as const,
         badgeType: badgeType,
         badgeTitle: assignedTitle,
+        updatedAt: nowIso,
       };
       setUserProfile(updated);
       saveUserToFirestore(updated).catch((err) => console.error(err));
@@ -2618,6 +2829,7 @@ export const App: React.FC = () => {
             verificationStatus: 'approved' as const,
             badgeType: badgeType,
             badgeTitle: assignedTitle,
+            updatedAt: nowIso,
           };
           saveUserToFirestore(updatedUserRecord).catch((err) => console.error(err));
           return updatedUserRecord;
@@ -2632,6 +2844,7 @@ export const App: React.FC = () => {
           verificationStatus: 'approved' as const,
           badgeType: badgeType,
           badgeTitle: assignedTitle,
+          updatedAt: nowIso,
         };
         usersList.push(newUserRecord);
         saveUserToFirestore(newUserRecord).catch((err) => console.error(err));
@@ -2689,6 +2902,20 @@ export const App: React.FC = () => {
       return updatedComments;
     });
 
+    // 6. Broadcast badge update event
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('fuhsi_badge_updated', {
+          detail: {
+            targetNickname: cleanTarget,
+            badgeType: badgeType,
+            badgeTitle: assignedTitle,
+            isVerified: true,
+          },
+        })
+      );
+    }
+
     // 6. Send in-app notification
     try {
       const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
@@ -2722,6 +2949,7 @@ export const App: React.FC = () => {
       targetApplicantNick = existingReq.applicantNickname;
     }
     const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
+    const nowIso = new Date().toISOString();
 
     // 1. Update verification requests list
     setVerificationRequests((prev) => {
@@ -2736,6 +2964,7 @@ export const App: React.FC = () => {
             status: 'REVOKED' as const,
             assignedBadgeType: 'NONE',
             assignedBadgeTitle: '',
+            timestamp: nowIso,
           };
           saveVerificationRequestToFirestore(revokedReq).catch((err) =>
             console.error('Error revoking verification in Firestore:', err)
@@ -2764,6 +2993,7 @@ export const App: React.FC = () => {
         verificationStatus: 'rejected' as const,
         badgeType: 'NONE' as const,
         badgeTitle: '',
+        updatedAt: nowIso,
       };
       setUserProfile(updatedUser);
       saveUserToFirestore(updatedUser).catch((err) => console.error(err));
@@ -2845,7 +3075,21 @@ export const App: React.FC = () => {
       return updatedComments;
     });
 
-    // 6. Send official platform update notification
+    // 6. Broadcast badge update event
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('fuhsi_badge_updated', {
+          detail: {
+            targetNickname: cleanTarget,
+            badgeType: 'NONE',
+            badgeTitle: '',
+            isVerified: false,
+          },
+        })
+      );
+    }
+
+    // 7. Send official platform update notification
     try {
       const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
       const revNotif = {
@@ -3330,12 +3574,17 @@ export const App: React.FC = () => {
               <div className="hidden sm:block leading-tight">
                 <h2 className="font-extrabold text-xs text-white group-hover:text-teal-100 flex items-center gap-1">
                   <span>{userProfile?.nickname || '@Student'}</span>
-                  <VerificationBadge
-                    isVerified={Boolean(userProfile?.isVerified || userProfile?.verificationStatus === 'approved')}
-                    badgeType={userProfile?.badgeType}
-                    title={userProfile?.badgeTitle}
-                    size={13}
-                  />
+                  {(() => {
+                    const hBadge = getUserBadgeInfo(userProfile?.nickname, userProfile);
+                    return (
+                      <VerificationBadge
+                        isVerified={hBadge.isVerified}
+                        badgeType={hBadge.badgeType}
+                        title={hBadge.badgeTitle}
+                        size={13}
+                      />
+                    );
+                  })()}
                 </h2>
                 <p className="text-[10px] text-teal-200/90 font-medium">
                   {isModulaAccount(userProfile)
@@ -3612,11 +3861,6 @@ export const App: React.FC = () => {
                   handleRevokeVerification(id);
                 } else if (status === 'DECLINED' || status === 'REJECTED') {
                   handleDeclineVerification(id);
-                } else if (status === 'APPROVED') {
-                  const req = verificationRequests.find((r) => r.id === id);
-                  if (req) {
-                    handleApproveVerification(id, req.assignedBadgeType || 'GREEN', req.assignedBadgeTitle || '');
-                  }
                 }
               }}
               onDeletePost={handleDeletePost}

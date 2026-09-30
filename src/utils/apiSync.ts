@@ -1,5 +1,6 @@
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, ChatConversation, ChatReport, FollowRecord } from '../types';
 import { normalizeMatricNumber } from './matricValidation';
+import { normalizeBadgeColor } from './verificationUtils';
 import {
   isDemoUser,
   isDemoPost,
@@ -204,34 +205,67 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         isDeclined,
         isVerified: (() => {
           if (isMod) return true;
-          if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return false;
-          if (primary.isVerified === true && primary.verificationStatus === 'approved') return true;
-          if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return false;
-          if (secondary.isVerified === true && secondary.verificationStatus === 'approved') return true;
-          return false;
+          // Check explicit revocation first
+          if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') {
+            if (secondary.isVerified === true && secondary.badgeType && (secondary.badgeType as any) !== 'NONE' && incomingTime < existingTime) {
+              // Primary is existing and unverified
+              return false;
+            }
+            if (useIncoming && (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE')) {
+              return false;
+            }
+          }
+          if (primary.isVerified === true && primary.badgeType && (primary.badgeType as any) !== 'NONE') return true;
+          if (secondary.isVerified === true && secondary.badgeType && (secondary.badgeType as any) !== 'NONE') return true;
+          return Boolean(primary.isVerified || secondary.isVerified);
         })(),
         verificationStatus: (() => {
           if (isMod) return 'approved';
           if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return 'rejected';
-          if (primary.verificationStatus === 'approved') return 'approved';
+          if (primary.verificationStatus === 'approved' || primary.isVerified) return 'approved';
           if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return 'rejected';
-          return secondary.verificationStatus || primary.verificationStatus || 'unverified';
+          if (secondary.verificationStatus === 'approved' || secondary.isVerified) return 'approved';
+          return primary.verificationStatus || secondary.verificationStatus || 'unverified';
         })(),
         isAdmin: Boolean(primary.isAdmin || secondary.isAdmin),
         reputationScore: Math.max(primary.reputationScore || 0, secondary.reputationScore || 0),
         badgeType: (() => {
-          if (isMod) return 'BLUE';
+          if (isMod) {
+            return (primary.badgeType && (primary.badgeType as any) !== 'NONE')
+              ? normalizeBadgeColor(primary.badgeType)
+              : (secondary.badgeType && (secondary.badgeType as any) !== 'NONE')
+              ? normalizeBadgeColor(secondary.badgeType)
+              : 'BLUE';
+          }
+          // If primary has explicit revocation
           if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return 'NONE';
-          if (primary.isVerified === true && primary.badgeType && (primary.badgeType as any) !== 'NONE') return primary.badgeType;
+          if (primary.isVerified === true && primary.badgeType && (primary.badgeType as any) !== 'NONE') {
+            return normalizeBadgeColor(primary.badgeType);
+          }
           if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return 'NONE';
-          if (secondary.isVerified === true && secondary.badgeType && (secondary.badgeType as any) !== 'NONE') return secondary.badgeType;
+          if (secondary.isVerified === true && secondary.badgeType && (secondary.badgeType as any) !== 'NONE') {
+            return normalizeBadgeColor(secondary.badgeType);
+          }
           return 'NONE';
         })(),
         badgeTitle: (() => {
-          if (isMod) return '';
+          if (isMod) {
+            return (primary.badgeTitle !== undefined && primary.badgeTitle.trim())
+              ? primary.badgeTitle.trim()
+              : (secondary.badgeTitle || '').trim();
+          }
+          // If revoked, clear title
           if (primary.isVerified === false || primary.verificationStatus === 'rejected' || (primary.badgeType as any) === 'NONE') return '';
-          if (secondary.isVerified === false || secondary.verificationStatus === 'rejected' || (secondary.badgeType as any) === 'NONE') return '';
-          return badgeTitle;
+          const primaryTitle = (primary.badgeTitle || '').trim();
+          const secondaryTitle = (secondary.badgeTitle || '').trim();
+          const cleanP = primaryTitle.toLowerCase();
+          const isPBad = cleanP.includes('decline') || cleanP.includes('pending') || cleanP.includes('reject');
+          const cleanS = secondaryTitle.toLowerCase();
+          const isSBad = cleanS.includes('decline') || cleanS.includes('pending') || cleanS.includes('reject');
+
+          if (primaryTitle && !isPBad) return primaryTitle;
+          if (secondaryTitle && !isSBad && secondary.isVerified !== false && (secondary.badgeType as any) !== 'NONE') return secondaryTitle;
+          return '';
         })(),
         savedPassword: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,
         password: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,

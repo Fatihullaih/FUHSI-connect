@@ -361,13 +361,18 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     const conv = conversations.find((c) => c.id === activeConvId);
     if (conv) {
       const pureNick = extractPureStudentHandle(conv.otherUserNickname, myNickname);
+      const cleanTarget = normalizeNickname(pureNick);
+      const userMatch = allUsers.find(
+        (u) => normalizeNickname(u.nickname) === cleanTarget || u.id === cleanTarget || u.studentEmail?.toLowerCase() === cleanTarget
+      );
+      const bInfo = getUserBadgeInfo(pureNick, userMatch);
       setActiveRecipient({
         nickname: pureNick,
-        avatarKey: conv.otherUserAvatarKey || '1',
-        avatarUrl: conv.otherUserAvatarUrl,
-        badgeType: conv.otherUserBadgeType,
-        badgeTitle: conv.otherUserBadgeTitle,
-        isVerified: conv.otherUserIsVerified,
+        avatarKey: conv.otherUserAvatarKey || userMatch?.avatarKey || '1',
+        avatarUrl: conv.otherUserAvatarUrl || userMatch?.avatarUrl,
+        badgeType: bInfo.badgeType,
+        badgeTitle: bInfo.badgeTitle,
+        isVerified: bInfo.isVerified,
       });
     } else {
       // Resolve for new conversations with no existing message records
@@ -382,14 +387,14 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
         if (prev && normalizeNickname(prev.nickname) === cleanTarget && prev.avatarKey) {
           return prev;
         }
-        const isGuest = isGuestAccount(userMatch);
+        const bInfo = getUserBadgeInfo(pureNick, userMatch);
         return {
           nickname: pureNick,
           avatarKey: initialRecipient?.avatarKey || userMatch?.avatarKey || '1',
           avatarUrl: initialRecipient?.avatarUrl || userMatch?.avatarUrl,
-          badgeType: userMatch?.badgeType || 'GREEN',
-          badgeTitle: isGuest ? 'Guest' : (userMatch?.badgeTitle || 'FUHSI Student'),
-          isVerified: Boolean(userMatch?.isVerified || userMatch?.verificationStatus === 'approved'),
+          badgeType: bInfo.badgeType,
+          badgeTitle: bInfo.badgeTitle,
+          isVerified: bInfo.isVerified,
         };
       });
     }

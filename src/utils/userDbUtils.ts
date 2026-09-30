@@ -1,9 +1,9 @@
 import { UserProfile, BadgeType, VerificationRequest } from '../types';
 import { INITIAL_USER_PROFILE } from '../data/initialData';
 import { pushServerDbSync, mergeUsers } from './apiSync';
-import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
+import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore, savePostToFirestore, saveCommentToFirestore } from '../lib/firestoreSync';
 import { isDemoUser } from './postGenerator';
-import { getUserBadgeInfo } from './verificationUtils';
+import { getUserBadgeInfo, normalizeBadgeColor } from './verificationUtils';
 
 export { getUserBadgeInfo };
 
@@ -660,33 +660,63 @@ export function updateUserBadgeAndVerification(
 
   const cleanTarget = targetNicknameOrId.trim().toLowerCase().replace(/^@/, '');
   const cleanTitle = (badgeTitle || '').trim();
-  const effectiveBadgeType: BadgeType = isVerified ? (badgeType || 'BLUE') : 'NONE';
+  const effectiveBadgeType: BadgeType = isVerified ? normalizeBadgeColor(badgeType || 'BLUE') : 'NONE';
+  const nowIso = new Date().toISOString();
 
   // 1. Update user in fuhsi_users_db
   const users = getStoredUsers();
   let updatedUser: UserProfile | undefined = undefined;
 
-  const updatedUsers = users.map((u) => {
+  const targetIdx = users.findIndex((u) => {
     const uNick = (u.nickname || '').trim().toLowerCase().replace(/^@/, '');
     const uId = (u.id || '').trim().toLowerCase();
     const uEmail = (u.studentEmail || '').trim().toLowerCase();
-
-    if (uNick === cleanTarget || uId === cleanTarget || uEmail === cleanTarget) {
-      updatedUser = {
-        ...u,
-        isVerified,
-        verificationStatus: isVerified ? 'approved' : 'unverified',
-        badgeType: effectiveBadgeType,
-        badgeTitle: isVerified ? cleanTitle : '',
-      };
-      saveUserToFirestore(updatedUser).catch((err) => console.error('Error saving updated badge to Firestore:', err));
-      return updatedUser;
-    }
-    return u;
+    return uNick === cleanTarget || uId === cleanTarget || uEmail === cleanTarget;
   });
 
-  if (updatedUser) {
-    saveStoredUsers(updatedUsers);
+  if (targetIdx !== -1) {
+    const u = users[targetIdx];
+    updatedUser = {
+      ...u,
+      isVerified,
+      verificationStatus: isVerified ? 'approved' : 'unverified',
+      badgeType: effectiveBadgeType,
+      badgeTitle: isVerified ? cleanTitle : '',
+      updatedAt: nowIso,
+    };
+    users[targetIdx] = updatedUser;
+    saveUserToFirestore(updatedUser).catch((err) => console.error('Error saving updated badge to Firestore:', err));
+    saveStoredUsers(users);
+  } else {
+    // If not found in users list, check active user or construct record
+    let baseUser: any = null;
+    try {
+      const activeStr = localStorage.getItem('fuhsi_active_user');
+      if (activeStr) {
+        const active = JSON.parse(activeStr);
+        if ((active.nickname || '').trim().toLowerCase().replace(/^@/, '') === cleanTarget) {
+          baseUser = active;
+        }
+      }
+    } catch {}
+
+    const createdUser: UserProfile = {
+      ...(baseUser || {}),
+      id: baseUser?.id || `usr_${cleanTarget}`,
+      nickname: baseUser?.nickname || (targetNicknameOrId.startsWith('@') ? targetNicknameOrId : `@${cleanTarget}`),
+      department: baseUser?.department || 'FUHSI',
+      level: baseUser?.level || '100L',
+      bio: baseUser?.bio || '',
+      isVerified,
+      verificationStatus: isVerified ? 'approved' : 'unverified',
+      badgeType: effectiveBadgeType,
+      badgeTitle: isVerified ? cleanTitle : '',
+      updatedAt: nowIso,
+    };
+    updatedUser = createdUser;
+    users.push(createdUser);
+    saveUserToFirestore(createdUser).catch((err) => console.error('Error saving updated badge to Firestore:', err));
+    saveStoredUsers(users);
   }
 
   // 2. Update active user profile in localStorage if matching
@@ -703,6 +733,7 @@ export function updateUserBadgeAndVerification(
           verificationStatus: isVerified ? 'approved' : 'unverified',
           badgeType: effectiveBadgeType,
           badgeTitle: isVerified ? cleanTitle : '',
+          updatedAt: nowIso,
         };
         localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedActive));
       }
@@ -727,6 +758,7 @@ export function updateUserBadgeAndVerification(
           status: isVerified ? 'APPROVED' : 'REVOKED',
           assignedBadgeType: effectiveBadgeType,
           assignedBadgeTitle: isVerified ? cleanTitle : '',
+          timestamp: nowIso,
         };
         saveVerificationRequestToFirestore(updatedReq).catch((err) => console.error(err));
         return updatedReq;
@@ -736,20 +768,21 @@ export function updateUserBadgeAndVerification(
 
     if (!matchedVerif && isVerified && updatedUser) {
       // Create an approved verification dossier record
+      const targetUser: UserProfile = updatedUser;
       const newReq: VerificationRequest = {
         id: `verif_admin_${Date.now()}_${cleanTarget}`,
-        applicantNickname: updatedUser.nickname || `@${cleanTarget}`,
-        realName: updatedUser.realNameHidden || updatedUser.realName || cleanTarget,
-        studentEmail: updatedUser.studentEmail || `${cleanTarget}@fuhsi.edu.ng`,
-        accountType: isGuestAccount(updatedUser) ? 'Guest' : 'Student',
+        applicantNickname: targetUser.nickname || `@${cleanTarget}`,
+        applicantFullName: targetUser.realNameHidden || targetUser.realName || cleanTarget,
+        realName: targetUser.realNameHidden || targetUser.realName || cleanTarget,
+        applicantEmail: targetUser.studentEmail || `${cleanTarget}@fuhsi.edu.ng`,
+        accountType: isGuestAccount(targetUser) ? 'Guest' : 'Student',
         category: 'Official Admin Verification & Honor Badge',
-        department: updatedUser.department || 'FUHSI',
-        level: updatedUser.level || '300L',
-        matricNumber: updatedUser.matricNumber || '',
+        department: targetUser.department || 'FUHSI',
+        level: targetUser.level || '300L',
+        matricNumber: targetUser.matricNumber || '',
         positionTitle: cleanTitle,
-        evidenceText: 'Admin directly assigned and verified identity credentials.',
-        evidenceImages: [],
-        timestamp: new Date().toISOString(),
+        statement: 'Admin directly assigned and verified identity credentials.',
+        timestamp: nowIso,
         status: 'APPROVED',
         assignedBadgeType: effectiveBadgeType,
         assignedBadgeTitle: cleanTitle,
@@ -759,56 +792,93 @@ export function updateUserBadgeAndVerification(
     }
 
     localStorage.setItem('fuhsi_verifications_db', JSON.stringify(vList));
-    pushServerDbSync({ verificationRequests: vList });
+    pushServerDbSync({ users, verificationRequests: vList });
   } catch (e) {
     console.error('Error syncing verifications db with new badge:', e);
   }
 
-  // 4. Update posts author badges in fuhsi_posts_db
+  // 4. Update posts author badges in fuhsi_posts_db and Firestore
+  let updatedPList: any[] = [];
   try {
     const pStr = localStorage.getItem('fuhsi_posts_db');
     if (pStr) {
       const pList: any[] = JSON.parse(pStr);
-      const updatedPList = pList.map((p) => {
+      let postsChanged = false;
+      updatedPList = pList.map((p) => {
         const pNick = (p.authorNickname || '').trim().toLowerCase().replace(/^@/, '');
         if (pNick === cleanTarget) {
-          return {
+          postsChanged = true;
+          const updatedPost = {
             ...p,
             isVerified,
             authorIsVerified: isVerified,
             authorBadgeType: effectiveBadgeType,
             authorBadgeTitle: isVerified ? cleanTitle : '',
           };
+          savePostToFirestore(updatedPost).catch(() => {});
+          return updatedPost;
         }
         return p;
       });
-      localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPList));
+      if (postsChanged) {
+        localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPList));
+      }
     }
   } catch (e) {}
 
-  // 5. Update comments author badges in fuhsi_comments_db
+  // 5. Update comments author badges in fuhsi_comments_db and Firestore
+  let updatedCList: any[] = [];
   try {
     const cStr = localStorage.getItem('fuhsi_comments_db');
     if (cStr) {
       const cList: any[] = JSON.parse(cStr);
-      const updatedCList = cList.map((c) => {
+      let commentsChanged = false;
+      updatedCList = cList.map((c) => {
         const cNick = (c.authorNickname || '').trim().toLowerCase().replace(/^@/, '');
         if (cNick === cleanTarget) {
-          return {
+          commentsChanged = true;
+          const updatedComment = {
             ...c,
             isVerified,
             authorIsVerified: isVerified,
             authorBadgeType: effectiveBadgeType,
             authorBadgeTitle: isVerified ? cleanTitle : '',
           };
+          saveCommentToFirestore(updatedComment).catch(() => {});
+          return updatedComment;
         }
         return c;
       });
-      localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedCList));
+      if (commentsChanged) {
+        localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedCList));
+      }
     }
   } catch (e) {}
 
-  // 6. Dispatch custom event for real-time reactivity across active views
+  // 6. Deliver instant in-app notification to the target user
+  try {
+    const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+    const actionTitle = isVerified
+      ? (cleanTitle ? `🎉 Badge Assigned: ${cleanTitle}` : `🎉 Verification Badge Updated (${effectiveBadgeType})`)
+      : 'Account Verification Revoked';
+    const actionMsg = isVerified
+      ? `Congratulations! Platform Admin has verified your credentials and assigned you the ${effectiveBadgeType} badge${cleanTitle ? ` with the official title "${cleanTitle}"` : ''}. Your badge is now visible throughout FUHSI Connect!`
+      : `Your verification badge has been revoked by administration.`;
+    const badgeNotif = {
+      id: `badge_upd_${Date.now()}`,
+      type: 'VERIFICATION',
+      title: actionTitle,
+      message: actionMsg,
+      timestamp: 'Just now',
+      isRead: false,
+    };
+    let existingNotifs: any[] = [];
+    const storedNotifs = localStorage.getItem(notifKey);
+    if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
+    localStorage.setItem(notifKey, JSON.stringify([badgeNotif, ...existingNotifs]));
+  } catch (e) {}
+
+  // 7. Dispatch custom event for real-time reactivity across active views
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent('fuhsi_badge_updated', {

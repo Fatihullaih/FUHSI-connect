@@ -1,9 +1,10 @@
 import React from 'react';
 import { Check } from 'lucide-react';
+import { normalizeBadgeColor } from '../utils/verificationUtils';
 
 export interface VerificationBadgeProps {
   isVerified?: boolean;
-  badgeType?: 'BLUE' | 'GREEN' | 'GOLD' | 'ORANGE' | 'PURPLE' | 'VERIFIED' | 'NONE' | string;
+  badgeType?: 'BLUE' | 'GREEN' | 'ORANGE' | 'PURPLE' | 'NONE' | string;
   title?: string;
   showTitle?: boolean;
   className?: string;
@@ -18,40 +19,36 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
   className = '',
   size = 14,
 }) => {
-  if (!isVerified) return null;
+  const normalizedRaw = (badgeType || 'BLUE').toUpperCase();
+  const effectiveIsVerified = isVerified !== undefined ? isVerified : (normalizedRaw !== 'NONE');
+  if (!effectiveIsVerified || normalizedRaw === 'NONE') return null;
 
-  const normalizedType = (badgeType || 'BLUE').toUpperCase();
+  const normalizedColor = normalizeBadgeColor(normalizedRaw);
 
-  // Distinct, dedicated badge styles for Blue, Green, Orange, Purple, Gold
+  // Dedicated badge color styles for BLUE, GREEN, ORANGE, PURPLE
   let badgeStyle = {
     badgeBg: 'bg-sky-500',
     pillBg: 'bg-sky-50 dark:bg-sky-950/40 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800/80',
-    label: 'Verified (Blue)',
+    label: 'Blue',
   };
 
-  if (normalizedType === 'GREEN') {
+  if (normalizedColor === 'GREEN') {
     badgeStyle = {
       badgeBg: 'bg-emerald-500',
       pillBg: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/80',
-      label: 'Campus Leader (Green)',
+      label: 'Green',
     };
-  } else if (normalizedType === 'ORANGE') {
+  } else if (normalizedColor === 'ORANGE') {
     badgeStyle = {
       badgeBg: 'bg-orange-500',
       pillBg: 'bg-orange-50 dark:bg-orange-950/40 text-orange-900 dark:text-orange-300 border-orange-200 dark:border-orange-800/80',
-      label: 'Representative (Orange)',
+      label: 'Orange',
     };
-  } else if (normalizedType === 'PURPLE') {
+  } else if (normalizedColor === 'PURPLE') {
     badgeStyle = {
       badgeBg: 'bg-purple-600',
       pillBg: 'bg-purple-50 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800/80',
-      label: 'Scholar (Purple)',
-    };
-  } else if (normalizedType === 'GOLD') {
-    badgeStyle = {
-      badgeBg: 'bg-amber-500',
-      pillBg: 'bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border-amber-200 dark:border-amber-800/80',
-      label: 'Executive (Gold)',
+      label: 'Purple',
     };
   }
 
@@ -69,7 +66,7 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
     <span
       className={`inline-flex items-center justify-center rounded-full ${badgeStyle.badgeBg} text-white shadow-2xs shrink-0 select-none`}
       style={{ width: `${size}px`, height: `${size}px` }}
-      aria-label={badgeStyle.label}
+      aria-label={`Verified (${badgeStyle.label})`}
     >
       <Check size={iconSize} strokeWidth={3.5} className="text-white drop-shadow-2xs" />
     </span>
@@ -80,7 +77,7 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
     return (
       <span
         className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-extrabold border ${badgeStyle.pillBg} ${className} shadow-2xs`}
-        title={`Verified Account: ${rawTitle} (${badgeStyle.label})`}
+        title={`Verified: ${rawTitle}`}
       >
         {renderIconBadge()}
         <span className="truncate max-w-[150px] leading-none">{rawTitle}</span>
@@ -92,7 +89,7 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
   return (
     <span
       className={`inline-flex items-center shrink-0 ${className}`}
-      title={rawTitle && !isDeclinedOrInternal ? `Verified Account: ${rawTitle} (${badgeStyle.label})` : `Verified Account (${badgeStyle.label})`}
+      title={rawTitle && !isDeclinedOrInternal ? `Verified: ${rawTitle}` : `Verified`}
     >
       {renderIconBadge()}
     </span>

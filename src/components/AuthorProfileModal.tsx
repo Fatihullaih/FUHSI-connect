@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Post, Comment, BadgeType, UserProfile, FollowRecord } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
@@ -154,9 +154,18 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     return findUserByNickname(authorNickname);
   }, [isViewingSelf, userProfile, allUsers, normAuthor, authorNickname]);
 
+  const [badgeTick, setBadgeTick] = useState(0);
+  useEffect(() => {
+    const handleBadgeUpdate = () => {
+      setBadgeTick((t) => t + 1);
+    };
+    window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+    return () => window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+  }, []);
+
   const badgeInfo = useMemo(() => {
     return getUserBadgeInfo(authorNickname, authorProfileUser);
-  }, [authorNickname, authorProfileUser]);
+  }, [authorNickname, authorProfileUser, badgeTick]);
 
   const isVerifiedAuthor = badgeInfo.isVerified;
 

@@ -81,7 +81,14 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     const timer = setInterval(() => {
       setTimeTick((prev) => prev + 1);
     }, 15000);
-    return () => clearInterval(timer);
+    const handleBadgeUpdate = () => {
+      setTimeTick((prev) => prev + 1);
+    };
+    window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+    };
   }, []);
 
   const isModulaAdmin = useMemo(() => {
