@@ -45,6 +45,9 @@ export const calculateUserPoints = (
   if (!nickname) return REPUTATION_RULES.PROFILE_COMPLETION;
 
   const normTarget = nickname.toLowerCase().replace(/^@/, '').trim();
+  if (normTarget === 'modula' || isModulaAccount(nickname) || isModulaAccount(userProfile)) {
+    return 0;
+  }
 
   let points = 0;
 
@@ -205,6 +208,19 @@ export const getUserPointsBreakdown = (
   }
 
   const normTarget = nickname.toLowerCase().replace(/^@/, '').trim();
+  if (normTarget === 'modula' || isModulaAccount(nickname) || isModulaAccount(userProfile)) {
+    return {
+      profileCompletion: 0,
+      qualityPosts: 0,
+      likesReceived: 0,
+      commentsReceived: 0,
+      repostsReceived: 0,
+      spamPenalties: 0,
+      offensivePenalties: 0,
+      reportPenalties: 0,
+      total: 0,
+    };
+  }
 
   const isProfileComplete = Boolean(
     userProfile?.nickname ||
@@ -433,6 +449,9 @@ export function calculateWeeklyUserPoints(
   const currentWindow = customWindow || getWeeklyRankingWindow();
   const { startMs, endMs } = currentWindow;
   const normTarget = nickname.toLowerCase().replace(/^@/, '').trim();
+  if (normTarget === 'modula' || isModulaAccount(nickname) || isModulaAccount(userProfile)) {
+    return 0;
+  }
 
   let points = 0;
 

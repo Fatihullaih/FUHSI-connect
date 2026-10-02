@@ -3,7 +3,7 @@ import { FollowRecord, UserProfile, Post } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount, getUserIdentitySubtitle } from '../utils/userDbUtils';
+import { isGuestAccount, getUserIdentitySubtitle, isModulaAccount } from '../utils/userDbUtils';
 import { normalizeHandle, formatHandle, isUserFollowing, getFollowersList, getFollowingList } from '../utils/followUtils';
 import { X, ArrowLeft, Users, UserPlus, UserCheck } from 'lucide-react';
 
@@ -46,18 +46,24 @@ export const FollowersListModal: React.FC<FollowersListModalProps> = ({
 
   // Resolve user profiles for the list
   const userItems = useMemo(() => {
-    return activeList.map((record) => {
-      const handle =
-        activeTab === 'followers' ? record.followerNickname : record.followingNickname;
-      const cleanH = normalizeHandle(handle);
-      const userProfile = allUsers.find((u) => normalizeHandle(u.nickname) === cleanH);
-      return {
-        handle: formatHandle(cleanH),
-        cleanHandle: cleanH,
-        profile: userProfile,
-        createdAt: record.createdAt,
-      };
-    });
+    return activeList
+      .filter((record) => {
+        const handle = activeTab === 'followers' ? record.followerNickname : record.followingNickname;
+        const cleanH = normalizeHandle(handle);
+        return cleanH && cleanH !== 'modula' && !isModulaAccount(handle);
+      })
+      .map((record) => {
+        const handle =
+          activeTab === 'followers' ? record.followerNickname : record.followingNickname;
+        const cleanH = normalizeHandle(handle);
+        const userProfile = allUsers.find((u) => normalizeHandle(u.nickname) === cleanH);
+        return {
+          handle: formatHandle(cleanH),
+          cleanHandle: cleanH,
+          profile: userProfile,
+          createdAt: record.createdAt,
+        };
+      });
   }, [activeList, activeTab, allUsers]);
 
   return (
@@ -155,6 +161,7 @@ export const FollowersListModal: React.FC<FollowersListModalProps> = ({
                   <div
                     className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer"
                     onClick={() => {
+                      if (item.cleanHandle === 'modula' || isModulaAccount(item.handle)) return;
                       if (onSelectUser) {
                         onSelectUser(item.handle);
                         onClose();

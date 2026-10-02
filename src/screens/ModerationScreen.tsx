@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeType, CampusNotification } from '../types';
-import { getStoredUsers, saveStoredUsers, isGuestAccount, markUserPermanentlyDeleted, updateUserBadgeAndVerification } from '../utils/userDbUtils';
+import { getStoredUsers, saveStoredUsers, isGuestAccount, markUserPermanentlyDeleted, purgeAccountPermanently, updateUserBadgeAndVerification } from '../utils/userDbUtils';
 import { pushServerDbSync } from '../utils/apiSync';
 import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
 import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User } from 'lucide-react';
@@ -489,50 +489,35 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       }
 
       const confirmed = window.confirm(
-        `Are you sure you want to permanently delete ${nick || 'this account'}?\n\nThis will completely erase the account from all devices, servers, and databases. The account will no longer exist and the user will see that no such account exists (as if they never created it).`
+        `Are you sure you want to permanently delete ${nick || 'this account'}?\n\nThis will completely erase the account and all associated posts, comments, threads, marketplace listings, chat records, and ranking points from the entire platform. The account cannot be recovered.`
       );
       if (!confirmed) return;
 
       const email = userToDelete?.studentEmail;
       const matric = userToDelete?.matricNumber;
 
-      // 1. Mark permanently deleted in tombstone
-      markUserPermanentlyDeleted({ id: userId, nickname: nick, studentEmail: email, matricNumber: matric });
+      // Complete cascade permanent account deletion
+      purgeAccountPermanently({
+        userId,
+        nickname: nick,
+        studentEmail: email,
+        matricNumber: matric,
+      });
 
-      // 2. Remove from local list
+      // Remove from local screen list
       const updatedList = storedList.filter((u) => {
         if (userId && u.id === userId) return false;
         if (nick && u.nickname?.toLowerCase() === nick.toLowerCase()) return false;
         if (email && u.studentEmail?.toLowerCase() === email.toLowerCase()) return false;
         return true;
       });
-      saveStoredUsers(updatedList);
       setAllUsersList(updatedList);
 
-      // 3. Delete from Firestore permanently
-      deleteUserFromFirestore(userId, nick, email);
-
-      // 4. Push deletion to central server database
-      pushServerDbSync({
-        users: updatedList,
-        replaceUsers: true,
-        deletedUserIds: userId ? [userId] : [],
-        deletedUserNicknames: nick ? [nick] : [],
-      } as any).catch((err) => console.error('Error syncing user deletion to server:', err));
-
-      // 5. If deleted user was active in local session, clear session
-      const activeJson = localStorage.getItem('fuhsi_active_user');
-      if (activeJson) {
-        const activeUser: UserProfile = JSON.parse(activeJson);
-        const matchActive = (userId && activeUser.id === userId) ||
-          (nick && activeUser.nickname?.toLowerCase() === nick.toLowerCase()) ||
-          (email && activeUser.studentEmail?.toLowerCase() === email.toLowerCase());
-        if (matchActive && !activeUser.isAdmin) {
-          localStorage.removeItem('fuhsi_active_user');
-        }
+      if (selectedStudentForView && (selectedStudentForView.id === userId || selectedStudentForView.nickname?.toLowerCase() === nick.toLowerCase())) {
+        setSelectedStudentForView(null);
       }
 
-      setApprovalToast(`🗑️ Account for ${nick || userId} has been permanently deleted and completely removed.`);
+      setApprovalToast(`🗑️ Account for ${nick || userId} and all associated records have been permanently deleted.`);
       setTimeout(() => setApprovalToast(null), 4000);
     } catch (err) {
       console.error(err);

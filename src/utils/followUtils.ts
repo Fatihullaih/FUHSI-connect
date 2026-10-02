@@ -75,6 +75,7 @@ export function isUserFollowing(
   const cleanFollower = normalizeHandle(followerHandle);
   const cleanTarget = normalizeHandle(targetHandle);
   if (!cleanFollower || !cleanTarget || cleanFollower === cleanTarget) return false;
+  if (cleanFollower === 'modula' || cleanTarget === 'modula') return false;
 
   return allFollows.some(
     (f) =>
@@ -91,9 +92,13 @@ export function getFollowersCount(
   allFollows: FollowRecord[] = []
 ): number {
   const cleanTarget = normalizeHandle(targetHandle);
-  if (!cleanTarget) return 0;
+  if (!cleanTarget || cleanTarget === 'modula') return 0;
 
-  return allFollows.filter((f) => normalizeHandle(f.followingNickname) === cleanTarget).length;
+  return allFollows.filter(
+    (f) =>
+      normalizeHandle(f.followingNickname) === cleanTarget &&
+      normalizeHandle(f.followerNickname) !== 'modula'
+  ).length;
 }
 
 /**
@@ -104,9 +109,13 @@ export function getFollowingCount(
   allFollows: FollowRecord[] = []
 ): number {
   const cleanTarget = normalizeHandle(targetHandle);
-  if (!cleanTarget) return 0;
+  if (!cleanTarget || cleanTarget === 'modula') return 0;
 
-  return allFollows.filter((f) => normalizeHandle(f.followerNickname) === cleanTarget).length;
+  return allFollows.filter(
+    (f) =>
+      normalizeHandle(f.followerNickname) === cleanTarget &&
+      normalizeHandle(f.followingNickname) !== 'modula'
+  ).length;
 }
 
 /**
@@ -127,9 +136,13 @@ export function getFollowersList(
   allFollows: FollowRecord[] = []
 ): FollowRecord[] {
   const cleanTarget = normalizeHandle(targetHandle);
-  if (!cleanTarget) return [];
+  if (!cleanTarget || cleanTarget === 'modula') return [];
 
-  const rawList = allFollows.filter((f) => normalizeHandle(f.followingNickname) === cleanTarget);
+  const rawList = allFollows.filter(
+    (f) =>
+      normalizeHandle(f.followingNickname) === cleanTarget &&
+      normalizeHandle(f.followerNickname) !== 'modula'
+  );
 
   // Sort strictly descending by latest first (newest timestamp first)
   const sorted = [...rawList].sort((a, b) => {
@@ -144,6 +157,7 @@ export function getFollowersList(
   const deduplicated: FollowRecord[] = [];
   for (const record of sorted) {
     const h = normalizeHandle(record.followerNickname);
+    if (h === 'modula') continue;
     if (!seen.has(h)) {
       seen.add(h);
       deduplicated.push(record);
@@ -161,9 +175,13 @@ export function getFollowingList(
   allFollows: FollowRecord[] = []
 ): FollowRecord[] {
   const cleanTarget = normalizeHandle(targetHandle);
-  if (!cleanTarget) return [];
+  if (!cleanTarget || cleanTarget === 'modula') return [];
 
-  const rawList = allFollows.filter((f) => normalizeHandle(f.followerNickname) === cleanTarget);
+  const rawList = allFollows.filter(
+    (f) =>
+      normalizeHandle(f.followerNickname) === cleanTarget &&
+      normalizeHandle(f.followingNickname) !== 'modula'
+  );
 
   // Sort strictly descending by latest first (newest timestamp first)
   const sorted = [...rawList].sort((a, b) => {
@@ -178,6 +196,7 @@ export function getFollowingList(
   const deduplicated: FollowRecord[] = [];
   for (const record of sorted) {
     const h = normalizeHandle(record.followingNickname);
+    if (h === 'modula') continue;
     if (!seen.has(h)) {
       seen.add(h);
       deduplicated.push(record);
@@ -203,7 +222,13 @@ export function toggleFollowState(
   const cleanTarget = normalizeHandle(targetHandle);
   const docId = generateFollowDocId(cleanFollower, cleanTarget);
 
-  if (!cleanFollower || !cleanTarget || cleanFollower === cleanTarget) {
+  if (
+    !cleanFollower ||
+    !cleanTarget ||
+    cleanFollower === cleanTarget ||
+    cleanFollower === 'modula' ||
+    cleanTarget === 'modula'
+  ) {
     return { updatedFollows: currentFollows, isNowFollowing: false, docId };
   }
 

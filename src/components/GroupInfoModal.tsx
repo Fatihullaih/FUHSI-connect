@@ -3,6 +3,7 @@ import { UserProfile, ChatGroup } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
+import { isModulaAccount } from '../utils/userDbUtils';
 import { normalizeNickname, clearConversationHistoryForUser } from '../utils/messagingUtils';
 import { optimizeAvatarImage } from '../utils/imageUtils';
 import { ImageCropModal } from './ImageCropModal';
@@ -78,23 +79,25 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
 
   // Group members with profiles
   const memberList = useMemo(() => {
-    const list = (group.memberNicknames || []).map((nick) => {
-      const clean = normalizeNickname(nick);
-      const user = allUsers.find((u) => normalizeNickname(u.nickname) === clean || u.id === clean);
-      const isMemberAdmin = (group.adminNicknames || []).some((a) => normalizeNickname(a) === clean);
-      const isMemberCreator = normalizeNickname(group.createdBy) === clean;
-      const isMe = clean === cleanMyNickname;
+    const list = (group.memberNicknames || [])
+      .filter((nick) => !isModulaAccount(nick) && normalizeNickname(nick) !== 'modula')
+      .map((nick) => {
+        const clean = normalizeNickname(nick);
+        const user = allUsers.find((u) => normalizeNickname(u.nickname) === clean || u.id === clean);
+        const isMemberAdmin = (group.adminNicknames || []).some((a) => normalizeNickname(a) === clean);
+        const isMemberCreator = normalizeNickname(group.createdBy) === clean;
+        const isMe = clean === cleanMyNickname;
 
-      return {
-        nickname: nick.startsWith('@') ? nick : `@${nick}`,
-        cleanNickname: clean,
-        user,
-        isAdmin: isMemberAdmin,
-        isCreator: isMemberCreator,
-        isMe,
-        badge: getUserBadgeInfo(nick),
-      };
-    });
+        return {
+          nickname: nick.startsWith('@') ? nick : `@${nick}`,
+          cleanNickname: clean,
+          user,
+          isAdmin: isMemberAdmin,
+          isCreator: isMemberCreator,
+          isMe,
+          badge: getUserBadgeInfo(nick),
+        };
+      });
 
     // Sort: Creator first, then Admins, then me, then alphabetically
     list.sort((a, b) => {
@@ -118,10 +121,10 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
     const q = addMembersSearch.toLowerCase().replace(/^@/, '').trim();
 
     return allUsers.filter((u) => {
-      if (!u || !u.nickname) return false;
+      if (!u || !u.nickname || isModulaAccount(u)) return false;
       const nick = normalizeNickname(u.nickname);
       if (currentMemberSet.has(nick)) return false;
-      if (nick === 'yi' || nick === '@yi') return false;
+      if (nick === 'yi' || nick === '@yi' || nick === 'modula') return false;
       if (u.isDeclined || u.verificationStatus === 'declined') return false;
 
       if (!q) return true;
@@ -496,7 +499,10 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({
                     className="p-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 transition-colors"
                   >
                     <div
-                      onClick={() => onOpenProfile && onOpenProfile(m.cleanNickname)}
+                      onClick={() => {
+                        if (m.cleanNickname === 'modula' || isModulaAccount(m.cleanNickname)) return;
+                        if (onOpenProfile) onOpenProfile(m.cleanNickname);
+                      }}
                       className="flex items-center gap-2.5 min-w-0 cursor-pointer group"
                     >
                       <div className="w-8 h-8 rounded-xl bg-teal-900 flex items-center justify-center overflow-hidden border border-slate-200 shrink-0">

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { MarketplaceItem, UserProfile, MarketplaceReport } from '../types';
+import { isModulaAccount } from '../utils/userDbUtils';
 import { 
   ShoppingBag, 
   MapPin, 
@@ -300,6 +301,11 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
   // Filter listings based on category, search query, blocked users, and 7-DAY AUTO-PURGE
   const filteredListings = useMemo(() => {
     return approvedMarketplaceItems.filter((item) => {
+      // 0. Exclude internal platform control account (@modula) from Marketplace
+      if (isModulaAccount(item.sellerNickname) || (item.sellerNickname || '').toLowerCase().replace(/^@/, '') === 'modula') {
+        return false;
+      }
+
       // 1. Hide items by blocked sellers
       if (userProfile?.nickname && isUserBlocked(userProfile.nickname, item.sellerNickname)) {
         return false;
@@ -887,18 +893,20 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                   <p className="text-xs text-slate-500">
                     {searchQuery ? `No results for "${searchQuery}"` : 'Be the first student to post an item or house listing in this category!'}
                   </p>
-                  <button
-                    onClick={() => {
-                      if (isVerifiedUser) {
-                        setShowSellModal(true);
-                      } else {
-                        setShowMarketplaceLockModal(true);
-                      }
-                    }}
-                    className="px-4 py-2 bg-[#0a6627] hover:bg-[#08521f] text-white text-xs font-bold rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus size={14} /> Post an Item or Room
-                  </button>
+                  {!isModulaAccount(userProfile) && (
+                    <button
+                      onClick={() => {
+                        if (isVerifiedUser) {
+                          setShowSellModal(true);
+                        } else {
+                          setShowMarketplaceLockModal(true);
+                        }
+                      }}
+                      className="px-4 py-2 bg-[#0a6627] hover:bg-[#08521f] text-white text-xs font-bold rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Plus size={14} /> Post an Item or Room
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -934,18 +942,20 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                 <p className="text-slate-500 text-xs">
                   Sell your textbooks, gadgets, room slots, or skills directly to fellow FUHSI students with 0% commission!
                 </p>
-                <button
-                  onClick={() => {
-                    if (isVerifiedUser) {
-                      setShowSellModal(true);
-                    } else {
-                      setShowMarketplaceLockModal(true);
-                    }
-                  }}
-                  className="mt-2 px-4 py-2 bg-[#0a6627] hover:bg-[#08521f] text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus size={14} /> Post an Item Now
-                </button>
+                {!isModulaAccount(userProfile) && (
+                  <button
+                    onClick={() => {
+                      if (isVerifiedUser) {
+                        setShowSellModal(true);
+                      } else {
+                        setShowMarketplaceLockModal(true);
+                      }
+                    }}
+                    className="mt-2 px-4 py-2 bg-[#0a6627] hover:bg-[#08521f] text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus size={14} /> Post an Item Now
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-3">

@@ -7,7 +7,7 @@ import { VerificationBadge } from '../components/VerificationBadge';
 import { calculateUserPoints } from '../utils/reputationUtils';
 import { isDemoUser, isDemoNickname, isDemoPost } from '../utils/postGenerator';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount, getUserIdentitySubtitle } from '../utils/userDbUtils';
+import { isGuestAccount, getUserIdentitySubtitle, isModulaAccount } from '../utils/userDbUtils';
 import { isUserFollowing, getStoredFollows } from '../utils/followUtils';
 import {
   Search,
@@ -174,7 +174,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
     }
 
     candidateUsers.forEach((u) => {
-      if (u.nickname && !isDemoUser(u) && !isDemoNickname(u.nickname)) {
+      if (u.nickname && !isDemoUser(u) && !isDemoNickname(u.nickname) && !isModulaAccount(u) && normalize(u.nickname) !== 'modula') {
         const key = normalize(u.nickname);
         if (!accMap.has(key)) {
           const isSelf = userProfile?.nickname && normalize(userProfile.nickname) === key;
@@ -210,11 +210,11 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       }
     });
 
-    // Add author nicknames from posts (excluding demo posts)
+    // Add author nicknames from posts (excluding demo posts and modula)
     (posts || []).forEach((p) => {
       if (isDemoPost(p)) return;
       const nick = p.authorNickname || p.nickname || p.customNickname;
-      if (nick && !isDemoNickname(nick)) {
+      if (nick && !isDemoNickname(nick) && !isModulaAccount(nick) && normalize(nick) !== 'modula') {
         const key = normalize(nick);
         if (!accMap.has(key)) {
           const exactScore = calculateUserPoints(nick, { nickname: nick }, posts, []);
@@ -245,8 +245,11 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   // Perform Intelligent Search Matching for Accounts
   const matchingAccounts = useMemo(() => {
     if (!query.trim()) return [];
+    const cleanQ = normalize(query);
+    if (cleanQ === 'modula' || cleanQ.includes('modula')) return [];
     
     return allAccounts
+      .filter((acc) => !isModulaAccount(acc.nickname) && normalize(acc.nickname) !== 'modula')
       .map((acc) => {
         // Course mates can find account by typing handle (an account cannot be searched using department)
         const nickScore = getMatchScore(query, acc.nickname);
@@ -269,9 +272,10 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
     return (posts || [])
       .filter((p) => {
         if (isDemoPost(p) || p.id.startsWith('repost_') || (p.isRepost && p.repostedPostId)) return false;
+        const authorNick = p.authorNickname || p.nickname || '';
+        if (isModulaAccount(authorNick) || normalize(authorNick) === 'modula') return false;
         
         // Find author account if private
-        const authorNick = p.authorNickname || p.nickname || '';
         const authorKey = normalize(authorNick);
         const matchedAcc = allAccounts.find((a) => normalize(a.nickname) === authorKey);
 
@@ -307,6 +311,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
 
     return (marketplaceItems || [])
       .filter((item) => {
+        if (isModulaAccount(item.sellerNickname) || normalize(item.sellerNickname || '') === 'modula') return false;
         if (item.status === 'SOLD' && item.soldAt) {
           const daysAgo = Math.floor((Date.now() - new Date(item.soldAt).getTime()) / (1000 * 60 * 60 * 24));
           if (daysAgo > 7) return false;
@@ -324,14 +329,17 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       .filter((entry) => entry.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((entry) => entry.item);
-  }, [query, marketplaceItems]);
+  }, [query, marketplaceItems, userProfile]);
 
   // Smart Search Suggestions ("Are you looking for...")
   const smartSuggestions = useMemo(() => {
     if (!query.trim()) return [];
+    const cleanQ = normalize(query);
+    if (cleanQ === 'modula' || cleanQ.includes('modula')) return [];
     
     // Find closest accounts that might match user intent even with typos
     const suggestions = allAccounts
+      .filter((acc) => !isModulaAccount(acc.nickname) && normalize(acc.nickname) !== 'modula')
       .map((acc) => {
         const score = Math.max(
           getMatchScore(query, acc.nickname),
@@ -356,6 +364,9 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
 
   // Convert account to UserProfile for modal
   const handleAccountClick = (acc: CampusAccount) => {
+    if (isModulaAccount(acc.nickname) || normalize(acc.nickname) === 'modula') {
+      return;
+    }
     const dummyPost: Post = {
       id: `acc_${acc.id}`,
       authorNickname: acc.nickname,

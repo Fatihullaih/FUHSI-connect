@@ -3,7 +3,7 @@ import { UserProfile, ChatGroup } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount } from '../utils/userDbUtils';
+import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { normalizeNickname } from '../utils/messagingUtils';
 import { createChatGroup } from '../utils/groupUtils';
@@ -61,10 +61,10 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
   const eligibleStudents = useMemo(() => {
     const q = memberSearch.toLowerCase().replace(/^@/, '').trim();
     return allUsers.filter((u) => {
-      if (!u || isDemoUser(u) || isDemoNickname(u.nickname)) return false;
+      if (!u || isDemoUser(u) || isDemoNickname(u.nickname) || isModulaAccount(u)) return false;
       if (u.isDeclined || u.verificationStatus === 'declined') return false;
       const nick = normalizeNickname(u.nickname);
-      if (!nick || nick === cleanMyNickname) return false;
+      if (!nick || nick === cleanMyNickname || nick === 'modula') return false;
       if (nick === 'yi' || nick === '@yi') return false;
 
       if (!q) return true;

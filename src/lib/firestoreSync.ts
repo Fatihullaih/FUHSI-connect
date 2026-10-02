@@ -50,14 +50,11 @@ export function subscribeUsers(onUpdate: (users: UserProfile[]) => void) {
           if (raw) {
             const deleted = JSON.parse(raw);
             if (Array.isArray(deleted) && deleted.length > 0) {
-              const uId = u.id;
-              const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
-              const uEmail = (u.studentEmail || '').toLowerCase();
+              const uId = u.id ? String(u.id).trim() : '';
+              // Primary: Match by permanent internal account ID
               const isDel = deleted.some((d: any) => {
                 const dId = d.id ? String(d.id).trim() : '';
-                const dNick = d.nickname ? String(d.nickname).trim().toLowerCase().replace(/^@/, '') : '';
-                const dEmail = d.studentEmail ? String(d.studentEmail).trim().toLowerCase() : '';
-                return (uId && dId && uId === dId) || (uNick && dNick && uNick === dNick) || (uEmail && dEmail && uEmail === dEmail);
+                return uId && dId && uId === dId;
               });
               if (isDel) return;
             }
@@ -237,26 +234,77 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
       }
     });
 
-    // 2. Purge user posts
+    // 2. Purge user posts and track deleted post IDs
+    const deletedPostDocIds: string[] = [];
     const postSnap = await getDocs(collection(db, POSTS_COL));
     postSnap.forEach((pDoc) => {
       const pData = pDoc.data() as any;
       const pNick = (pData.authorNickname || '').toLowerCase().replace(/^@/, '');
       const pId = pData.authorId || '';
-      if ((cleanNick && pNick === cleanNick) || (userId && pId === userId)) {
+      if ((cleanNick && pNick === cleanNick) || (userId && pId === userId) || (userId && pDoc.id === userId)) {
+        deletedPostDocIds.push(pDoc.id);
         promises.push(deleteDoc(pDoc.ref).catch(() => {}));
       }
     });
 
-    // 3. Purge user comments
+    // 2b. Purge any reposts of those deleted posts
+    postSnap.forEach((pDoc) => {
+      const pData = pDoc.data() as any;
+      if (pData.repostedPostId && deletedPostDocIds.includes(pData.repostedPostId)) {
+        promises.push(deleteDoc(pDoc.ref).catch(() => {}));
+      }
+    });
+
+    // 2c. Remove deleted user's likes on remaining posts and recalculate like counts
+    postSnap.forEach((pDoc) => {
+      if (deletedPostDocIds.includes(pDoc.id)) return;
+      const pData = pDoc.data() as any;
+      if (pData.likedBy && Array.isArray(pData.likedBy)) {
+        const hadLike = pData.likedBy.some(
+          (l: string) => (cleanNick && l.toLowerCase().replace(/^@/, '') === cleanNick) || (userId && l === userId)
+        );
+        if (hadLike) {
+          const nextLikedBy = pData.likedBy.filter(
+            (l: string) => (cleanNick && l.toLowerCase().replace(/^@/, '') !== cleanNick) && (!userId || l !== userId)
+          );
+          const newLikes = Math.max(0, nextLikedBy.length);
+          promises.push(
+            setDoc(pDoc.ref, { likedBy: nextLikedBy, likes: newLikes, likesCount: newLikes }, { merge: true }).catch(() => {})
+          );
+        }
+      }
+    });
+
+    // 3. Purge user comments and recalculate commentCount on affected posts
+    const affectedPostIds = new Set<string>();
     const commentSnap = await getDocs(collection(db, COMMENTS_COL));
     commentSnap.forEach((cDoc) => {
       const cData = cDoc.data() as any;
       const cNick = (cData.authorNickname || '').toLowerCase().replace(/^@/, '');
       const cId = cData.authorId || '';
-      if ((cleanNick && cNick === cleanNick) || (userId && cId === userId)) {
+      if ((cleanNick && cNick === cleanNick) || (userId && cId === userId) || (cData.postId && deletedPostDocIds.includes(cData.postId))) {
+        if (cData.postId && !deletedPostDocIds.includes(cData.postId)) {
+          affectedPostIds.add(cData.postId);
+        }
         promises.push(deleteDoc(cDoc.ref).catch(() => {}));
       }
+    });
+
+    // Reconcile comment counts on affected active posts
+    affectedPostIds.forEach((postId) => {
+      let remainingCount = 0;
+      commentSnap.forEach((cDoc) => {
+        const cData = cDoc.data() as any;
+        const cNick = (cData.authorNickname || '').toLowerCase().replace(/^@/, '');
+        const cId = cData.authorId || '';
+        const isDeleted = (cleanNick && cNick === cleanNick) || (userId && cId === userId);
+        if (cData.postId === postId && !isDeleted) {
+          remainingCount += 1;
+        }
+      });
+      promises.push(
+        setDoc(doc(db, POSTS_COL, postId), { commentCount: remainingCount, commentsCount: remainingCount }, { merge: true }).catch(() => {})
+      );
     });
 
     // 4. Purge marketplace listings
@@ -264,7 +312,8 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
     mPendingSnap.forEach((mDoc) => {
       const mData = mDoc.data() as any;
       const mNick = (mData.sellerNickname || '').toLowerCase().replace(/^@/, '');
-      if (cleanNick && mNick === cleanNick) {
+      const mId = mData.sellerId || '';
+      if ((cleanNick && mNick === cleanNick) || (userId && mId === userId)) {
         promises.push(deleteDoc(mDoc.ref).catch(() => {}));
       }
     });
@@ -273,12 +322,29 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
     mApprovedSnap.forEach((mDoc) => {
       const mData = mDoc.data() as any;
       const mNick = (mData.sellerNickname || '').toLowerCase().replace(/^@/, '');
-      if (cleanNick && mNick === cleanNick) {
+      const mId = mData.sellerId || '';
+      if ((cleanNick && mNick === cleanNick) || (userId && mId === userId)) {
         promises.push(deleteDoc(mDoc.ref).catch(() => {}));
       }
     });
 
-    // 5. Purge user helpdesk inquiries
+    // 5. Purge user direct messages (both sent and received)
+    const dmsSnap = await getDocs(collection(db, DIRECT_MESSAGES_COL));
+    dmsSnap.forEach((dDoc) => {
+      const dData = dDoc.data() as any;
+      const sNick = (dData.senderNickname || '').toLowerCase().replace(/^@/, '');
+      const rNick = (dData.receiverNickname || '').toLowerCase().replace(/^@/, '');
+      const sId = dData.senderId || '';
+      const rId = dData.receiverId || '';
+      if (
+        (cleanNick && (sNick === cleanNick || rNick === cleanNick)) ||
+        (userId && (sId === userId || rId === userId))
+      ) {
+        promises.push(deleteDoc(dDoc.ref).catch(() => {}));
+      }
+    });
+
+    // 6. Purge user helpdesk inquiries
     const helpdeskSnap = await getDocs(collection(db, HELPDESK_COL));
     helpdeskSnap.forEach((hDoc) => {
       const hData = hDoc.data() as any;
@@ -288,7 +354,7 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
       }
     });
 
-    // 6. Purge user follows
+    // 7. Purge user follows
     const followsSnap = await getDocs(collection(db, FOLLOWS_COL));
     followsSnap.forEach((fDoc) => {
       const fData = fDoc.data() as any;

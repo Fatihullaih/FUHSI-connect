@@ -115,14 +115,11 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
       const deleted: any[] = JSON.parse(raw);
       if (!Array.isArray(deleted) || deleted.length === 0) return false;
       const uId = u.id ? String(u.id).trim() : '';
-      const uNick = u.nickname ? String(u.nickname).trim().toLowerCase().replace(/^@/, '') : '';
-      const uEmail = u.studentEmail ? String(u.studentEmail).trim().toLowerCase() : '';
-      return deleted.some((d) => {
-        const dId = d.id ? String(d.id).trim() : '';
-        const dNick = d.nickname ? String(d.nickname).trim().toLowerCase().replace(/^@/, '') : '';
-        const dEmail = d.studentEmail ? String(d.studentEmail).trim().toLowerCase() : '';
-        return (uId && dId && uId === dId) || (uNick && dNick && uNick === dNick) || (uEmail && dEmail && uEmail === dEmail);
-      });
+      // Primary: Match by permanent internal account ID
+      if (uId && deleted.some((d) => d.id && String(d.id).trim() === uId)) {
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
@@ -133,19 +130,17 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
 
     const uId = u.id ? String(u.id).trim() : '';
     const uNick = u.nickname ? String(u.nickname).trim().toLowerCase().replace(/^@/, '') : '';
-    const uEmail = u.studentEmail && !u.studentEmail.includes('admin@fuhsi.edu.ng') ? String(u.studentEmail).trim().toLowerCase() : '';
-    const uMatric = u.matricNumber ? String(u.matricNumber).trim().toUpperCase() : '';
 
+    // Requirement 10, 11, 12: Internal account ID must be the primary identity.
+    // Two accounts with different IDs must NEVER be merged based on username, email, or similar details!
     const existingIndex = mergedList.findIndex((ex) => {
       const exId = ex.id ? String(ex.id).trim() : '';
-      const exNick = ex.nickname ? String(ex.nickname).trim().toLowerCase().replace(/^@/, '') : '';
-      const exEmail = ex.studentEmail && !ex.studentEmail.includes('admin@fuhsi.edu.ng') ? String(ex.studentEmail).trim().toLowerCase() : '';
-      const exMatric = ex.matricNumber ? String(ex.matricNumber).trim().toUpperCase() : '';
-
       if (uId && exId && uId === exId) return true;
-      if (uNick && exNick && uNick === exNick) return true;
-      if (uEmail && exEmail && uEmail === exEmail) return true;
-      if (uMatric && exMatric && (uMatric === exMatric || normalizeMatricNumber(uMatric) === normalizeMatricNumber(exMatric))) return true;
+      // Fallback only if neither record has an internal ID
+      if (!uId && !exId && uNick) {
+        const exNick = ex.nickname ? String(ex.nickname).trim().toLowerCase().replace(/^@/, '') : '';
+        return uNick === exNick;
+      }
       return false;
     });
 

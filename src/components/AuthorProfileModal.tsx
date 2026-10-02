@@ -8,7 +8,7 @@ import { FollowersListModal } from './FollowersListModal';
 import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { calculateUserPoints } from '../utils/reputationUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount, findUserByNickname, isModulaAccount, formatJoinDate } from '../utils/userDbUtils';
+import { isGuestAccount, findUserByNickname, isModulaAccount, formatJoinDate, isUserPermanentlyDeleted } from '../utils/userDbUtils';
 import { isUserFollowing, getFollowersCount, getFollowingCount, normalizeHandle } from '../utils/followUtils';
 import { canViewerSeeOnlineStatus, isUserOnline } from '../utils/presenceUtils';
 import { LinkifiedText } from './LinkifiedText';
@@ -25,7 +25,8 @@ import {
   MessageSquare,
   Lock,
   ArrowRight,
-  Radio
+  Radio,
+  UserX
 } from 'lucide-react';
 
 interface AuthorProfileModalProps {
@@ -283,6 +284,56 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   }, [authorNickname, effectivePosts, allComments]);
 
   const displayPoints = computedPoints;
+
+  const isAuthorModula = useMemo(() => {
+    return isModulaAccount(authorProfileUser) || 
+      isModulaAccount(authorNickname) || 
+      normAuthor === 'modula';
+  }, [authorProfileUser, authorNickname, normAuthor]);
+
+  useEffect(() => {
+    if (isAuthorModula) {
+      onClose();
+    }
+  }, [isAuthorModula, onClose]);
+
+  if (isAuthorModula) {
+    return null;
+  }
+
+  const isDeletedAccount = useMemo(() => {
+    if (authorNickname === 'Account Deleted') return true;
+    if (authorProfileUser && isUserPermanentlyDeleted(authorProfileUser)) return true;
+    if (!authorProfileUser && isUserPermanentlyDeleted(normAuthor)) return true;
+    return false;
+  }, [authorProfileUser, authorNickname, normAuthor]);
+
+  if (isDeletedAccount) {
+    return (
+      <div 
+        className="fixed inset-0 w-full h-full bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+        style={{ zIndex: zIndex ?? 70 }}
+      >
+        <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-sm w-full p-6 text-center shadow-2xl border border-slate-200 dark:border-slate-800">
+          <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto mb-4 text-slate-400">
+            <UserX size={32} />
+          </div>
+          <h3 className="text-base font-black text-slate-900 dark:text-white mb-1">
+            Account Deleted
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
+            This account is no longer available on FUHSI-Connect. All associated records and activity have been permanently removed.
+          </p>
+          <button
+            onClick={onClose}
+            className="w-full py-2.5 px-4 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div 

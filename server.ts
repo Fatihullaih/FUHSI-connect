@@ -360,6 +360,97 @@ app.post('/api/db/sync', (req, res) => {
           const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
           return !allDeletedIds.has(uId) && !allDeletedNicks.has(uNick);
         });
+
+        // Cascade delete posts owned by deleted users
+        const deletedPostIdsSet = new Set<string>();
+        activeDb.posts = (activeDb.posts || []).filter((p: any) => {
+          const pNick = String(p.authorNickname || '').toLowerCase().replace(/^@/, '');
+          const pId = String(p.authorId || '');
+          if (allDeletedIds.has(pId) || allDeletedNicks.has(pNick)) {
+            deletedPostIdsSet.add(String(p.id));
+            return false;
+          }
+          return true;
+        });
+
+        // Cascade delete reposts of those posts
+        activeDb.posts = (activeDb.posts || []).filter((p: any) => {
+          if (p.repostedPostId && deletedPostIdsSet.has(String(p.repostedPostId))) {
+            deletedPostIdsSet.add(String(p.id));
+            return false;
+          }
+          return true;
+        });
+
+        // Remove deleted user's likes on remaining posts and recalculate like counts
+        activeDb.posts = (activeDb.posts || []).map((p: any) => {
+          if (Array.isArray(p.likedBy)) {
+            const nextLiked = p.likedBy.filter((l: string) => {
+              const cleanL = String(l).toLowerCase().replace(/^@/, '');
+              return !allDeletedNicks.has(cleanL) && !allDeletedIds.has(String(l));
+            });
+            const newLikes = Math.max(0, nextLiked.length);
+            return { ...p, likedBy: nextLiked, likes: newLikes, likesCount: newLikes };
+          }
+          return p;
+        });
+
+        // Cascade delete comments owned by deleted users or on deleted posts
+        activeDb.comments = (activeDb.comments || []).filter((c: any) => {
+          const cNick = String(c.authorNickname || '').toLowerCase().replace(/^@/, '');
+          const cId = String(c.authorId || '');
+          if (allDeletedIds.has(cId) || allDeletedNicks.has(cNick) || (c.postId && deletedPostIdsSet.has(String(c.postId)))) {
+            return false;
+          }
+          return true;
+        });
+
+        // Recalculate comment count on all remaining posts
+        activeDb.posts = (activeDb.posts || []).map((p: any) => {
+          const cCount = (activeDb.comments || []).filter((c: any) => String(c.postId) === String(p.id)).length;
+          return { ...p, commentCount: cCount, commentsCount: cCount };
+        });
+
+        // Cascade delete marketplace items
+        activeDb.marketplaceItems = (activeDb.marketplaceItems || []).filter((m: any) => {
+          const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
+          const mId = String(m.sellerId || '');
+          return !allDeletedIds.has(mId) && !allDeletedNicks.has(mNick);
+        });
+        activeDb.pendingMarketplaceItems = (activeDb.pendingMarketplaceItems || []).filter((m: any) => {
+          const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
+          const mId = String(m.sellerId || '');
+          return !allDeletedIds.has(mId) && !allDeletedNicks.has(mNick);
+        });
+
+        // Cascade delete direct messages
+        activeDb.directMessages = (activeDb.directMessages || []).filter((d: any) => {
+          const sNick = String(d.senderNickname || '').toLowerCase().replace(/^@/, '');
+          const rNick = String(d.receiverNickname || '').toLowerCase().replace(/^@/, '');
+          const sId = String(d.senderId || '');
+          const rId = String(d.receiverId || '');
+          return !allDeletedIds.has(sId) && !allDeletedIds.has(rId) && !allDeletedNicks.has(sNick) && !allDeletedNicks.has(rNick);
+        });
+
+        // Cascade delete chat conversations
+        activeDb.chatConversations = (activeDb.chatConversations || []).filter((c: any) => {
+          const oNick = String(c.otherUserNickname || '').toLowerCase().replace(/^@/, '');
+          return !allDeletedNicks.has(oNick);
+        });
+
+        // Cascade delete verification requests
+        activeDb.verificationRequests = (activeDb.verificationRequests || []).filter((v: any) => {
+          const vNick = String(v.applicantNickname || '').toLowerCase().replace(/^@/, '');
+          return !allDeletedNicks.has(vNick);
+        });
+
+        // Cascade delete follows
+        activeDb.follows = (activeDb.follows || []).filter((f: any) => {
+          const f1 = String(f.followerNickname || '').toLowerCase().replace(/^@/, '');
+          const f2 = String(f.followingNickname || '').toLowerCase().replace(/^@/, '');
+          return !allDeletedNicks.has(f1) && !allDeletedNicks.has(f2);
+        });
+
         changed = true;
       }
 

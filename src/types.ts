@@ -250,6 +250,8 @@ export interface DirectMessage {
   isSystemMessage?: boolean;
   readByUsers?: string[];
   mentionedNicknames?: string[];
+  senderId?: string;
+  receiverId?: string;
 }
 
 export interface ChatGroup {
@@ -274,6 +276,9 @@ export interface ChatGroup {
 export interface ChatConversation {
   id: string;
   otherUserNickname: string;
+  originalOtherNickname?: string;
+  otherUserId?: string;
+  otherUserIsDeleted?: boolean;
   otherUserAvatarKey?: string;
   otherUserAvatarUrl?: string;
   otherUserBadgeType?: BadgeType | string;

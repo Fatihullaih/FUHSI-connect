@@ -1,7 +1,7 @@
 import { UserProfile, BadgeType, VerificationRequest } from '../types';
 import { INITIAL_USER_PROFILE } from '../data/initialData';
 import { pushServerDbSync, mergeUsers } from './apiSync';
-import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore, savePostToFirestore, saveCommentToFirestore } from '../lib/firestoreSync';
+import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore, savePostToFirestore, saveCommentToFirestore, deleteUserFromFirestore } from '../lib/firestoreSync';
 import { isDemoUser } from './postGenerator';
 import { getUserBadgeInfo, normalizeBadgeColor } from './verificationUtils';
 
@@ -16,6 +16,19 @@ export interface DeletedUserEntry {
   studentEmail?: string;
   matricNumber?: string;
   deletedAt: string;
+}
+
+export interface PurgeAccountOptions {
+  userId: string;
+  nickname?: string;
+  studentEmail?: string;
+  matricNumber?: string;
+}
+
+export interface PurgedDataSummary {
+  deletedPostIds: string[];
+  deletedCommentIds: string[];
+  deletedMarketplaceItemIds: string[];
 }
 
 /**
@@ -35,7 +48,10 @@ export function getDeletedUsersList(): DeletedUserEntry[] {
 }
 
 /**
- * Check whether a user or identifier has been permanently deleted
+ * Check whether a user or identifier has been permanently deleted.
+ * Strict ID-first identity isolation:
+ * If targetId is provided, matches strictly on internal account ID.
+ * If only nickname is provided, checks if an active non-deleted user exists with that nickname.
  */
 export function isUserPermanentlyDeleted(userOrIdentifier?: Partial<UserProfile> | string | null | any): boolean {
   if (!userOrIdentifier) return false;
@@ -50,7 +66,9 @@ export function isUserPermanentlyDeleted(userOrIdentifier?: Partial<UserProfile>
   if (typeof userOrIdentifier === 'string') {
     const clean = userOrIdentifier.trim().toLowerCase().replace(/^@/, '');
     targetNick = clean;
-    if (userOrIdentifier.includes('@')) {
+    if (userOrIdentifier.startsWith('usr_')) {
+      targetId = userOrIdentifier.trim();
+    } else if (userOrIdentifier.includes('@')) {
       targetEmail = userOrIdentifier.trim().toLowerCase();
     }
   } else if (typeof userOrIdentifier === 'object') {
@@ -60,18 +78,45 @@ export function isUserPermanentlyDeleted(userOrIdentifier?: Partial<UserProfile>
     if (userOrIdentifier.matricNumber) targetMatric = String(userOrIdentifier.matricNumber).trim().toUpperCase();
   }
 
-  return deletedList.some((entry) => {
-    const eId = entry.id ? String(entry.id).trim() : '';
-    const eNick = entry.nickname ? String(entry.nickname).trim().toLowerCase().replace(/^@/, '') : '';
-    const eEmail = entry.studentEmail ? String(entry.studentEmail).trim().toLowerCase() : '';
-    const eMatric = entry.matricNumber ? String(entry.matricNumber).trim().toUpperCase() : '';
+  // 1. Primary check: permanent internal account ID
+  if (targetId) {
+    return deletedList.some((entry) => entry.id && entry.id === targetId);
+  }
 
-    if (targetId && eId && targetId === eId) return true;
-    if (targetNick && eNick && targetNick === eNick) return true;
-    if (targetEmail && eEmail && targetEmail === eEmail) return true;
-    if (targetMatric && eMatric && targetMatric === eMatric) return true;
-    return false;
-  });
+  // 2. Nickname check: If an active user exists with this nickname whose ID is not in deletedList, it is a brand new account!
+  if (targetNick) {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem(USER_DB_KEY);
+        if (stored) {
+          const users: UserProfile[] = JSON.parse(stored);
+          const activeMatch = users.find(
+            (u) => (u.nickname || '').trim().toLowerCase().replace(/^@/, '') === targetNick
+          );
+          if (activeMatch && activeMatch.id && !deletedList.some((e) => e.id === activeMatch.id)) {
+            return false;
+          }
+        }
+      }
+    } catch {}
+    return deletedList.some(
+      (entry) => entry.nickname && entry.nickname.trim().toLowerCase().replace(/^@/, '') === targetNick
+    );
+  }
+
+  if (targetEmail) {
+    return deletedList.some(
+      (entry) => entry.studentEmail && entry.studentEmail.trim().toLowerCase() === targetEmail
+    );
+  }
+
+  if (targetMatric) {
+    return deletedList.some(
+      (entry) => entry.matricNumber && entry.matricNumber.trim().toUpperCase() === targetMatric
+    );
+  }
+
+  return false;
 }
 
 /**
@@ -98,8 +143,8 @@ export function markUserPermanentlyDeleted(user: { id?: string; nickname?: strin
         const eEmail = (e.studentEmail || '').toLowerCase();
         const eId = e.id || '';
         if (user.id && eId === user.id) return false;
-        if (cleanNick && eNick === cleanNick) return false;
-        if (cleanEmail && eEmail === cleanEmail) return false;
+        if (cleanNick && eNick === cleanNick && !e.id) return false;
+        if (cleanEmail && eEmail === cleanEmail && !e.id) return false;
         return true;
       }),
     ];
@@ -133,6 +178,365 @@ export function markUserPermanentlyDeleted(user: { id?: string; nickname?: strin
   } catch (err) {
     console.error('Error marking user permanently deleted:', err);
   }
+}
+
+/**
+ * COMPLETE CASCADE ACCOUNT DELETION
+ * Permanently removes ALL platform records owned by or directly associated with this account:
+ * - User profile from database, active session, and tombstone
+ * - All posts and threads (feed, search, profile, thread detail)
+ * - All reposts and quotes of those posts
+ * - All comments and replies
+ * - Recalculates commentCount on all remaining posts
+ * - Removes user's likes/reactions on remaining posts and comments, and recalculates likes
+ * - All marketplace listings (approved and pending)
+ * - All direct messages and conversation records
+ * - All followers and following relationships
+ * - All verification requests
+ * - Recalculates rankings and points totals from active database records
+ * - Purges Firestore central database collections
+ * - Pushes deletion to server sync
+ * - Dispatches window events for real-time live UI refresh
+ */
+export function purgeAccountPermanently(options: PurgeAccountOptions): PurgedDataSummary {
+  const targetUserId = options.userId ? String(options.userId).trim() : '';
+  const cleanNick = options.nickname ? options.nickname.trim().toLowerCase().replace(/^@/, '') : '';
+  const cleanEmail = options.studentEmail ? options.studentEmail.trim().toLowerCase() : '';
+  const cleanMatric = options.matricNumber ? options.matricNumber.trim().toUpperCase() : '';
+
+  if (targetUserId === 'usr_admin_modula' || cleanNick === 'modula') {
+    throw new Error('Platform administrator (@modula) cannot be deleted.');
+  }
+
+  // 1. Mark permanently deleted in tombstone
+  markUserPermanentlyDeleted({
+    id: targetUserId,
+    nickname: cleanNick,
+    studentEmail: cleanEmail,
+    matricNumber: cleanMatric,
+  });
+
+  // 2. Remove user from local users DB
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const storedUsersRaw = localStorage.getItem(USER_DB_KEY);
+      if (storedUsersRaw) {
+        const users: UserProfile[] = JSON.parse(storedUsersRaw);
+        const filtered = users.filter((u) => {
+          if (targetUserId && u.id === targetUserId) return false;
+          const uNick = (u.nickname || '').trim().toLowerCase().replace(/^@/, '');
+          if (cleanNick && uNick === cleanNick) return false;
+          const uEmail = (u.studentEmail || '').trim().toLowerCase();
+          if (cleanEmail && uEmail === cleanEmail) return false;
+          return true;
+        });
+        localStorage.setItem(USER_DB_KEY, JSON.stringify(filtered));
+      }
+    } catch (e) {
+      console.error('Error removing user from fuhsi_users_db:', e);
+    }
+
+    // 3. Clear active session if matching
+    try {
+      const activeRaw = localStorage.getItem('fuhsi_active_user');
+      if (activeRaw) {
+        const activeUser: UserProfile = JSON.parse(activeRaw);
+        const aNick = (activeUser.nickname || '').trim().toLowerCase().replace(/^@/, '');
+        const aEmail = (activeUser.studentEmail || '').trim().toLowerCase();
+        if (
+          (targetUserId && activeUser.id === targetUserId) ||
+          (cleanNick && aNick === cleanNick) ||
+          (cleanEmail && aEmail === cleanEmail)
+        ) {
+          localStorage.removeItem('fuhsi_active_user');
+        }
+      }
+    } catch (e) {
+      console.error('Error clearing active user:', e);
+    }
+  }
+
+  const deletedPostIds: string[] = [];
+  const deletedCommentIds: string[] = [];
+  const deletedMarketplaceItemIds: string[] = [];
+
+  // 4. CASCADE DELETE POSTS AND THREADS
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const postsRaw = localStorage.getItem('fuhsi_posts_db');
+      if (postsRaw) {
+        const allPosts: any[] = JSON.parse(postsRaw);
+        if (Array.isArray(allPosts)) {
+          // Identify posts created by this user
+          allPosts.forEach((p) => {
+            const pNick = (p.authorNickname || '').trim().toLowerCase().replace(/^@/, '');
+            const pId = p.authorId || '';
+            if ((cleanNick && pNick === cleanNick) || (targetUserId && pId === targetUserId)) {
+              deletedPostIds.push(p.id);
+            }
+          });
+          // Also identify reposts of those posts
+          allPosts.forEach((p) => {
+            if (p.repostedPostId && deletedPostIds.includes(p.repostedPostId)) {
+              if (!deletedPostIds.includes(p.id)) deletedPostIds.push(p.id);
+            }
+          });
+
+          // Remaining posts: strip out deleted posts AND remove this user's likes/reactions
+          const remainingPosts = allPosts
+            .filter((p) => !deletedPostIds.includes(p.id))
+            .map((p) => {
+              let updatedLikes = p.likes || 0;
+              let likedBy = Array.isArray(p.likedBy) ? [...p.likedBy] : [];
+              const hadLike = likedBy.some(
+                (l: string) =>
+                  (cleanNick && l.toLowerCase().replace(/^@/, '') === cleanNick) || (targetUserId && l === targetUserId)
+              );
+              if (hadLike) {
+                likedBy = likedBy.filter(
+                  (l: string) =>
+                    (cleanNick && l.toLowerCase().replace(/^@/, '') !== cleanNick) && (!targetUserId || l !== targetUserId)
+                );
+                updatedLikes = Math.max(0, likedBy.length);
+              }
+              return {
+                ...p,
+                likedBy,
+                likes: updatedLikes,
+                likesCount: updatedLikes,
+              };
+            });
+          localStorage.setItem('fuhsi_posts_db', JSON.stringify(remainingPosts));
+        }
+      }
+    } catch (e) {
+      console.error('Error purging posts from fuhsi_posts_db:', e);
+    }
+
+    // 5. CASCADE DELETE COMMENTS AND REPLIES
+    try {
+      const commRaw = localStorage.getItem('fuhsi_comments_db');
+      if (commRaw) {
+        const allComments: any[] = JSON.parse(commRaw);
+        if (Array.isArray(allComments)) {
+          allComments.forEach((c) => {
+            const cNick = (c.authorNickname || '').trim().toLowerCase().replace(/^@/, '');
+            const cId = c.authorId || '';
+            if (
+              (cleanNick && cNick === cleanNick) ||
+              (targetUserId && cId === targetUserId) ||
+              (c.postId && deletedPostIds.includes(c.postId))
+            ) {
+              deletedCommentIds.push(c.id);
+            }
+          });
+
+          const remainingComments = allComments.filter((c) => !deletedCommentIds.includes(c.id));
+          localStorage.setItem('fuhsi_comments_db', JSON.stringify(remainingComments));
+
+          // Recalculate comment count on all remaining posts!
+          const postsRaw2 = localStorage.getItem('fuhsi_posts_db');
+          if (postsRaw2) {
+            const currentPosts: any[] = JSON.parse(postsRaw2);
+            if (Array.isArray(currentPosts)) {
+              const reconciledPosts = currentPosts.map((p) => {
+                const count = remainingComments.filter((c) => c.postId === p.id).length;
+                return {
+                  ...p,
+                  commentCount: count,
+                  commentsCount: count,
+                };
+              });
+              localStorage.setItem('fuhsi_posts_db', JSON.stringify(reconciledPosts));
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error purging comments from fuhsi_comments_db:', e);
+    }
+
+    // 6. CASCADE DELETE MARKETPLACE DATA
+    try {
+      ['fuhsi_marketplace_approved_db', 'fuhsi_marketplace_db'].forEach((key) => {
+        const mRaw = localStorage.getItem(key);
+        if (mRaw) {
+          const items: any[] = JSON.parse(mRaw);
+          if (Array.isArray(items)) {
+            items.forEach((m) => {
+              const mNick = (m.sellerNickname || '').trim().toLowerCase().replace(/^@/, '');
+              const mId = m.sellerId || '';
+              if ((cleanNick && mNick === cleanNick) || (targetUserId && mId === targetUserId)) {
+                if (!deletedMarketplaceItemIds.includes(m.id)) deletedMarketplaceItemIds.push(m.id);
+              }
+            });
+            const filtered = items.filter((m) => !deletedMarketplaceItemIds.includes(m.id));
+            localStorage.setItem(key, JSON.stringify(filtered));
+          }
+        }
+      });
+      ['fuhsi_marketplace_pending_db', 'fuhsi_pending_marketplace_db'].forEach((key) => {
+        const mRaw = localStorage.getItem(key);
+        if (mRaw) {
+          const items: any[] = JSON.parse(mRaw);
+          if (Array.isArray(items)) {
+            items.forEach((m) => {
+              const mNick = (m.sellerNickname || '').trim().toLowerCase().replace(/^@/, '');
+              const mId = m.sellerId || '';
+              if ((cleanNick && mNick === cleanNick) || (targetUserId && mId === targetUserId)) {
+                if (!deletedMarketplaceItemIds.includes(m.id)) deletedMarketplaceItemIds.push(m.id);
+              }
+            });
+            const filtered = items.filter((m) => !deletedMarketplaceItemIds.includes(m.id));
+            localStorage.setItem(key, JSON.stringify(filtered));
+          }
+        }
+      });
+      const dStr = localStorage.getItem('fuhsi_deleted_marketplace_ids');
+      const curDel = dStr ? JSON.parse(dStr) : [];
+      const nextDel = Array.from(new Set([...curDel, ...deletedMarketplaceItemIds]));
+      localStorage.setItem('fuhsi_deleted_marketplace_ids', JSON.stringify(nextDel));
+    } catch (e) {
+      console.error('Error purging marketplace listings:', e);
+    }
+
+    // 7. CASCADE DELETE CHAT MESSAGES AND CONVERSATIONS
+    try {
+      const dmsRaw = localStorage.getItem('fuhsi_direct_messages_db');
+      if (dmsRaw) {
+        const msgs: any[] = JSON.parse(dmsRaw);
+        if (Array.isArray(msgs)) {
+          const filteredMsgs = msgs.filter((m) => {
+            const sNick = (m.senderNickname || '').trim().toLowerCase().replace(/^@/, '');
+            const rNick = (m.receiverNickname || '').trim().toLowerCase().replace(/^@/, '');
+            const sId = m.senderId || '';
+            const rId = m.receiverId || '';
+            if (cleanNick && (sNick === cleanNick || rNick === cleanNick)) return false;
+            if (targetUserId && (sId === targetUserId || rId === targetUserId)) return false;
+            return true;
+          });
+          localStorage.setItem('fuhsi_direct_messages_db', JSON.stringify(filteredMsgs));
+        }
+      }
+
+      const convsRaw = localStorage.getItem('fuhsi_conversations_db');
+      if (convsRaw) {
+        const convs: any[] = JSON.parse(convsRaw);
+        if (Array.isArray(convs)) {
+          const updatedConvs = convs.filter((c) => {
+            const other = (c.otherUserNickname || '').trim().toLowerCase().replace(/^@/, '');
+            if (cleanNick && other === cleanNick) return false;
+            return true;
+          });
+          localStorage.setItem('fuhsi_conversations_db', JSON.stringify(updatedConvs));
+        }
+      }
+    } catch (e) {
+      console.error('Error purging direct messages:', e);
+    }
+
+    // 8. CASCADE DELETE FOLLOWS
+    try {
+      const fRaw = localStorage.getItem('fuhsi_user_follows_v1');
+      if (fRaw) {
+        const follows: any[] = JSON.parse(fRaw);
+        if (Array.isArray(follows)) {
+          const filtered = follows.filter((f) => {
+            const f1 = (f.followerNickname || '').trim().toLowerCase().replace(/^@/, '');
+            const f2 = (f.followingNickname || '').trim().toLowerCase().replace(/^@/, '');
+            if (cleanNick && (f1 === cleanNick || f2 === cleanNick)) return false;
+            return true;
+          });
+          localStorage.setItem('fuhsi_user_follows_v1', JSON.stringify(filtered));
+        }
+      }
+    } catch (e) {
+      console.error('Error purging follows:', e);
+    }
+
+    // 9. CASCADE DELETE VERIFICATION REQUESTS
+    try {
+      const vRaw = localStorage.getItem('fuhsi_verifications_db');
+      if (vRaw) {
+        const verifs: any[] = JSON.parse(vRaw);
+        if (Array.isArray(verifs)) {
+          const filtered = verifs.filter((v) => {
+            const vNick = (v.applicantNickname || '').trim().toLowerCase().replace(/^@/, '');
+            if (cleanNick && vNick === cleanNick) return false;
+            return true;
+          });
+          localStorage.setItem('fuhsi_verifications_db', JSON.stringify(filtered));
+        }
+      }
+    } catch (e) {
+      console.error('Error purging verifications:', e);
+    }
+
+    // 10. CASCADE DELETE BOOKMARKS
+    try {
+      const bRaw = localStorage.getItem('fuhsi_user_bookmarks_db');
+      if (bRaw) {
+        const bMap: Record<string, string[]> = JSON.parse(bRaw);
+        if (cleanNick && bMap[cleanNick]) {
+          delete bMap[cleanNick];
+        }
+        Object.keys(bMap).forEach((userKey) => {
+          bMap[userKey] = bMap[userKey].filter((postId) => !deletedPostIds.includes(postId));
+        });
+        localStorage.setItem('fuhsi_user_bookmarks_db', JSON.stringify(bMap));
+      }
+    } catch (e) {
+      console.error('Error purging bookmarks:', e);
+    }
+
+    // 11. Clear user notifications
+    try {
+      if (cleanNick) {
+        localStorage.removeItem(`fuhsi_notifications_v1_${cleanNick}`);
+        localStorage.removeItem(`fuhsi_notifications_read_${cleanNick}`);
+      }
+    } catch (e) {}
+  }
+
+  // 12. ASYNCHRONOUSLY PURGE FIRESTORE
+  deleteUserFromFirestore(targetUserId, cleanNick, cleanEmail).catch((err) =>
+    console.error('Error purging Firestore during permanent account deletion:', err)
+  );
+
+  // 13. PUSH DELETION TO SERVER SYNC
+  pushServerDbSync({
+    deletedUserIds: targetUserId ? [targetUserId] : [],
+    deletedUserNicknames: cleanNick ? [cleanNick] : [],
+    deletedPostIds,
+    deletedCommentIds,
+    deletedMarketplaceItemIds,
+  } as any).catch((err) => console.error('Error syncing deletion to server:', err));
+
+  // 14. DISPATCH CUSTOM EVENTS FOR INSTANT LIVE UI REACTION
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('fuhsi_account_purged', {
+        detail: {
+          userId: targetUserId,
+          nickname: cleanNick,
+          deletedPostIds,
+          deletedCommentIds,
+          deletedMarketplaceItemIds,
+        },
+      })
+    );
+    window.dispatchEvent(new CustomEvent('fuhsi_posts_updated'));
+    window.dispatchEvent(new CustomEvent('fuhsi_comments_updated'));
+    window.dispatchEvent(new CustomEvent('fuhsi_marketplace_updated'));
+    window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated'));
+    window.dispatchEvent(new CustomEvent('fuhsi_user_updated'));
+  }
+
+  return {
+    deletedPostIds,
+    deletedCommentIds,
+    deletedMarketplaceItemIds,
+  };
 }
 
 /**
@@ -191,12 +595,16 @@ export function isModulaAccount(userOrNickname?: Partial<UserProfile> | string |
   if (!userOrNickname) return false;
   if (typeof userOrNickname === 'string') {
     const clean = userOrNickname.trim().toLowerCase().replace(/^@/, '');
-    return clean === 'modula';
+    return clean === 'modula' || clean === 'usr_admin_modula';
   }
   if (typeof userOrNickname === 'object') {
     if (userOrNickname.id === 'usr_admin_modula') return true;
     const nick = (userOrNickname.nickname || '').trim().toLowerCase().replace(/^@/, '');
     if (nick === 'modula') return true;
+    if ((userOrNickname as any).authorNickname) {
+      const aNick = (userOrNickname as any).authorNickname.trim().toLowerCase().replace(/^@/, '');
+      if (aNick === 'modula') return true;
+    }
   }
   return false;
 }
@@ -216,6 +624,10 @@ export function sanitizeUserProfile<T extends Partial<UserProfile>>(user: T): T 
       accountType: 'Admin',
       matricNumber: '',
       isAdmin: true,
+      reputationScore: 0,
+      searchDiscoverable: false,
+      allowDirectMessagesFrom: 'followers',
+      isPrivate: true,
     };
   }
   const cleanNick = (user.nickname || '').trim().toLowerCase().replace(/^@/, '');
@@ -239,6 +651,24 @@ export function sanitizeUserProfile<T extends Partial<UserProfile>>(user: T): T 
 
 export function sanitizeModulaProfile<T extends Partial<UserProfile>>(user: T): T {
   return sanitizeUserProfile(user);
+}
+
+/**
+ * Filter out internal platform control account (@modula) from any user-facing list
+ */
+export function filterOutModula<T extends Partial<UserProfile> | { nickname?: string; authorNickname?: string; sellerNickname?: string; id?: string }>(list: T[]): T[] {
+  if (!Array.isArray(list)) return [];
+  return list.filter((item) => {
+    if (!item) return false;
+    if (isModulaAccount(item)) return false;
+    const nick = (item as any).nickname || (item as any).authorNickname || (item as any).sellerNickname || '';
+    if (isModulaAccount(nick)) return false;
+    const clean = typeof nick === 'string' ? nick.trim().toLowerCase().replace(/^@/, '') : '';
+    if (clean === 'modula') return false;
+    const id = (item as any).id || '';
+    if (id === 'usr_admin_modula') return false;
+    return true;
+  });
 }
 
 /**
@@ -303,43 +733,22 @@ export const DEFAULT_USERS_LIST: UserProfile[] = [
     emergencyHomePhone: '08000000000',
     department: '',
     level: '',
-    bio: 'Platform Administrator (@modula).',
+    bio: 'Internal Platform Control Account (@modula).',
     avatarKey: '1',
     badgeType: 'GOLD',
     badgeTitle: 'Official Admin',
-    reputationScore: 9999,
+    reputationScore: 0,
     isVerified: true,
     isApproved: true,
     isDeclined: false,
     isAdmin: true,
+    searchDiscoverable: false,
+    allowDirectMessagesFrom: 'followers',
+    isPrivate: true,
     savedPassword: 'ibraheem',
     password: 'ibraheem',
     joinedDate: 'Sep 2024',
     createdAt: '2024-09-01T00:00:00.000Z',
-  },
-  {
-    id: 'usr_student_adedeji_ayo_24prt007',
-    nickname: '@Deji',
-    accountType: 'Student',
-    realName: 'Adedeji Ayo',
-    matricNumber: '24/PRT/007',
-    studentEmail: 'faithlucas.co@gmail.com',
-    emergencyHomePhone: '091562232018',
-    department: 'Prosthetics and Orthotics',
-    level: '200L',
-    bio: 'FUHSI Student | Prosthetics and Orthotics (200L)',
-    avatarKey: 'caduceus',
-    badgeType: 'BLUE',
-    badgeTitle: 'FUHSI Student',
-    reputationScore: 180,
-    isVerified: true,
-    isApproved: true,
-    isDeclined: false,
-    isAdmin: false,
-    savedPassword: 'password123',
-    password: 'password123',
-    joinedDate: 'Oct 2024',
-    createdAt: '2024-10-01T00:00:00.000Z',
   },
 ];
 
@@ -415,7 +824,7 @@ export function saveStoredUsers(users: UserProfile[]): void {
 
 
 /**
- * Find user by nickname (safe, non-recursive)
+ * Find user by nickname (safe, non-recursive, excludes deleted accounts)
  */
 export function findUserByNickname(nickname: string): UserProfile | undefined {
   if (!nickname) return undefined;
@@ -426,7 +835,9 @@ export function findUserByNickname(nickname: string): UserProfile | undefined {
       if (activeStr) {
         const activeUser = JSON.parse(activeStr);
         if ((activeUser?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean) {
-          return sanitizeUserProfile(activeUser);
+          if (!isUserPermanentlyDeleted(activeUser)) {
+            return sanitizeUserProfile(activeUser);
+          }
         }
       }
       const stored = localStorage.getItem(USER_DB_KEY);
@@ -434,13 +845,15 @@ export function findUserByNickname(nickname: string): UserProfile | undefined {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
           const found = parsed.find((u) => (u?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
-          if (found) return sanitizeUserProfile(found);
+          if (found && !isUserPermanentlyDeleted(found)) {
+            return sanitizeUserProfile(found);
+          }
         }
       }
     }
   } catch (e) {}
   const fallback = DEFAULT_USERS_LIST.find((u) => (u?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
-  return fallback ? sanitizeUserProfile(fallback) : undefined;
+  return fallback && !isUserPermanentlyDeleted(fallback) ? sanitizeUserProfile(fallback) : undefined;
 }
 
 /**
@@ -488,9 +901,10 @@ export function isGuestAccount(userOrNickname?: Partial<UserProfile> | string | 
 }
 
 /**
- * Get account category: 'Student' | 'Guest'
+ * Get account category: 'Admin' | 'Student' | 'Guest'
  */
-export function getUserAccountType(userOrNickname?: Partial<UserProfile> | string | null | any): 'Student' | 'Guest' {
+export function getUserAccountType(userOrNickname?: Partial<UserProfile> | string | null | any): 'Admin' | 'Student' | 'Guest' {
+  if (isModulaAccount(userOrNickname)) return 'Admin';
   return isGuestAccount(userOrNickname) ? 'Guest' : 'Student';
 }
 
@@ -541,11 +955,11 @@ export function getUserIdentitySubtitle(
 }
 
 /**
- * Calculate the total count of approved, active community members
+ * Calculate the total count of approved, active community members (excluding platform control account @modula)
  */
 export function getApprovedMembersCount(): number {
   const users = getStoredUsers();
-  const approved = users.filter((u) => u.isApproved === true && !u.isDeclined);
+  const approved = users.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin);
   return approved.length;
 }
 

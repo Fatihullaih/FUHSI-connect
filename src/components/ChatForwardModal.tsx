@@ -4,7 +4,7 @@ import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { normalizeNickname, extractPureStudentHandle } from '../utils/messagingUtils';
-import { isGuestAccount } from '../utils/userDbUtils';
+import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { Search, X, Forward, Send } from 'lucide-react';
 
 interface ChatForwardModalProps {
@@ -42,7 +42,7 @@ export const ChatForwardModal: React.FC<ChatForwardModalProps> = ({
     conversations.forEach((conv) => {
       const pure = extractPureStudentHandle(conv.otherUserNickname, myNickname);
       const clean = normalizeNickname(pure);
-      if (clean && clean !== cleanMe && !map.has(clean)) {
+      if (clean && clean !== cleanMe && clean !== 'modula' && !isModulaAccount(pure) && !map.has(clean)) {
         map.set(clean, {
           nickname: pure,
           avatarKey: conv.otherUserAvatarKey,
@@ -57,7 +57,7 @@ export const ChatForwardModal: React.FC<ChatForwardModalProps> = ({
     // Add from allUsers
     allUsers.forEach((user) => {
       const clean = normalizeNickname(user.nickname);
-      if (clean && clean !== cleanMe && !map.has(clean)) {
+      if (clean && clean !== cleanMe && clean !== 'modula' && !isModulaAccount(user) && !map.has(clean)) {
         map.set(clean, {
           nickname: user.nickname.startsWith('@') ? user.nickname : `@${user.nickname}`,
           avatarKey: user.avatarKey,

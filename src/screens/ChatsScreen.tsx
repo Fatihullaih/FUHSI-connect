@@ -4,7 +4,7 @@ import { AvatarIcon } from '../components/AvatarIcon';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
+import { isGuestAccount, isModulaAccount, isUserPermanentlyDeleted } from '../utils/userDbUtils';
 import { isUserFollowing, getStoredFollows } from '../utils/followUtils';
 import { 
   getStoredDirectMessages, 
@@ -81,12 +81,16 @@ import {
   Plus,
   Users,
   Eraser,
-  LogOut
+  LogOut,
+  UserX,
+  Megaphone,
+  Shield
 } from 'lucide-react';
 
 interface ChatsScreenProps {
   userProfile: UserProfile;
   onOpenProfile?: (nickname: string) => void;
+  onOpenAdminConsole?: (deskId?: string, tab?: any) => void;
   initialConversationId?: string;
   initialRecipientNickname?: string;
   initialRecipient?: { nickname: string; avatarKey?: string; avatarUrl?: string } | null;
@@ -98,6 +102,7 @@ interface ChatsScreenProps {
 export const ChatsScreen: React.FC<ChatsScreenProps> = ({
   userProfile,
   onOpenProfile,
+  onOpenAdminConsole,
   initialConversationId,
   initialRecipientNickname,
   initialRecipient,
@@ -109,6 +114,47 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 
   if (isCurrentUserGuest) {
     return null;
+  }
+
+  if (isModulaAccount(userProfile)) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6 bg-slate-50 min-h-[60vh]">
+        <div className="max-w-md w-full bg-white rounded-3xl p-6 sm:p-8 text-center shadow-lg border border-slate-200 space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200 shadow-xs">
+            <ShieldAlert size={32} />
+          </div>
+          <div>
+            <h2 className="text-lg font-black text-slate-900">
+              Admin Platform Control Account (@modula)
+            </h2>
+            <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+              @modula functions strictly as the internal controlling account and is completely invisible to ordinary campus users. It does not participate in normal student chats, conversations, or peer groups.
+            </p>
+          </div>
+          <div className="p-3.5 bg-teal-50 border border-teal-200 rounded-2xl text-left text-xs text-teal-900 space-y-2">
+            <div className="font-extrabold flex items-center gap-1.5 text-teal-800">
+              <Megaphone size={15} />
+              <span>Official Announcements & Communications:</span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-teal-700">
+              To send administrative notices, broadcast updates, or direct platform alerts, use the Official Updates system in the Admin Console.
+            </p>
+            <p className="text-[11px] leading-relaxed text-teal-700">
+              To engage in student discussions or chat with peers, please log in with your separate personal account.
+            </p>
+          </div>
+          {onOpenAdminConsole && (
+            <button
+              onClick={() => onOpenAdminConsole(undefined, 'OFFICIAL_UPDATES')}
+              className="w-full py-3 bg-teal-800 hover:bg-teal-900 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Shield size={15} />
+              <span>Open Admin Console & Updates</span>
+            </button>
+          )}
+        </div>
+      </div>
+    );
   }
 
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
@@ -127,6 +173,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     badgeType?: string;
     badgeTitle?: string;
     isVerified?: boolean;
+    isDeleted?: boolean;
   } | null>(null);
 
   const [activeMessages, setActiveMessages] = useState<DirectMessage[]>([]);
@@ -179,14 +226,22 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
   }, [cleanMyNickname, conversations]);
 
   // Clean recipient display handle (e.g. '@deji') - strictly pure student nickname, never conv_admin_deji
+  const isDeletedRecipient = useMemo(() => {
+    if (activeRecipient?.isDeleted) return true;
+    if (activeRecipient?.nickname === 'Account Deleted') return true;
+    const clean = normalizeNickname(activeRecipient?.nickname || '');
+    return Boolean(clean && isUserPermanentlyDeleted(clean));
+  }, [activeRecipient]);
+
   const cleanRecipientDisplay = useMemo(() => {
+    if (isDeletedRecipient) return 'Account Deleted';
     if (!activeRecipient?.nickname) return '@Student';
     return extractPureStudentHandle(activeRecipient.nickname, myNickname);
-  }, [activeRecipient, myNickname]);
+  }, [activeRecipient, myNickname, isDeletedRecipient]);
 
   // Check if recipient is online / active in real-time
   const isRecipientOnline = useMemo(() => {
-    if (!activeRecipient) return false;
+    if (!activeRecipient || isDeletedRecipient) return false;
     const cleanTarget = normalizeNickname(cleanRecipientDisplay);
     let match = allUsers.find(
       (u) => normalizeNickname(u.nickname) === cleanTarget || u.id === cleanTarget
@@ -231,6 +286,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       .filter((m) => {
         const clean = normalizeNickname(m);
         if (clean === cleanMyNickname) return false;
+        if (clean === 'modula' || isModulaAccount(clean)) return false;
         if (!q) return true;
         return clean.toLowerCase().includes(q);
       })
@@ -275,9 +331,10 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
   const refreshConversations = () => {
     if (!myNickname) return;
     let userConvs = getUserConversations(myNickname);
-    if (isCurrentUserGuest) {
-      userConvs = userConvs.filter((c) => isModulaAccount(c.otherUserNickname));
-    }
+    // Exclude @modula control account from normal chat
+    userConvs = userConvs.filter(
+      (c) => !isModulaAccount(c.otherUserNickname) && normalizeNickname(c.otherUserNickname) !== 'modula'
+    );
     setConversations((prev) => {
       if (prev.length === userConvs.length) {
         const isSame = prev.every((p, i) => {
@@ -365,15 +422,34 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       const userMatch = allUsers.find(
         (u) => normalizeNickname(u.nickname) === cleanTarget || u.id === cleanTarget || u.studentEmail?.toLowerCase() === cleanTarget
       );
-      const bInfo = getUserBadgeInfo(pureNick, userMatch);
-      setActiveRecipient({
-        nickname: pureNick,
-        avatarKey: conv.otherUserAvatarKey || userMatch?.avatarKey || '1',
-        avatarUrl: conv.otherUserAvatarUrl || userMatch?.avatarUrl,
-        badgeType: bInfo.badgeType,
-        badgeTitle: bInfo.badgeTitle,
-        isVerified: bInfo.isVerified,
-      });
+      const isDeleted = Boolean(
+        conv.otherUserIsDeleted ||
+        (conv as any).isDeletedAccount ||
+        (!userMatch && isUserPermanentlyDeleted(cleanTarget)) ||
+        (userMatch && isUserPermanentlyDeleted(userMatch))
+      );
+
+      if (isDeleted) {
+        setActiveRecipient({
+          nickname: 'Account Deleted',
+          avatarKey: '1',
+          badgeType: 'NONE',
+          badgeTitle: '',
+          isVerified: false,
+          isDeleted: true,
+        });
+      } else {
+        const bInfo = getUserBadgeInfo(pureNick, userMatch);
+        setActiveRecipient({
+          nickname: pureNick,
+          avatarKey: conv.otherUserAvatarKey || userMatch?.avatarKey || '1',
+          avatarUrl: conv.otherUserAvatarUrl || userMatch?.avatarUrl,
+          badgeType: bInfo.badgeType,
+          badgeTitle: bInfo.badgeTitle,
+          isVerified: bInfo.isVerified,
+          isDeleted: false,
+        });
+      }
     } else {
       // Resolve for new conversations with no existing message records
       const rawTarget = initialRecipient?.nickname || initialRecipientNickname || activeConvId;
@@ -382,21 +458,37 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       const userMatch = allUsers.find(
         (u) => normalizeNickname(u.nickname) === cleanTarget || u.id === cleanTarget || u.studentEmail?.toLowerCase() === cleanTarget
       );
+      const isDeleted = Boolean(
+        (!userMatch && isUserPermanentlyDeleted(cleanTarget)) ||
+        (userMatch && isUserPermanentlyDeleted(userMatch))
+      );
 
-      setActiveRecipient((prev) => {
-        if (prev && normalizeNickname(prev.nickname) === cleanTarget && prev.avatarKey) {
-          return prev;
-        }
-        const bInfo = getUserBadgeInfo(pureNick, userMatch);
-        return {
-          nickname: pureNick,
-          avatarKey: initialRecipient?.avatarKey || userMatch?.avatarKey || '1',
-          avatarUrl: initialRecipient?.avatarUrl || userMatch?.avatarUrl,
-          badgeType: bInfo.badgeType,
-          badgeTitle: bInfo.badgeTitle,
-          isVerified: bInfo.isVerified,
-        };
-      });
+      if (isDeleted) {
+        setActiveRecipient({
+          nickname: 'Account Deleted',
+          avatarKey: '1',
+          badgeType: 'NONE',
+          badgeTitle: '',
+          isVerified: false,
+          isDeleted: true,
+        });
+      } else {
+        setActiveRecipient((prev) => {
+          if (prev && normalizeNickname(prev.nickname) === cleanTarget && prev.avatarKey && !prev.isDeleted) {
+            return prev;
+          }
+          const bInfo = getUserBadgeInfo(pureNick, userMatch);
+          return {
+            nickname: pureNick,
+            avatarKey: initialRecipient?.avatarKey || userMatch?.avatarKey || '1',
+            avatarUrl: initialRecipient?.avatarUrl || userMatch?.avatarUrl,
+            badgeType: bInfo.badgeType,
+            badgeTitle: bInfo.badgeTitle,
+            isVerified: bInfo.isVerified,
+            isDeleted: false,
+          };
+        });
+      }
     }
   }, [activeConvId, conversations, groups, initialRecipientNickname, allUsers, cleanMyNickname]);
 
@@ -520,11 +612,12 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       return;
     }
 
-    const convId = getConversationId(myNickname, pureTarget);
-    if (isCurrentUserGuest && !isModulaAccount(pureTarget)) {
-      showToast('Guest accounts can only exchange private messages directly with Campus Administration (@modula).', 'info');
+    if (cleanTarget === 'modula' || isModulaAccount(pureTarget) || pureTarget === 'usr_admin_modula') {
+      showToast('This account is an internal platform control account and does not participate in chat.', 'info');
       return;
     }
+
+    const convId = getConversationId(myNickname, pureTarget);
     setActiveConvId(convId);
 
     // Resolve user details
@@ -618,6 +711,11 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     if (e) e.preventDefault();
     if (!inputText.trim() || !activeConvId || (!activeRecipient && !activeGroup)) return;
 
+    if (activeRecipient?.isDeleted) {
+      showToast('This account has been permanently deleted and cannot receive messages.', 'error');
+      return;
+    }
+
     if (restrictionInfo.isRestricted) {
       showToast(`Chat Restricted: ${restrictionInfo.reason} (${formatRestrictionRemainingTime(restrictionInfo.restrictedUntil)} remaining).`, 'error');
       return;
@@ -677,11 +775,18 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       return;
     }
 
+    const cleanRecipient = normalizeNickname(cleanRecipientDisplay);
+    const recipientUser = allUsers.find(
+      (u) => normalizeNickname(u.nickname) === cleanRecipient || u.id === cleanRecipient
+    );
+
     const newMsg: DirectMessage = {
       id: `dm_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       conversationId: activeConvId,
       senderNickname: myNickname.startsWith('@') ? myNickname : `@${myNickname}`,
       receiverNickname: cleanRecipientDisplay,
+      senderId: userProfile?.id,
+      receiverId: recipientUser?.id,
       text: inputText.trim(),
       timestamp: new Date().toISOString(),
       ...(replyingTo ? {
@@ -916,26 +1021,27 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
   // Filtered students for New Chat
   const eligibleNewChatStudents = useMemo(() => {
     if (isCurrentUserGuest) {
-      return allUsers.filter((u) => isModulaAccount(u));
+      return [];
     }
     const q = newChatSearch.toLowerCase().replace(/^@/, '');
     const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
     return allUsers
       .filter((u) => {
-        if (!u || isDemoUser(u) || isDemoNickname(u.nickname)) return false;
+        if (!u || isDemoUser(u) || isDemoNickname(u.nickname) || isUserPermanentlyDeleted(u)) return false;
+        if (isModulaAccount(u)) return false;
         if (u.isDeclined || u.verificationStatus === 'declined') return false;
         const nick = normalizeNickname(u.nickname);
-        if (!nick || nick === cleanMyNickname) return false;
+        if (!nick || nick === cleanMyNickname || nick === 'modula') return false;
         if (nick === 'yi' || nick === '@yi') return false;
 
         // Privacy: If user disabled search discovery, only allow if current user already follows them or is admin
-        if (u.searchDiscoverable === false && !userProfile?.isAdmin && !isModulaAccount(u)) {
+        if (u.searchDiscoverable === false && !userProfile?.isAdmin) {
           const amIFollowing = isUserFollowing(cleanMyNickname, nick, effectiveFollows);
           if (!amIFollowing) return false;
         }
 
         // Privacy: If user only accepts DMs from followers
-        if (u.allowDirectMessagesFrom === 'followers' && !userProfile?.isAdmin && !isModulaAccount(u)) {
+        if (u.allowDirectMessagesFrom === 'followers' && !userProfile?.isAdmin) {
           const amIFollowing = isUserFollowing(cleanMyNickname, nick, effectiveFollows);
           if (!amIFollowing) return false;
         }
@@ -1330,93 +1436,131 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                         : 'bg-white hover:bg-slate-50 border-l-[5px] border-l-transparent'
                     }`}
                   >
-                    {/* Avatar */}
-                    <div className="relative shrink-0">
-                      <div
-                        className={`w-11 h-11 rounded-2xl bg-teal-900 flex items-center justify-center overflow-hidden border transition-all ${
-                          hasUnread
-                            ? 'border-emerald-500 ring-2 ring-emerald-500/50 shadow-xs'
-                            : 'border-slate-200'
-                        }`}
-                      >
-                        <AvatarIcon
-                          avatarKey={conv.otherUserAvatarKey}
-                          avatarUrl={conv.otherUserAvatarUrl}
-                          sizeClassName="w-full h-full object-cover"
-                        />
-                      </div>
-                      {hasUnread && (
-                        <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 bg-emerald-600 text-white rounded-full text-[10px] font-black flex items-center justify-center border-2 border-white shadow-xs animate-bounce">
-                          {conv.unreadCount}
-                        </span>
-                      )}
-                    </div>
+                    {(() => {
+                      const otherHandle = extractPureStudentHandle(conv.otherUserNickname, myNickname);
+                      const cleanTarget = normalizeNickname(otherHandle);
+                      const userMatch = allUsers.find(
+                        (u) => normalizeNickname(u.nickname) === cleanTarget || u.id === cleanTarget || u.studentEmail?.toLowerCase() === cleanTarget
+                      );
+                      const isDeletedAccount = Boolean(
+                        conv.otherUserIsDeleted ||
+                        (conv as any).isDeletedAccount ||
+                        (!userMatch && isUserPermanentlyDeleted(cleanTarget)) ||
+                        (userMatch && isUserPermanentlyDeleted(userMatch))
+                      );
 
-                    {/* Meta info: username & nickname, last message, unread status */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-1 mb-0.5">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <span
-                            className={`truncate ${
-                              hasUnread ? 'font-black text-slate-950 text-sm tracking-tight' : 'font-bold text-slate-700 text-xs'
-                            }`}
-                          >
-                            {extractPureStudentHandle(conv.otherUserNickname, myNickname)}
-                          </span>
-                          {(() => {
-                            const bInfo = getUserBadgeInfo(conv.otherUserNickname);
-                            return (
-                              <VerificationBadge
-                                isVerified={bInfo.isVerified}
-                                badgeType={bInfo.badgeType as any}
-                                size={12}
-                              />
-                            );
-                          })()}
-                        </div>
-                        <span
-                          className={`shrink-0 ${
-                            hasUnread
-                              ? 'text-[10px] font-black text-emerald-800 bg-emerald-200/70 px-2 py-0.5 rounded-full'
-                              : 'text-[10px] font-medium text-slate-400'
-                          }`}
-                        >
-                          {conv.lastTimestamp}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 text-[11px] truncate leading-tight min-w-0 flex-1">
-                          {isLastMsgFromMe ? (
-                            conv.lastMessageIsRead ? (
-                              <span title="Read" className="inline-flex shrink-0 text-sky-500">
-                                <CheckCheck size={13} className="text-sky-500 stroke-[2.5]" />
+                      return (
+                        <>
+                          {/* Avatar */}
+                          <div className="relative shrink-0">
+                            <div
+                              className={`w-11 h-11 rounded-2xl flex items-center justify-center overflow-hidden border transition-all ${
+                                isDeletedAccount
+                                  ? 'bg-slate-200 dark:bg-slate-700 text-slate-500 border-slate-300 dark:border-slate-600'
+                                  : 'bg-teal-900 border-slate-200'
+                              } ${
+                                hasUnread && !isDeletedAccount
+                                  ? 'border-emerald-500 ring-2 ring-emerald-500/50 shadow-xs'
+                                  : ''
+                              }`}
+                            >
+                              {isDeletedAccount ? (
+                                <UserX size={20} className="text-slate-400" />
+                              ) : (
+                                <AvatarIcon
+                                  avatarKey={conv.otherUserAvatarKey}
+                                  avatarUrl={conv.otherUserAvatarUrl}
+                                  sizeClassName="w-full h-full object-cover"
+                                />
+                              )}
+                            </div>
+                            {hasUnread && !isDeletedAccount && (
+                              <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 bg-emerald-600 text-white rounded-full text-[10px] font-black flex items-center justify-center border-2 border-white shadow-xs animate-bounce">
+                                {conv.unreadCount}
                               </span>
-                            ) : (
-                              <span title="Sent (Delivered)" className="inline-flex shrink-0 text-slate-400">
-                                <CheckCheck size={13} className="text-slate-400 stroke-[1.75]" />
-                              </span>
-                            )
-                          ) : hasUnread ? (
-                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shrink-0 inline-block shadow-xs animate-pulse" />
-                          ) : null}
-                          <p
-                            className={`truncate ${
-                              hasUnread ? 'font-black text-slate-950 text-xs' : 'font-normal text-slate-500 text-[11px]'
-                            }`}
-                          >
-                            {conv.lastMessage}
-                          </p>
-                        </div>
+                            )}
+                          </div>
 
-                        {hasUnread && (
-                          <span className="shrink-0 px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black leading-tight flex items-center gap-1 shadow-xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-200 animate-ping shrink-0" />
-                            <span>{conv.unreadCount} NEW</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                          {/* Meta info: username & nickname, last message, unread status */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1 mb-0.5">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span
+                                  className={`truncate ${
+                                    isDeletedAccount
+                                      ? 'font-bold text-slate-500 dark:text-slate-400 text-xs'
+                                      : hasUnread
+                                      ? 'font-black text-slate-950 text-sm tracking-tight'
+                                      : 'font-bold text-slate-700 text-xs'
+                                  }`}
+                                >
+                                  {isDeletedAccount ? 'Account Deleted' : otherHandle}
+                                </span>
+                                {!isDeletedAccount && (() => {
+                                  const bInfo = getUserBadgeInfo(conv.otherUserNickname);
+                                  return (
+                                    <VerificationBadge
+                                      isVerified={bInfo.isVerified}
+                                      badgeType={bInfo.badgeType as any}
+                                      size={12}
+                                    />
+                                  );
+                                })()}
+                              </div>
+                              <span
+                                className={`shrink-0 ${
+                                  hasUnread && !isDeletedAccount
+                                    ? 'text-[10px] font-black text-emerald-800 bg-emerald-200/70 px-2 py-0.5 rounded-full'
+                                    : 'text-[10px] font-medium text-slate-400'
+                                }`}
+                              >
+                                {conv.lastTimestamp}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 text-[11px] truncate leading-tight min-w-0 flex-1">
+                                {isDeletedAccount ? (
+                                  <p className="font-normal text-slate-400 dark:text-slate-500 text-[11px] italic truncate">
+                                    This account is no longer available.
+                                  </p>
+                                ) : (
+                                  <>
+                                    {isLastMsgFromMe ? (
+                                      conv.lastMessageIsRead ? (
+                                        <span title="Read" className="inline-flex shrink-0 text-sky-500">
+                                          <CheckCheck size={13} className="text-sky-500 stroke-[2.5]" />
+                                        </span>
+                                      ) : (
+                                        <span title="Sent (Delivered)" className="inline-flex shrink-0 text-slate-400">
+                                          <CheckCheck size={13} className="text-slate-400 stroke-[1.75]" />
+                                        </span>
+                                      )
+                                    ) : hasUnread ? (
+                                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shrink-0 inline-block shadow-xs animate-pulse" />
+                                    ) : null}
+                                    <p
+                                      className={`truncate ${
+                                        hasUnread ? 'font-black text-slate-950 text-xs' : 'font-normal text-slate-500 text-[11px]'
+                                      }`}
+                                    >
+                                      {conv.lastMessage}
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+
+                              {hasUnread && !isDeletedAccount && (
+                                <span className="shrink-0 px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black leading-tight flex items-center gap-1 shadow-xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-200 animate-ping shrink-0" />
+                                  <span>{conv.unreadCount} NEW</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
 
                     {/* Delete Conversation action */}
                     <button
@@ -1511,26 +1655,32 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                     </button>
 
                     <div 
-                      onClick={() => onOpenProfile && onOpenProfile(cleanRecipientDisplay)}
-                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-teal-900 flex items-center justify-center overflow-hidden border border-slate-200 cursor-pointer shrink-0 hover:scale-105 transition-transform"
-                      title="View student profile"
+                      onClick={() => !isDeletedRecipient && onOpenProfile && onOpenProfile(cleanRecipientDisplay)}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-teal-900 flex items-center justify-center overflow-hidden border border-slate-200 shrink-0 ${
+                        isDeletedRecipient ? 'cursor-default opacity-60' : 'cursor-pointer hover:scale-105 transition-transform'
+                      }`}
+                      title={isDeletedRecipient ? 'Account Deleted' : 'View student profile'}
                     >
                       <AvatarIcon
-                        avatarKey={activeRecipient?.avatarKey}
-                        avatarUrl={activeRecipient?.avatarUrl}
+                        avatarKey={isDeletedRecipient ? '1' : activeRecipient?.avatarKey}
+                        avatarUrl={isDeletedRecipient ? undefined : activeRecipient?.avatarUrl}
                         sizeClassName="w-full h-full object-cover"
                       />
                     </div>
 
                     <div className="min-w-0">
                       <div 
-                        onClick={() => onOpenProfile && onOpenProfile(cleanRecipientDisplay)}
-                        className="flex items-center gap-1.5 cursor-pointer group leading-tight"
+                        onClick={() => !isDeletedRecipient && onOpenProfile && onOpenProfile(cleanRecipientDisplay)}
+                        className={`flex items-center gap-1.5 leading-tight ${
+                          isDeletedRecipient ? 'cursor-default' : 'cursor-pointer group'
+                        }`}
                       >
-                        <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate group-hover:text-teal-700 transition-colors">
-                          {cleanRecipientDisplay}
+                        <h2 className={`text-xs sm:text-sm font-black truncate transition-colors ${
+                          isDeletedRecipient ? 'text-slate-500 dark:text-slate-400' : 'text-slate-900 group-hover:text-teal-700'
+                        }`}>
+                          {isDeletedRecipient ? 'Account Deleted' : cleanRecipientDisplay}
                         </h2>
-                        {(() => {
+                        {!isDeletedRecipient && (() => {
                           const bInfo = getUserBadgeInfo(cleanRecipientDisplay);
                           return (
                             <VerificationBadge
@@ -1543,7 +1693,11 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1 text-[10px] font-bold mt-0.5 leading-tight">
-                        {isRecipientOnline ? (
+                        {isDeletedRecipient ? (
+                          <span className="font-normal italic text-slate-400 dark:text-slate-500">
+                            This account is no longer available.
+                          </span>
+                        ) : isRecipientOnline ? (
                           <span className="flex items-center gap-1 text-emerald-600 font-extrabold">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 inline-block animate-pulse" />
                             <span>• Online</span>
@@ -1768,7 +1922,12 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                   </div>
                 )}
 
-                {restrictionInfo.isRestricted ? (
+                {isDeletedRecipient ? (
+                  <div className="p-3 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-center text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center justify-center gap-2">
+                    <UserX size={16} className="text-slate-400 shrink-0" />
+                    <span>This account has been deleted. You cannot send messages to this conversation.</span>
+                  </div>
+                ) : restrictionInfo.isRestricted ? (
                   <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-center text-xs font-bold text-rose-800 flex items-center justify-center gap-1.5">
                     <BadgeAlert size={15} />
                     <span>You cannot send messages while chat is restricted ({formatRestrictionRemainingTime(restrictionInfo.restrictedUntil)} remaining).</span>

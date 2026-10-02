@@ -2,6 +2,7 @@ import { DirectMessage, ChatConversation, CampusNotification, ChatReport, Preser
 import { pushServerDbSync } from './apiSync';
 import { saveDirectMessageToFirestore } from '../lib/firestoreSync';
 import { evaluateChatMessage } from './safetyFilter';
+import { isUserPermanentlyDeleted } from './userDbUtils';
 
 export const DIRECT_MESSAGES_KEY = 'fuhsi_direct_messages_db';
 export const CONVERSATIONS_KEY = 'fuhsi_conversations_db';
@@ -236,7 +237,14 @@ export function getStoredDirectMessages(): DirectMessage[] {
     const stored = localStorage.getItem(DIRECT_MESSAGES_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((m) => {
+          if (!m) return false;
+          if (m.senderId && isUserPermanentlyDeleted(m.senderId)) return false;
+          if (m.receiverId && isUserPermanentlyDeleted(m.receiverId)) return false;
+          return true;
+        });
+      }
     }
   } catch (err) {
     console.error('Error reading direct messages from storage:', err);
@@ -281,6 +289,8 @@ export function getStoredConversations(): ChatConversation[] {
 export function getUserConversations(userNickname: string): ChatConversation[] {
   if (!userNickname) return [];
   const cleanMe = normalizeNickname(userNickname);
+  if (cleanMe === 'modula' || isModulaAccount(userNickname)) return [];
+
   const allMessages = getStoredDirectMessages();
   const storedConvs = getStoredConversations();
 
@@ -300,6 +310,10 @@ export function getUserConversations(userNickname: string): ChatConversation[] {
 
     const sender = normalizeNickname(msg.senderNickname);
     const receiver = normalizeNickname(msg.receiverNickname);
+
+    if (sender === 'modula' || receiver === 'modula' || isModulaAccount(sender) || isModulaAccount(receiver)) {
+      return;
+    }
 
     if (sender === cleanMe || receiver === cleanMe) {
       const rawOther = sender === cleanMe ? msg.receiverNickname : msg.senderNickname;
@@ -325,12 +339,16 @@ export function getUserConversations(userNickname: string): ChatConversation[] {
     }
 
     const cleanOther = normalizeNickname(data.otherUser);
+    if (cleanOther === 'modula' || isModulaAccount(cleanOther) || isModulaAccount(data.otherUser)) {
+      return;
+    }
     // Lookup user avatar and verification from users cache
     let otherAvatarKey = '1';
     let otherAvatarUrl: string | undefined;
     let otherIsVerified = false;
     let otherBadgeType = 'GREEN';
     let otherBadgeTitle = 'FUHSI Student';
+    let otherUserId: string | undefined;
 
     try {
       const uStr = localStorage.getItem('fuhsi_users_db');
@@ -340,6 +358,7 @@ export function getUserConversations(userNickname: string): ChatConversation[] {
           (u) => normalizeNickname(u.nickname) === cleanOther || u.id === data.otherUser
         );
         if (match) {
+          otherUserId = match.id;
           otherAvatarKey = match.avatarKey || '1';
           otherAvatarUrl = match.avatarUrl;
           otherIsVerified = Boolean(match.isVerified || match.verificationStatus === 'approved');
@@ -349,20 +368,25 @@ export function getUserConversations(userNickname: string): ChatConversation[] {
       }
     } catch (e) {}
 
+    const isOtherDeleted = isUserPermanentlyDeleted(otherUserId || cleanOther);
+
     // Calculate unread count specifically for incoming unread messages for this user
-    const unreadMessagesCount = allMessages.filter((m) => {
+    const unreadMessagesCount = isOtherDeleted ? 0 : allMessages.filter((m) => {
       const mConvId = m.conversationId || getConversationId(m.senderNickname, m.receiverNickname);
       return mConvId === convId && normalizeNickname(m.receiverNickname) === cleanMe && !m.isRead;
     }).length;
 
     result.push({
       id: convId,
-      otherUserNickname: data.otherUser.startsWith('@') ? data.otherUser : `@${data.otherUser}`,
-      otherUserAvatarKey: otherAvatarKey,
-      otherUserAvatarUrl: otherAvatarUrl,
-      otherUserIsVerified: otherIsVerified,
-      otherUserBadgeType: otherBadgeType,
-      otherUserBadgeTitle: otherBadgeTitle,
+      otherUserNickname: isOtherDeleted ? 'Account Deleted' : (data.otherUser.startsWith('@') ? data.otherUser : `@${data.otherUser}`),
+      originalOtherNickname: data.otherUser.startsWith('@') ? data.otherUser : `@${data.otherUser}`,
+      otherUserId: otherUserId,
+      otherUserIsDeleted: isOtherDeleted,
+      otherUserAvatarKey: isOtherDeleted ? '1' : otherAvatarKey,
+      otherUserAvatarUrl: isOtherDeleted ? undefined : otherAvatarUrl,
+      otherUserIsVerified: isOtherDeleted ? false : otherIsVerified,
+      otherUserBadgeType: isOtherDeleted ? 'NONE' : otherBadgeType,
+      otherUserBadgeTitle: isOtherDeleted ? '' : otherBadgeTitle,
       lastMessage: data.lastMsg.text,
       lastTimestamp: formatMessageTime(data.lastMsg.timestamp),
       lastSenderNickname: data.lastMsg.senderNickname,

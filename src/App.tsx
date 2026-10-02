@@ -12,7 +12,7 @@ import {
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
 import { useAdminPendingCounts } from './utils/adminAlertUtils';
-import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate } from './utils/userDbUtils';
+import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate } from './utils/userDbUtils';
 import {
   fetchServerDb,
   pushServerDbSync,
@@ -212,12 +212,88 @@ export const App: React.FC = () => {
         setNotifTrigger((prev) => prev + 1);
       }
     };
+    const handleAccountPurged = (e: any) => {
+      const { userId, nickname, deletedPostIds } = e.detail || {};
+      const cleanNick = (nickname || '').toLowerCase().replace(/^@/, '');
+      const delSet = new Set<string>(deletedPostIds || []);
+
+      setPosts((prev) =>
+        prev
+          .filter(
+            (p) =>
+              !delSet.has(p.id) &&
+              (p.authorNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+              (p as any).authorId !== userId
+          )
+          .map((p) => {
+            const cleanLiked = (p.likedBy || []).filter(
+              (u) => (u || '').toLowerCase().replace(/^@/, '') !== cleanNick && u !== userId
+            );
+            return {
+              ...p,
+              likedBy: cleanLiked,
+              likes: Math.max(0, cleanLiked.length),
+              likesCount: Math.max(0, cleanLiked.length),
+            };
+          })
+      );
+
+      setComments((prev) =>
+        prev.filter(
+          (c) =>
+            (c.authorNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (c as any).authorId !== userId &&
+            !delSet.has(c.postId)
+        )
+      );
+
+      setMarketplaceItems((prev) =>
+        prev.filter(
+          (m) =>
+            (m.sellerNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (m as any).sellerId !== userId
+        )
+      );
+
+      setPendingMarketplaceItems((prev) =>
+        prev.filter(
+          (m) =>
+            (m.sellerNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (m as any).sellerId !== userId
+        )
+      );
+
+      setVerificationRequests((prev) =>
+        prev.filter(
+          (v) =>
+            (v.applicantNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (v as any).userId !== userId
+        )
+      );
+
+      setAppTotalMembers((prev) => Math.max(0, prev - 1));
+      setNotifTrigger((prev) => prev + 1);
+
+      // If active user is the one deleted, log them out immediately
+      setUserProfile((curr) => {
+        if (curr && (curr.id === userId || (curr.nickname && curr.nickname.toLowerCase().replace(/^@/, '') === cleanNick))) {
+          setIsLoggedIn(false);
+          setShowProfileModal(false);
+          closeModalUI();
+          return EMPTY_USER_PROFILE;
+        }
+        return curr;
+      });
+    };
+
     window.addEventListener('fuhsi-theme-changed', handleThemeEvent);
     window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+    window.addEventListener('fuhsi_account_purged', handleAccountPurged);
     return () => {
       cleanup();
       window.removeEventListener('fuhsi-theme-changed', handleThemeEvent);
       window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+      window.removeEventListener('fuhsi_account_purged', handleAccountPurged);
     };
   }, []);
 
@@ -2466,64 +2542,89 @@ export const App: React.FC = () => {
     const targetMatric = userProfile.matricNumber || '';
 
     try {
-      // 1. Mark permanently deleted in tombstone to prevent resurrection
-      markUserPermanentlyDeleted({
-        id: targetUserId,
+      // 1. Comprehensive cascade account deletion across all platforms, stores, and caches
+      const summary = purgeAccountPermanently({
+        userId: targetUserId,
         nickname: targetNickname,
         studentEmail: targetEmail,
         matricNumber: targetMatric,
       });
 
-      // 2. Remove user from local users DB
-      const currentUsers = getStoredUsers();
-      const updatedUsers = currentUsers.filter((u) => {
-        if (targetUserId && u.id === targetUserId) return false;
-        if (targetNickname && u.nickname?.toLowerCase() === targetNickname.toLowerCase()) return false;
-        if (targetEmail && u.studentEmail?.toLowerCase() === targetEmail.toLowerCase()) return false;
-        return true;
-      });
-      saveStoredUsers(updatedUsers);
+      const delSet = new Set(summary.deletedPostIds);
+      const cleanNick = (targetNickname || '').toLowerCase().replace(/^@/, '');
 
-      // 3. Purge user completely from Firestore collections (users, verifications, posts, comments, marketplace, etc.)
-      await deleteUserFromFirestore(targetUserId, targetNickname, targetEmail);
-
-      // 4. Push removal to central server DB
-      pushServerDbSync({
-        users: updatedUsers,
-        replaceUsers: true,
-        deletedUserIds: targetUserId ? [targetUserId] : [],
-        deletedUserNicknames: targetNickname ? [targetNickname] : [],
-      } as any).catch((err) => console.error('Error syncing user deletion to server:', err));
-
-      // 5. Clean local state for posts and comments by this user
-      const cleanNick = targetNickname.toLowerCase().replace(/^@/, '');
+      // 2. Synchronously reconcile React states
       setPosts((prev) =>
-        prev.filter((p) => {
-          const pNick = (p.authorNickname || '').toLowerCase().replace(/^@/, '');
-          return pNick !== cleanNick;
-        })
-      );
-      setComments((prev) =>
-        prev.filter((c) => {
-          const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
-          return cNick !== cleanNick;
-        })
+        prev
+          .filter(
+            (p) =>
+              !delSet.has(p.id) &&
+              (p.authorNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+              (p as any).authorId !== targetUserId
+          )
+          .map((p) => {
+            const cleanLiked = (p.likedBy || []).filter(
+              (u) => (u || '').toLowerCase().replace(/^@/, '') !== cleanNick && u !== targetUserId
+            );
+            return {
+              ...p,
+              likedBy: cleanLiked,
+              likes: Math.max(0, cleanLiked.length),
+              likesCount: Math.max(0, cleanLiked.length),
+            };
+          })
       );
 
-      // 6. Clear local active user session
+      setComments((prev) =>
+        prev.filter(
+          (c) =>
+            (c.authorNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (c as any).authorId !== targetUserId &&
+            !delSet.has(c.postId)
+        )
+      );
+
+      setMarketplaceItems((prev) =>
+        prev.filter(
+          (m) =>
+            (m.sellerNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (m as any).sellerId !== targetUserId
+        )
+      );
+
+      setPendingMarketplaceItems((prev) =>
+        prev.filter(
+          (m) =>
+            (m.sellerNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (m as any).sellerId !== targetUserId
+        )
+      );
+
+      setVerificationRequests((prev) =>
+        prev.filter(
+          (v) =>
+            (v.applicantNickname || '').toLowerCase().replace(/^@/, '') !== cleanNick &&
+            (v as any).userId !== targetUserId
+        )
+      );
+
+      setAppTotalMembers((prev) => Math.max(0, prev - 1));
+      setNotifTrigger((prev) => prev + 1);
+
+      // 3. Clear local active user session
       try {
         localStorage.removeItem('fuhsi_active_user');
       } catch (e) {
         console.error(e);
       }
 
-      // 7. Reset state to logged-out initial profile
+      // 4. Reset state to logged-out initial profile
       setUserProfile(EMPTY_USER_PROFILE);
       setIsLoggedIn(false);
       setShowProfileModal(false);
       closeModalUI();
 
-      // 8. Open Auth modal
+      // 5. Open Auth modal
       setShowAuthModal(true);
     } catch (err) {
       console.error('Error deleting account:', err);
