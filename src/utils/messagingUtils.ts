@@ -2,7 +2,7 @@ import { DirectMessage, ChatConversation, CampusNotification, ChatReport, Preser
 import { pushServerDbSync } from './apiSync';
 import { saveDirectMessageToFirestore } from '../lib/firestoreSync';
 import { evaluateChatMessage } from './safetyFilter';
-import { isUserPermanentlyDeleted } from './userDbUtils';
+import { isUserPermanentlyDeleted, isModulaAccount } from './userDbUtils';
 
 export const DIRECT_MESSAGES_KEY = 'fuhsi_direct_messages_db';
 export const CONVERSATIONS_KEY = 'fuhsi_conversations_db';

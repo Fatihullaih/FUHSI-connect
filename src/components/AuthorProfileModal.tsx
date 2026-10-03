@@ -170,7 +170,12 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
 
   const isVerifiedAuthor = badgeInfo.isVerified;
 
-  const isAuthorModula = isModulaAccount(authorProfileUser) || isModulaAccount(authorNickname) || isModulaAccount(username);
+  const isAuthorModula = useMemo(() => {
+    return isModulaAccount(authorProfileUser) || 
+      isModulaAccount(authorNickname) || 
+      isModulaAccount(username) ||
+      normAuthor === 'modula';
+  }, [authorProfileUser, authorNickname, username, normAuthor]);
   const effectiveAvatarKey = authorProfileUser?.avatarKey || authorAvatarKey || 'caduceus';
   const effectiveAvatarUrl = authorProfileUser?.avatarUrl !== undefined ? authorProfileUser.avatarUrl : authorAvatarUrl;
   const effectiveBio = authorProfileUser?.bio || '';
@@ -284,12 +289,6 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   }, [authorNickname, effectivePosts, allComments]);
 
   const displayPoints = computedPoints;
-
-  const isAuthorModula = useMemo(() => {
-    return isModulaAccount(authorProfileUser) || 
-      isModulaAccount(authorNickname) || 
-      normAuthor === 'modula';
-  }, [authorProfileUser, authorNickname, normAuthor]);
 
   useEffect(() => {
     if (isAuthorModula) {
