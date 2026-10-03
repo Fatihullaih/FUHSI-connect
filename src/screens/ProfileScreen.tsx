@@ -516,7 +516,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       trimmedNick,
       isMod ? '' : (department || userProfile?.department || ''),
       isMod ? '' : (level || userProfile?.level || ''),
-      bio.trim(),
+      bio.trim().slice(0, 50),
       selectedAvatarKey,
       emergencyPhone.trim(),
       avatarUrl,
@@ -616,16 +616,24 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </div>
           </div>
 
+          {/* Short profile description / Bio (if present, max 50 chars, subtle & small) */}
+          {userProfile?.bio && userProfile.bio.trim() && (
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 font-normal leading-relaxed break-words">
+              {userProfile.bio.trim().slice(0, 50)}
+            </p>
+          )}
+
+          {/* Department • Level for students */}
+          {!isMod && !isGuest && (userProfile?.department || userProfile?.level) && (
+            <p className="text-xs text-teal-800 dark:text-teal-300 font-semibold truncate">
+              {[userProfile.department, userProfile.level].filter(Boolean).join(' • ')}
+            </p>
+          )}
+
           <p className="text-xs text-slate-500 font-semibold flex items-center gap-1.5">
             <Calendar size={13} className="text-slate-400 shrink-0" />
             <span>Joined {joinedDate}</span>
           </p>
-
-          {userProfile?.bio && (
-            <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-medium leading-relaxed pt-1.5">
-              {userProfile.bio}
-            </p>
-          )}
         </div>
 
         {/* Stats Row or Administrator Platform Control Card */}
@@ -2027,14 +2035,23 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     )}
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Bio / Profile Description</label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Bio / Profile Description</label>
+                        <span className={`text-[10px] font-bold ${bio.length >= 50 ? 'text-rose-500' : 'text-slate-400'}`}>
+                          {bio.length}/50
+                        </span>
+                      </div>
                       <textarea
                         value={bio}
-                        onChange={(e) => setBio(e.target.value)}
+                        onChange={(e) => setBio(e.target.value.slice(0, 50))}
+                        maxLength={50}
                         rows={2}
-                        placeholder={isGuestAccount(userProfile) ? "Guest Member | FUHSI Connect Community" : "FUHSI Student | Learning & Saving Lives 🩺"}
+                        placeholder="e.g. Unto God I believe."
                         className="w-full text-xs rounded-xl border border-slate-200 dark:border-slate-700 p-2.5 text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
                       />
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                        Short profile description (max 50 characters)
+                      </p>
                     </div>
                   </div>
 

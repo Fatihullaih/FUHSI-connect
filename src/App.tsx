@@ -3428,7 +3428,7 @@ export const App: React.FC = () => {
       matricNumber: isModulaAccount(userProfile) ? '' : userProfile.matricNumber,
       level: isModulaAccount(userProfile) ? '' : (level || userProfile.level || ''),
       accountType: isModulaAccount(userProfile) ? 'Admin' : userProfile.accountType,
-      bio: bio !== undefined ? bio.trim() : userProfile.bio,
+      bio: (bio !== undefined ? bio.trim() : (userProfile.bio || '')).slice(0, 50),
       avatarKey: newAvatarKey,
       avatarUrl: newAvatarUrl,
       updatedAt: new Date().toISOString(),
@@ -3439,6 +3439,7 @@ export const App: React.FC = () => {
 
     // 1. Update React state
     setUserProfile(updated);
+    setNotifTrigger((prev) => prev + 1);
 
     // 2. Persist active user to localStorage
     try {
@@ -3514,6 +3515,7 @@ export const App: React.FC = () => {
     // 5. Broadcast profile updated event
     try {
       window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: updated }));
+      window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: updated }));
     } catch (e) {}
 
     return null;
@@ -4068,6 +4070,7 @@ export const App: React.FC = () => {
                 authorAvatarUrl={item.post.authorAvatarUrl}
                 authorBadgeType={item.post.authorBadgeType as BadgeType}
                 authorBadgeTitle={item.post.authorBadgeTitle}
+                authorBio={allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (item.post.authorNickname || (item.post as any).nickname || '').toLowerCase().replace(/^@/, ''))?.bio}
                 authorPoints={item.post.authorPoints}
                 authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (item.post.authorNickname || '').toLowerCase().replace(/^@/, '')))}
                 currentUserNickname={userProfile?.nickname || ''}
@@ -4329,6 +4332,7 @@ export const App: React.FC = () => {
               authorAvatarUrl={selectedAuthorPost.authorAvatarUrl}
               authorBadgeType={selectedAuthorPost.authorBadgeType as BadgeType}
               authorBadgeTitle={selectedAuthorPost.authorBadgeTitle}
+              authorBio={allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || '').toLowerCase().replace(/^@/, ''))?.bio}
               authorPoints={selectedAuthorPost.authorPoints}
               authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || '').toLowerCase().replace(/^@/, '')))}
               currentUserNickname={userProfile?.nickname || ''}

@@ -35,6 +35,7 @@ interface AuthorProfileModalProps {
   authorAvatarUrl?: string;
   authorBadgeType?: BadgeType;
   authorBadgeTitle?: string;
+  authorBio?: string;
   authorIsVerified?: boolean;
   authorPoints?: number;
   authorJoinedDate?: string;
@@ -141,10 +142,29 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   const isViewingSelf = Boolean(normCurrentUser && normAuthor === normCurrentUser);
   const effectivePosts = (allPosts && allPosts.length > 0) ? allPosts : posts;
 
-  // Resolve freshest author profile from allUsers, userProfile, or storage
+  const [profileTick, setProfileTick] = useState(0);
+  useEffect(() => {
+    const handleProfileUpdate = () => {
+      setProfileTick((t) => t + 1);
+    };
+    window.addEventListener('fuhsi_profile_updated', handleProfileUpdate);
+    window.addEventListener('fuhsi_users_updated', handleProfileUpdate);
+    window.addEventListener('storage', handleProfileUpdate);
+    return () => {
+      window.removeEventListener('fuhsi_profile_updated', handleProfileUpdate);
+      window.removeEventListener('fuhsi_users_updated', handleProfileUpdate);
+      window.removeEventListener('storage', handleProfileUpdate);
+    };
+  }, []);
+
+  // Resolve freshest author profile from database, allUsers, userProfile, or storage
   const authorProfileUser = useMemo(() => {
     if (isViewingSelf && userProfile) {
       return userProfile;
+    }
+    const fromDb = findUserByNickname(authorNickname);
+    if (fromDb) {
+      return fromDb;
     }
     if (allUsers && allUsers.length > 0) {
       const match = allUsers.find(
@@ -152,8 +172,8 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
       );
       if (match) return match;
     }
-    return findUserByNickname(authorNickname);
-  }, [isViewingSelf, userProfile, allUsers, normAuthor, authorNickname]);
+    return undefined;
+  }, [isViewingSelf, userProfile, allUsers, normAuthor, authorNickname, profileTick]);
 
   const [badgeTick, setBadgeTick] = useState(0);
   useEffect(() => {
@@ -166,7 +186,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
 
   const badgeInfo = useMemo(() => {
     return getUserBadgeInfo(authorNickname, authorProfileUser);
-  }, [authorNickname, authorProfileUser, badgeTick]);
+  }, [authorNickname, authorProfileUser, badgeTick, profileTick]);
 
   const isVerifiedAuthor = badgeInfo.isVerified;
 
@@ -178,7 +198,10 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   }, [authorProfileUser, authorNickname, username, normAuthor]);
   const effectiveAvatarKey = authorProfileUser?.avatarKey || authorAvatarKey || 'caduceus';
   const effectiveAvatarUrl = authorProfileUser?.avatarUrl !== undefined ? authorProfileUser.avatarUrl : authorAvatarUrl;
-  const effectiveBio = authorProfileUser?.bio || '';
+  const effectiveBio = useMemo(() => {
+    const raw = (authorProfileUser?.bio || props.authorBio || '').trim();
+    return raw.slice(0, 50);
+  }, [authorProfileUser?.bio, props.authorBio]);
   const effectiveDepartment = isAuthorModula ? '' : (authorProfileUser?.department || '');
   const effectiveLevel = isAuthorModula ? '' : (authorProfileUser?.level || '');
   const effectiveJoinedDate = useMemo(() => {
@@ -380,7 +403,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
 
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-lg sm:text-xl font-black text-white truncate">{authorNickname}</h2>
+                  <h2 className="text-lg sm:text-xl font-black text-white truncate">{username}</h2>
                   <VerificationBadge 
                     isVerified={badgeInfo.isVerified} 
                     badgeType={badgeInfo.badgeType}
@@ -415,26 +438,33 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                     </p>
                   </div>
                 ) : (
-                  <>
-                    <p className="text-xs text-teal-200 font-bold mt-0.5">{username}</p>
+                  <div className="space-y-0.5 mt-0.5">
+                    {/* Short Profile Description / Bio (if present, max 50 chars, subtle & small) */}
+                    {effectiveBio ? (
+                      <p className="text-xs text-teal-100/90 font-normal leading-snug break-words">
+                        {effectiveBio}
+                      </p>
+                    ) : null}
 
+                    {/* Department • Level */}
                     {isAuthorModula ? null : isGuestAccount(authorProfileUser || authorNickname) ? (
-                      <p className="text-[11px] text-teal-200/70 font-medium mt-0.5">
+                      <p className="text-[11px] text-teal-200/70 font-medium">
                         Guest
                       </p>
                     ) : (
                       (effectiveDepartment || effectiveLevel) && (
-                        <p className="text-xs text-teal-100/90 font-semibold mt-0.5 truncate">
+                        <p className="text-xs text-teal-200/90 font-semibold truncate">
                           {[effectiveDepartment, effectiveLevel].filter(Boolean).join(' • ')}
                         </p>
                       )
                     )}
 
-                    <p className="text-xs text-teal-100 font-medium mt-1 flex items-center gap-1.5">
+                    {/* Joined Date */}
+                    <p className="text-xs text-teal-100 font-medium flex items-center gap-1.5 pt-0.5">
                       <Calendar size={13} className="text-teal-300 shrink-0" />
                       <span>Joined {effectiveJoinedDate}</span>
                     </p>
-                  </>
+                  </div>
                 )}
               </div>
             </div>

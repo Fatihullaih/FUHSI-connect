@@ -1006,6 +1006,11 @@ export function upsertUser(user: UserProfile): UserProfile[] {
   });
 
   saveStoredUsers(users);
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: updatedUser }));
+    }
+  } catch (e) {}
   return users;
 }
 
