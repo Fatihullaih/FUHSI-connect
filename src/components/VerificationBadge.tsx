@@ -17,7 +17,7 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
   title,
   showTitle = false,
   className = '',
-  size = 14,
+  size = 13,
 }) => {
   const normalizedRaw = (badgeType || 'BLUE').toUpperCase();
   const effectiveIsVerified = isVerified !== undefined ? isVerified : (normalizedRaw !== 'NONE');
@@ -58,8 +58,8 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
     rawTitle.toLowerCase().includes('pending') ||
     rawTitle.toLowerCase().includes('reject');
 
-  // Badge icon dimensions
-  const iconSize = Math.max(10, Math.round(size * 0.7));
+  // Badge icon dimensions (clean standard proportion, not heavy or chunky)
+  const iconSize = Math.max(7, Math.round(size * 0.58));
 
   // Render standalone colored checkmark circle
   const renderIconBadge = () => (
@@ -68,7 +68,7 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
       style={{ width: `${size}px`, height: `${size}px` }}
       aria-label={`Verified (${badgeStyle.label})`}
     >
-      <Check size={iconSize} strokeWidth={3.5} className="text-white drop-shadow-2xs" />
+      <Check size={iconSize} strokeWidth={2.4} className="text-white drop-shadow-2xs" />
     </span>
   );
 
@@ -76,11 +76,11 @@ export const VerificationBadge: React.FC<VerificationBadgeProps> = ({
   if (showTitle && rawTitle && !isDeclinedOrInternal) {
     return (
       <span
-        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-extrabold border ${badgeStyle.pillBg} ${className} shadow-2xs`}
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold border ${badgeStyle.pillBg} ${className} shadow-2xs`}
         title={`Verified: ${rawTitle}`}
       >
         {renderIconBadge()}
-        <span className="truncate max-w-[150px] leading-none">{rawTitle}</span>
+        <span className="truncate max-w-[130px] leading-none">{rawTitle}</span>
       </span>
     );
   }

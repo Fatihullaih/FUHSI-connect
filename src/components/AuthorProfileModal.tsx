@@ -385,7 +385,8 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                     isVerified={badgeInfo.isVerified} 
                     badgeType={badgeInfo.badgeType}
                     title={badgeInfo.badgeTitle}
-                    showTitle 
+                    size={15}
+                    showTitle={false}
                   />
                   {isAuthorPrivate && (
                     <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-amber-200 bg-black/30 backdrop-blur-xs px-2 py-0.5 rounded-full border border-amber-400/40 shadow-xs">

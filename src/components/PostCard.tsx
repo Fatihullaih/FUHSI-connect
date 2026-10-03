@@ -384,7 +384,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                   isVerified={authorBadgeInfo.isVerified} 
                   badgeType={authorBadgeInfo.badgeType}
                   title={authorBadgeInfo.badgeTitle}
-                  showTitle 
+                  size={13}
                 />
 
                 {isGuestAccount(post.authorNickname) && (

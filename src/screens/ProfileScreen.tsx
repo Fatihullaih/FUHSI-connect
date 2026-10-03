@@ -41,6 +41,7 @@ import {
   Check,
   Eye,
   Shield,
+  ShieldCheck,
   HelpCircle,
   Copy
 } from 'lucide-react';
@@ -111,6 +112,7 @@ interface ProfileScreenProps {
   onUndoRepost?: (post: Post) => void;
   onQuote?: (post: Post, caption: string) => void;
   onSelectPost?: (post: Post) => void;
+  onOpenAdminConsole?: () => void;
 }
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
@@ -139,9 +141,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onUndoRepost,
   onQuote,
   onSelectPost,
+  onOpenAdminConsole,
 }) => {
   const isOwnProfile = Boolean(userProfile);
   const isGuest = isGuestAccount(userProfile);
+  const isMod = isModulaAccount(userProfile);
   const [activeTab, setActiveTab] = useState<'threads' | 'replies' | 'bookmarks'>('threads');
   const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
   const [isEditingSettings, setIsEditingSettings] = useState(false);
@@ -161,7 +165,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [nickname, setNickname] = useState(userProfile?.nickname || '@Student');
   const [realName, setRealName] = useState(userProfile?.realNameHidden || userProfile?.realName || '');
   const [studentEmail, setStudentEmail] = useState(userProfile?.studentEmail || '');
-  const isMod = isModulaAccount(userProfile);
   const [department, setDepartment] = useState(isMod ? '' : (userProfile?.department || 'Medicine and Surgery (MBBS)'));
   const [level, setLevel] = useState(isMod ? '' : (userProfile?.level || '300L'));
   const [bio, setBio] = useState(userProfile?.bio || '');
@@ -603,7 +606,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       isVerified={badgeInfo.isVerified}
                       badgeType={badgeInfo.badgeType}
                       title={badgeInfo.badgeTitle}
-                      showTitle
+                      size={15}
+                      showTitle={false}
                     />
                   );
                 }
@@ -624,51 +628,81 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           )}
         </div>
 
-        {/* Stats Row: Total Threads & Total Points Earned */}
-        <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-100">
-          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center">
-            <span className="text-xs font-bold text-slate-500 uppercase block">Total Threads</span>
-            <span className="text-lg sm:text-xl font-black text-slate-900">{myPosts.length}</span>
+        {/* Stats Row or Administrator Platform Control Card */}
+        {isMod ? (
+          <div className="pt-4 border-t border-slate-100 space-y-3">
+            <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-4 text-left space-y-2">
+              <div className="flex items-center gap-2 text-amber-900 font-extrabold text-sm">
+                <ShieldCheck className="w-5 h-5 text-amber-700 shrink-0" />
+                <span>Internal Platform Control Account (@modula)</span>
+              </div>
+              <p className="text-xs text-amber-800 leading-relaxed font-medium">
+                This account is configured strictly for platform control, security, moderation, and verification management. It is completely invisible to ordinary students and does not participate in community threads, rankings, marketplace, or normal chats.
+              </p>
+              <p className="text-xs text-amber-800 leading-relaxed font-medium">
+                To create posts, comment, like, or engage in campus conversations, please log in using your separate personal account.
+              </p>
+              {onOpenAdminConsole && (
+                <button
+                  type="button"
+                  onClick={onOpenAdminConsole}
+                  className="mt-2 w-full py-2.5 bg-teal-800 hover:bg-teal-900 text-white font-extrabold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Shield size={14} />
+                  <span>Open Admin Console</span>
+                </button>
+              )}
+            </div>
           </div>
+        ) : (
+          <>
+            {/* Stats Row: Total Threads & Total Points Earned */}
+            <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-100">
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center">
+                <span className="text-xs font-bold text-slate-500 uppercase block">Total Threads</span>
+                <span className="text-lg sm:text-xl font-black text-slate-900">{myPosts.length}</span>
+              </div>
 
-          <div 
-            onClick={() => setShowPointsBreakdown(true)}
-            className="bg-teal-50/80 hover:bg-teal-100/90 transition-all p-3 rounded-2xl border border-teal-200/80 text-center cursor-pointer group shadow-2xs"
-            title="Click to view full points breakdown"
-          >
-            <span className="text-xs font-bold text-teal-800 uppercase flex items-center justify-center gap-1 group-hover:text-teal-900">
-              <Award size={13} className="text-teal-600 group-hover:scale-110 transition-transform" />
-              <span>Total Points Earned</span>
-            </span>
-            <span className="text-lg sm:text-xl font-black text-teal-900 flex items-center justify-center gap-1">
-              {pointsEarned.toLocaleString()} <span className="text-xs font-extrabold text-teal-700">pts</span>
-              <Info size={12} className="text-teal-600 opacity-60 group-hover:opacity-100" />
-            </span>
-          </div>
-        </div>
+              <div 
+                onClick={() => setShowPointsBreakdown(true)}
+                className="bg-teal-50/80 hover:bg-teal-100/90 transition-all p-3 rounded-2xl border border-teal-200/80 text-center cursor-pointer group shadow-2xs"
+                title="Click to view full points breakdown"
+              >
+                <span className="text-xs font-bold text-teal-800 uppercase flex items-center justify-center gap-1 group-hover:text-teal-900">
+                  <Award size={13} className="text-teal-600 group-hover:scale-110 transition-transform" />
+                  <span>Total Points Earned</span>
+                </span>
+                <span className="text-lg sm:text-xl font-black text-teal-900 flex items-center justify-center gap-1">
+                  {pointsEarned.toLocaleString()} <span className="text-xs font-extrabold text-teal-700">pts</span>
+                  <Info size={12} className="text-teal-600 opacity-60 group-hover:opacity-100" />
+                </span>
+              </div>
+            </div>
 
-        {/* Real Following & Followers System (Calculated from actual accounts) */}
-        <div className="pt-3 border-t border-slate-100 flex items-center justify-center gap-4 text-xs sm:text-sm font-extrabold text-slate-700">
-          <button
-            type="button"
-            onClick={() => setShowFollowersModal({ open: true, tab: 'following' })}
-            className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1.5 group"
-            title="View accounts you are following"
-          >
-            <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-teal-700">{myFollowingCount}</span>
-            <span className="text-slate-500 group-hover:text-teal-700 font-bold">Following</span>
-          </button>
-          <span className="text-slate-300 font-bold">·</span>
-          <button
-            type="button"
-            onClick={() => setShowFollowersModal({ open: true, tab: 'followers' })}
-            className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1.5 group"
-            title="View accounts following you"
-          >
-            <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-teal-700">{myFollowersCount}</span>
-            <span className="text-slate-500 group-hover:text-teal-700 font-bold">Followers</span>
-          </button>
-        </div>
+            {/* Real Following & Followers System (Calculated from actual accounts) */}
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-center gap-4 text-xs sm:text-sm font-extrabold text-slate-700">
+              <button
+                type="button"
+                onClick={() => setShowFollowersModal({ open: true, tab: 'following' })}
+                className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1.5 group"
+                title="View accounts you are following"
+              >
+                <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-teal-700">{myFollowingCount}</span>
+                <span className="text-slate-500 group-hover:text-teal-700 font-bold">Following</span>
+              </button>
+              <span className="text-slate-300 font-bold">·</span>
+              <button
+                type="button"
+                onClick={() => setShowFollowersModal({ open: true, tab: 'followers' })}
+                className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1.5 group"
+                title="View accounts following you"
+              >
+                <span className="text-sm sm:text-base font-black text-slate-900 group-hover:text-teal-700">{myFollowersCount}</span>
+                <span className="text-slate-500 group-hover:text-teal-700 font-bold">Followers</span>
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* POINTS BREAKDOWN MODAL */}

@@ -181,6 +181,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isModulaAccount(userProfile)) return;
     if (!commentText.trim() && !commentImage) return;
 
     if (replyingTo) {
@@ -193,13 +194,20 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     setCommentImage(null);
   };
 
-  // Sort comments chronologically (earliest to latest for a natural top-to-bottom discussion flow)
+  // Sort comments chronologically (earliest to latest for a natural top-to-bottom discussion flow, excluding @modula)
   const sortedComments = useMemo(() => {
-    return [...(comments || [])].sort((a, b) => {
-      const timeA = getTimestampMs(a.timestamp);
-      const timeB = getTimestampMs(b.timestamp);
-      return timeA - timeB;
-    });
+    return [...(comments || [])]
+      .filter((c) => {
+        if (!c) return false;
+        const author = c.authorNickname || '';
+        if (isModulaAccount(author) || author.toLowerCase().replace(/^@/, '').trim() === 'modula') return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const timeA = getTimestampMs(a.timestamp);
+        const timeB = getTimestampMs(b.timestamp);
+        return timeA - timeB;
+      });
   }, [comments]);
 
   // Build comment tree (top-level vs nested child replies) in chronological order
@@ -262,6 +270,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 isVerified={commentBadgeInfo.isVerified} 
                 badgeType={commentBadgeInfo.badgeType}
                 title={commentBadgeInfo.badgeTitle}
+                size={12}
               />
               {isGuestAccount(comment.authorNickname) && (
                 <span className="text-[10px] text-slate-400 font-medium">Guest</span>
@@ -521,7 +530,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                           isVerified={authorBadgeInfo.isVerified} 
                           badgeType={authorBadgeInfo.badgeType}
                           title={authorBadgeInfo.badgeTitle}
-                          showTitle 
+                          size={13}
                         />
                         {isGuestAccount(post.authorNickname) && (
                           <span className="text-[10px] text-slate-400 font-medium">Guest</span>
@@ -891,72 +900,83 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
         </div>
 
         {/* Reply Input Bar */}
-        <form onSubmit={handleSubmit} className="p-3.5 border-t border-slate-200 bg-slate-50/95 shrink-0 space-y-2">
-          {replyingTo && (
-            <div className="flex items-center justify-between px-3 py-1.5 bg-teal-100/90 text-teal-900 rounded-xl text-xs font-bold border border-teal-300 animate-in fade-in">
-              <span className="flex items-center gap-1.5">
-                <CornerDownRight size={13} className="text-teal-700" />
-                <span>Replying to <strong>@{replyingTo.nickname}</strong></span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setReplyingTo(null)}
-                className="text-teal-800 hover:text-teal-950 p-0.5"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )}
-
-          {/* Comment Image Attachment Preview */}
-          {commentImage && (
-            <div className="relative inline-block rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 max-h-32 bg-slate-100 dark:bg-slate-900 group">
-              <img src={commentImage} alt="Comment image attachment" className="max-h-32 w-auto object-cover" />
-              <button
-                type="button"
-                onClick={() => setCommentImage(null)}
-                className="absolute top-1 right-1 bg-rose-600 text-white p-1 rounded-full shadow-md hover:bg-rose-700 transition-colors"
-                title="Remove image"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )}
-
-          <div className="flex gap-2 items-center">
-            <label
-              className="p-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-teal-700 cursor-pointer flex items-center justify-center shrink-0 transition-colors shadow-2xs"
-              title="Attach image to comment"
-            >
-              <ImageIcon size={18} />
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleCommentImageUpload}
-                className="hidden"
-              />
-            </label>
-            <input
-              type="text"
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder={
-                replyingTo
-                  ? `Write a reply to @${replyingTo.nickname}...`
-                  : 'Write a comment or attach an image...'
-              }
-              className="flex-1 text-xs rounded-xl border border-slate-300 bg-white p-2.5 text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-600 shadow-2xs"
-            />
-            <button
-              type="submit"
-              disabled={!commentText.trim() && !commentImage}
-              className="px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-extrabold text-xs shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Reply</span>
-            </button>
+        {isModulaAccount(userProfile) ? (
+          <div className="p-3.5 border-t border-amber-200 bg-amber-50/95 shrink-0 text-center space-y-1">
+            <p className="text-xs font-bold text-amber-900">
+              Admin Platform Control Account (@modula)
+            </p>
+            <p className="text-[11px] text-amber-700 leading-snug">
+              @modula functions strictly as an internal administrative account and does not participate in community threads or comments. To join conversations, please use your separate personal account.
+            </p>
           </div>
-        </form>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-3.5 border-t border-slate-200 bg-slate-50/95 shrink-0 space-y-2">
+            {replyingTo && (
+              <div className="flex items-center justify-between px-3 py-1.5 bg-teal-100/90 text-teal-900 rounded-xl text-xs font-bold border border-teal-300 animate-in fade-in">
+                <span className="flex items-center gap-1.5">
+                  <CornerDownRight size={13} className="text-teal-700" />
+                  <span>Replying to <strong>@{replyingTo.nickname}</strong></span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setReplyingTo(null)}
+                  className="text-teal-800 hover:text-teal-950 p-0.5"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+
+            {/* Comment Image Attachment Preview */}
+            {commentImage && (
+              <div className="relative inline-block rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 max-h-32 bg-slate-100 dark:bg-slate-900 group">
+                <img src={commentImage} alt="Comment image attachment" className="max-h-32 w-auto object-cover" />
+                <button
+                  type="button"
+                  onClick={() => setCommentImage(null)}
+                  className="absolute top-1 right-1 bg-rose-600 text-white p-1 rounded-full shadow-md hover:bg-rose-700 transition-colors"
+                  title="Remove image"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )}
+
+            <div className="flex gap-2 items-center">
+              <label
+                className="p-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-teal-700 cursor-pointer flex items-center justify-center shrink-0 transition-colors shadow-2xs"
+                title="Attach image to comment"
+              >
+                <ImageIcon size={18} />
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleCommentImageUpload}
+                  className="hidden"
+                />
+              </label>
+              <input
+                type="text"
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder={
+                  replyingTo
+                    ? `Write a reply to @${replyingTo.nickname}...`
+                    : 'Write a comment or attach an image...'
+                }
+                className="flex-1 text-xs rounded-xl border border-slate-300 bg-white p-2.5 text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-600 shadow-2xs"
+              />
+              <button
+                type="submit"
+                disabled={!commentText.trim() && !commentImage}
+                className="px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-extrabold text-xs shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Reply</span>
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {previewImage && (

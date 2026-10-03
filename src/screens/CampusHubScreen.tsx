@@ -1007,22 +1007,24 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
       )}
 
       {/* 4. FLOATING ACTION BUTTON (FAB) FOR "POST ITEM" */}
-      <button
-        onClick={() => {
-          if (isVerifiedUser) {
-            setShowSellModal(true);
-          } else {
-            setShowMarketplaceLockModal(true);
-          }
-        }}
-        className="fixed bottom-20 sm:bottom-8 right-5 sm:right-8 z-40 bg-[#0a6627] hover:bg-[#08521f] text-white rounded-full p-3.5 sm:px-5 sm:py-3.5 shadow-2xl shadow-emerald-950/40 flex items-center gap-2 border-2 border-white/90 active:scale-95 transition-all cursor-pointer group"
-        title="Post Item or Housing for Rent"
-      >
-        <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-200" />
-        <span className="font-extrabold text-xs sm:text-sm tracking-wide hidden sm:inline">
-          Post Item
-        </span>
-      </button>
+      {!isModulaAccount(userProfile) && (
+        <button
+          onClick={() => {
+            if (isVerifiedUser) {
+              setShowSellModal(true);
+            } else {
+              setShowMarketplaceLockModal(true);
+            }
+          }}
+          className="fixed bottom-20 sm:bottom-8 right-5 sm:right-8 z-40 bg-[#0a6627] hover:bg-[#08521f] text-white rounded-full p-3.5 sm:px-5 sm:py-3.5 shadow-2xl shadow-emerald-950/40 flex items-center gap-2 border-2 border-white/90 active:scale-95 transition-all cursor-pointer group"
+          title="Post Item or Housing for Rent"
+        >
+          <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-200" />
+          <span className="font-extrabold text-xs sm:text-sm tracking-wide hidden sm:inline">
+            Post Item
+          </span>
+        </button>
+      )}
 
       {/* 5. "VIEW DETAILS" MODAL */}
       {detailsModalItem && (() => {

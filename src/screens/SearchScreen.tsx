@@ -519,7 +519,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                           <h3 className="font-extrabold text-sm text-slate-900 group-hover:text-teal-700 transition-colors">
                             {acc.nickname}
                           </h3>
-                          <VerificationBadge isVerified={acc.isVerified} badgeType={acc.badgeType} title={acc.badgeTitle} showTitle />
+                          <VerificationBadge isVerified={acc.isVerified} badgeType={acc.badgeType} title={acc.badgeTitle} size={13} showTitle={false} />
                           {acc.isPrivate && (
                             <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 shadow-2xs">
                               <Lock size={10} />

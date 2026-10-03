@@ -1909,7 +1909,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                             <span className="text-xs font-black text-slate-900 group-hover:text-teal-900 truncate">
                               {member.nickname}
                             </span>
-                            <VerificationBadge badgeType={member.badgeType} />
+                            <VerificationBadge badgeType={member.badgeType} size={12} />
                           </div>
                           {member.realName && member.realName !== member.cleanNickname && (
                             <p className="text-[11px] text-slate-500 truncate">

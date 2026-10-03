@@ -4,7 +4,7 @@ import { PostCard } from '../components/PostCard';
 import { generateMorePosts, isDemoPost } from '../utils/postGenerator';
 import { getTimestampMs } from '../utils/dateUtils';
 import { isUserFollowing, normalizeHandle, getStoredFollows } from '../utils/followUtils';
-import { findUserByNickname } from '../utils/userDbUtils';
+import { findUserByNickname, isModulaAccount } from '../utils/userDbUtils';
 import { 
   Loader2,
   RefreshCw,
@@ -162,9 +162,14 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
     };
   }, [observerTarget, isLoadingMore, hasReachedEnd, loadMorePosts]);
 
-  // Combine initial posts and extra loaded posts (excluding any demo posts or legacy repost clones)
+  // Combine initial posts and extra loaded posts (excluding any demo posts, @modula posts, or legacy repost clones)
   const allCombinedPosts = [...posts, ...extraPosts].filter(
-    (post) => !isDemoPost(post) && !post.id.startsWith('repost_') && !(post.isRepost && post.repostedPostId)
+    (post) => {
+      if (!post || isDemoPost(post) || post.id.startsWith('repost_') || (post.isRepost && post.repostedPostId)) return false;
+      const author = post.authorNickname || post.nickname || '';
+      if (isModulaAccount(author) || normalizeHandle(author) === 'modula') return false;
+      return true;
+    }
   );
 
   // Filter removed posts, apply audience/privacy rules, and sort chronologically (newest first)
@@ -235,19 +240,21 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
                 Be the first to share an update, academic question, or announcement with the university community.
               </p>
             </div>
-            <button
-              onClick={() => {
-                if (onCreatePostClick) {
-                  onCreatePostClick();
-                } else if (onCreatePost) {
-                  onCreatePost('', 'General');
-                }
-              }}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-teal-700 hover:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-            >
-              <SquarePen size={15} />
-              <span>Create First Post</span>
-            </button>
+            {!isModulaAccount(currentUserObj) && (
+              <button
+                onClick={() => {
+                  if (onCreatePostClick) {
+                    onCreatePostClick();
+                  } else if (onCreatePost) {
+                    onCreatePost('', 'General');
+                  }
+                }}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-teal-700 hover:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+              >
+                <SquarePen size={15} />
+                <span>Create First Post</span>
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -333,20 +340,22 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
       )}
 
       {/* Floating Action Button for Creating Posts */}
-      <button
-        onClick={() => {
-          if (onCreatePostClick) {
-            onCreatePostClick();
-          } else if (onCreatePost) {
-            onCreatePost('', 'General');
-          }
-        }}
-        className="fixed bottom-20 right-4 sm:right-8 z-40 bg-teal-700 hover:bg-teal-800 active:scale-95 text-white rounded-full p-4 sm:px-5 sm:py-3.5 shadow-2xl flex items-center gap-2 transition-all hover:scale-105 border border-teal-500/40 group cursor-pointer"
-        title="Post to Campus Feed"
-      >
-        <SquarePen className="w-5 h-5 text-white transition-transform group-hover:rotate-6" />
-        <span className="hidden sm:inline font-black text-sm tracking-wide">Post</span>
-      </button>
+      {!isModulaAccount(currentUserObj) && (
+        <button
+          onClick={() => {
+            if (onCreatePostClick) {
+              onCreatePostClick();
+            } else if (onCreatePost) {
+              onCreatePost('', 'General');
+            }
+          }}
+          className="fixed bottom-20 right-4 sm:right-8 z-40 bg-teal-700 hover:bg-teal-800 active:scale-95 text-white rounded-full p-4 sm:px-5 sm:py-3.5 shadow-2xl flex items-center gap-2 transition-all hover:scale-105 border border-teal-500/40 group cursor-pointer"
+          title="Post to Campus Feed"
+        >
+          <SquarePen className="w-5 h-5 text-white transition-transform group-hover:rotate-6" />
+          <span className="hidden sm:inline font-black text-sm tracking-wide">Post</span>
+        </button>
+      )}
     </div>
   );
 };

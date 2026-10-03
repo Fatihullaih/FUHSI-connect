@@ -315,6 +315,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
                               isVerified={bInfo.isVerified}
                               badgeType={bInfo.badgeType}
                               title={bInfo.badgeTitle}
+                              size={13}
                             />
 
                             {isCurrent && (
@@ -392,6 +393,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
                               isVerified={bInfo.isVerified}
                               badgeType={bInfo.badgeType}
                               title={bInfo.badgeTitle}
+                              size={13}
                             />
                             {p.categoryTag && (
                               <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-100">
