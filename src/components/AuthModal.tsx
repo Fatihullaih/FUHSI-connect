@@ -107,6 +107,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [matricConflictValue, setMatricConflictValue] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Registration Confirmation Step State
+  const [showRegisterConfirm, setShowRegisterConfirm] = useState(false);
+  const [validatedRegPayload, setValidatedRegPayload] = useState<{
+    cleanNickname: string;
+    cleanRealName: string;
+    cleanEmail: string;
+    cleanPhone: string;
+    matricTrimmed: string;
+    department: string;
+    level: string;
+    accountType: 'Student' | 'Guest';
+    password: string;
+  } | null>(null);
+
   // OTP Verification State
   const [verificationMethod, setVerificationMethod] = useState<'EMAIL' | 'PHONE'>('EMAIL');
   const [generatedOtp, setGeneratedOtp] = useState('482910');
@@ -118,6 +132,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [isAdminPortal, setIsAdminPortal] = useState(false);
+  const [loginAuthStage, setLoginAuthStage] = useState<'idle' | 'authenticating' | 'confirmed'>('idle');
 
   // Forgot Password Recovery Flow State
   const [forgotStep, setForgotStep] = useState<'EMAIL' | 'OTP' | 'NEW_PASSWORD'>('EMAIL');
@@ -306,25 +321,57 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
+    // All inputs valid! Show confirmation prompt before creating account
+    setValidatedRegPayload({
+      cleanNickname,
+      cleanRealName: realName.trim(),
+      cleanEmail: studentEmail.trim(),
+      cleanPhone: phone.trim(),
+      matricTrimmed,
+      department: accountType === 'Student' ? department : '',
+      level: accountType === 'Student' ? level : '',
+      accountType,
+      password: password.trim(),
+    });
+    setErrorMessage('');
+    setShowRegisterConfirm(true);
+  };
+
+  const handleConfirmAndCreateAccount = async () => {
+    if (!validatedRegPayload) return;
     setIsSubmitting(true);
+    setErrorMessage('');
+
     try {
+      const {
+        cleanNickname,
+        cleanRealName,
+        cleanEmail,
+        cleanPhone,
+        matricTrimmed,
+        department: regDept,
+        level: regLevel,
+        accountType: regAccountType,
+        password: regPassword,
+      } = validatedRegPayload;
+
       // Create new user profile with selected account type
       const newUserProfile: UserProfile = {
         id: `usr_${Date.now()}`,
         nickname: cleanNickname,
-        accountType: accountType,
-        realName: realName.trim(),
-        studentEmail: studentEmail.trim() || undefined,
-        matricNumber: accountType === 'Student' ? matricTrimmed : undefined,
-        emergencyHomePhone: phone.trim(),
-        department: accountType === 'Student' ? department : '',
-        level: accountType === 'Student' ? level : '',
-        bio: accountType === 'Student'
-          ? `Student in ${department} (${level}) at FUHSI Ila-Orangun.`
+        accountType: regAccountType,
+        realName: cleanRealName,
+        studentEmail: cleanEmail || undefined,
+        matricNumber: regAccountType === 'Student' ? matricTrimmed : undefined,
+        emergencyHomePhone: cleanPhone,
+        department: regAccountType === 'Student' ? regDept : '',
+        level: regAccountType === 'Student' ? regLevel : '',
+        bio: regAccountType === 'Student'
+          ? `Student in ${regDept} (${regLevel}) at FUHSI Ila-Orangun.`
           : `Community Guest member on FUHSI-Connect.`,
         avatarKey,
         badgeType: 'GREEN',
-        badgeTitle: accountType === 'Student' ? 'FUHSI Student' : 'Guest',
+        badgeTitle: regAccountType === 'Student' ? 'FUHSI Student' : 'Guest',
         reputationScore: 20,
         isVerified: false,
         isApproved: true,
@@ -332,15 +379,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         isAdmin: false,
         strikes: 0,
         isBanned: false,
-        savedPassword: password.trim(),
-        password: password.trim(),
+        savedPassword: regPassword,
+        password: regPassword,
         joinedDate: new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date()),
         createdAt: new Date().toISOString(),
       };
 
       // Clear any tombstone if user is registering afresh
       try {
-        unmarkUserPermanentlyDeleted({ id: newUserProfile.id, nickname: cleanNickname, studentEmail: studentEmail.trim(), matricNumber: matricTrimmed });
+        unmarkUserPermanentlyDeleted({ id: newUserProfile.id, nickname: cleanNickname, studentEmail: cleanEmail, matricNumber: matricTrimmed });
       } catch (err) {
         console.error(err);
       }
@@ -351,6 +398,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       saveUserToFirestore(newUserProfile).catch((err) => console.error(err));
       pushServerDbSync({ users: [newUserProfile], unDeleteUserNicknames: [cleanNickname] } as any).catch((err) => console.error(err));
 
+      setShowRegisterConfirm(false);
       onLoginSuccess(newUserProfile);
       setErrorMessage('');
       onClose();
@@ -365,139 +413,186 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setLoginAuthStage('idle');
 
-    if (!loginIdentifier.trim()) {
+    const trimmedIdentifier = loginIdentifier.trim();
+    const trimmedPassword = loginPassword.trim();
+
+    if (!trimmedIdentifier) {
       setErrorMessage('Please enter your Username (@nickname) or Student Email.');
       return;
     }
-    if (!loginPassword.trim()) {
+    if (!trimmedPassword) {
       setErrorMessage('Please enter your password.');
       return;
     }
 
     setIsSubmitting(true);
+    setLoginAuthStage('authenticating');
+    const authStartTime = Date.now();
 
-    const searchKey = loginIdentifier.trim().toLowerCase();
-
-    // 1. Executive Admin account handle (@modula) with password (ibraheem)
-    if (
-      (searchKey === '@modula' || searchKey === 'modula') &&
-      loginPassword.trim() === 'ibraheem'
-    ) {
-      let modulaAdmin: UserProfile = {
-        id: 'usr_admin_modula',
-        nickname: '@modula',
-        accountType: 'Admin',
-        realName: 'Administrator',
-        matricNumber: '',
-        department: '',
-        level: '',
-        bio: 'Platform Administrator (@modula).',
-        avatarKey: '1',
-        badgeType: 'GOLD',
-        badgeTitle: 'Official Admin',
-        reputationScore: 9999,
-        isVerified: true,
-        isApproved: true,
-        isAdmin: true,
-      };
-
-      try {
-        const stored = localStorage.getItem('fuhsi_users_db');
-        const localUsers = stored ? JSON.parse(stored) : [];
-        const found = localUsers.find((u: any) => u.nickname?.toLowerCase() === '@modula' || u.id === 'usr_admin_modula');
-        if (found) {
-          modulaAdmin = sanitizeModulaProfile({ ...modulaAdmin, ...found });
-        }
-      } catch (err) {
-        console.error(err);
-      }
-
-      modulaAdmin = sanitizeModulaProfile(modulaAdmin);
-      localStorage.setItem('fuhsi_active_user', JSON.stringify(modulaAdmin));
-      setIsSubmitting(false);
-      onLoginSuccess(modulaAdmin);
-      onClose();
-      return;
-    }
-
-    if (searchKey === '@modula' || searchKey === 'modula') {
-      setIsSubmitting(false);
-      setErrorMessage('Incorrect password for Executive Admin (@modula).');
-      return;
-    }
-
-    // 2. Search local users database first for instantaneous login
-    let matchedUser: any = null;
     try {
-      const stored = localStorage.getItem('fuhsi_users_db');
-      const usersList: any[] = stored ? JSON.parse(stored) : existingUsers;
-      
-      matchedUser = usersList.find(
-        (u) =>
-          u.nickname?.toLowerCase() === searchKey ||
-          u.nickname?.toLowerCase() === `@${searchKey}` ||
-          `@${u.nickname?.toLowerCase()}` === searchKey ||
-          (u.studentEmail && u.studentEmail.toLowerCase() === searchKey)
-      ) || null;
+      const searchKey = trimmedIdentifier.toLowerCase();
 
-      if (matchedUser && isUserPermanentlyDeleted(matchedUser)) {
-        matchedUser = null;
-      }
-    } catch {
-      matchedUser = null;
-    }
+      // 1. Executive Admin account handle (@modula) with password (ibraheem)
+      if (
+        (searchKey === '@modula' || searchKey === 'modula') &&
+        trimmedPassword === 'ibraheem'
+      ) {
+        let modulaAdmin: UserProfile = {
+          id: 'usr_admin_modula',
+          nickname: '@modula',
+          accountType: 'Admin',
+          realName: 'Administrator',
+          matricNumber: '',
+          department: '',
+          level: '',
+          bio: 'Platform Administrator (@modula).',
+          avatarKey: '1',
+          badgeType: 'GOLD',
+          badgeTitle: 'Official Admin',
+          reputationScore: 9999,
+          isVerified: true,
+          isApproved: true,
+          isAdmin: true,
+        };
 
-    // If not found locally, query central DB with a fast timeout
-    if (!matchedUser) {
-      try {
-        const fetchTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
-        const [serverDb, firestoreUsers] = await Promise.race([
-          Promise.all([
-            fetchServerDb().catch(() => null),
-            fetchUsersFromFirestore().catch(() => []),
-          ]),
-          fetchTimeout.then(() => [null, []]),
-        ]) as any;
-
-        const incomingCentralUsers = [
-          ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
-          ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
-        ];
-
-        if (incomingCentralUsers.length > 0) {
+        try {
           const stored = localStorage.getItem('fuhsi_users_db');
           const localUsers = stored ? JSON.parse(stored) : [];
-          const merged = mergeUsers(localUsers, incomingCentralUsers);
-          localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
-
-          const refreshedUser = merged.find(
-            (u) =>
-              u.nickname?.toLowerCase() === searchKey ||
-              u.nickname?.toLowerCase() === `@${searchKey}` ||
-              `@${u.nickname?.toLowerCase()}` === searchKey ||
-              (u.studentEmail && u.studentEmail.toLowerCase() === searchKey)
-          );
-          if (refreshedUser && !isUserPermanentlyDeleted(refreshedUser)) {
-            matchedUser = refreshedUser;
+          const found = localUsers.find((u: any) => u.nickname?.toLowerCase() === '@modula' || u.id === 'usr_admin_modula');
+          if (found) {
+            modulaAdmin = sanitizeModulaProfile({ ...modulaAdmin, ...found });
           }
+        } catch (err) {
+          console.error(err);
         }
-      } catch (err) {
-        console.error('Central DB query during login error:', err);
-      }
-    }
 
-    if (matchedUser) {
-      // Validate password strictly against stored account password
-      const expectedPassword = matchedUser.savedPassword || matchedUser.password || 'password123';
-      if (loginPassword.trim() !== expectedPassword) {
+        modulaAdmin = sanitizeModulaProfile(modulaAdmin);
+
+        // Keep authenticating animation visible for consistent period (~2.8s)
+        const elapsed = Date.now() - authStartTime;
+        const targetAuthTime = 2800;
+        if (elapsed < targetAuthTime) {
+          await new Promise((resolve) => setTimeout(resolve, targetAuthTime - elapsed));
+        }
+
+        // Show genuine success confirmation briefly
+        setLoginAuthStage('confirmed');
+        await new Promise((resolve) => setTimeout(resolve, 850));
+
+        localStorage.setItem('fuhsi_active_user', JSON.stringify(modulaAdmin));
         setIsSubmitting(false);
-        setErrorMessage('Incorrect password. Please enter the exact password created during registration.');
+        setLoginAuthStage('idle');
+        onLoginSuccess(modulaAdmin);
+        onClose();
+        return;
+      }
+
+      if (searchKey === '@modula' || searchKey === 'modula') {
+        const elapsed = Date.now() - authStartTime;
+        if (elapsed < 1800) {
+          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+        }
+        setIsSubmitting(false);
+        setLoginAuthStage('idle');
+        setErrorMessage('Incorrect password. Please try again.');
+        return;
+      }
+
+      // 2. Perform backend authentication: search local users database first
+      let matchedUser: any = null;
+      let localUsers: any[] = [];
+      try {
+        const stored = localStorage.getItem('fuhsi_users_db');
+        localUsers = stored ? JSON.parse(stored) : existingUsers;
+        
+        matchedUser = localUsers.find(
+          (u) =>
+            u.nickname?.toLowerCase() === searchKey ||
+            u.nickname?.toLowerCase() === `@${searchKey}` ||
+            `@${u.nickname?.toLowerCase()}` === searchKey ||
+            (u.studentEmail && u.studentEmail.toLowerCase() === searchKey)
+        ) || null;
+
+        if (matchedUser && isUserPermanentlyDeleted(matchedUser)) {
+          matchedUser = null;
+        }
+      } catch {
+        matchedUser = null;
+      }
+
+      // If not found locally, query central DB with timeout
+      if (!matchedUser) {
+        try {
+          const fetchTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
+          const [serverDb, firestoreUsers] = await Promise.race([
+            Promise.all([
+              fetchServerDb().catch(() => null),
+              fetchUsersFromFirestore().catch(() => []),
+            ]),
+            fetchTimeout.then(() => [null, []]),
+          ]) as any;
+
+          const incomingCentralUsers = [
+            ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
+            ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
+          ];
+
+          if (incomingCentralUsers.length > 0) {
+            const stored = localStorage.getItem('fuhsi_users_db');
+            const curLocal = stored ? JSON.parse(stored) : localUsers;
+            const merged = mergeUsers(curLocal, incomingCentralUsers);
+            localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
+
+            const refreshedUser = merged.find(
+              (u) =>
+                u.nickname?.toLowerCase() === searchKey ||
+                u.nickname?.toLowerCase() === `@${searchKey}` ||
+                `@${u.nickname?.toLowerCase()}` === searchKey ||
+                (u.studentEmail && u.studentEmail.toLowerCase() === searchKey)
+            );
+            if (refreshedUser && !isUserPermanentlyDeleted(refreshedUser)) {
+              matchedUser = refreshedUser;
+            }
+          }
+        } catch (err) {
+          console.error('Central DB query during login error:', err);
+        }
+      }
+
+      // 3. User account not found
+      if (!matchedUser) {
+        const elapsed = Date.now() - authStartTime;
+        if (elapsed < 1800) {
+          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+        }
+        setIsSubmitting(false);
+        setLoginAuthStage('idle');
+        setErrorMessage('Account not found. Please check your login details.');
+        return;
+      }
+
+      // 4. Validate password strictly against stored account password
+      const expectedPassword = matchedUser.savedPassword || matchedUser.password || 'password123';
+      if (trimmedPassword !== expectedPassword) {
+        const elapsed = Date.now() - authStartTime;
+        if (elapsed < 1800) {
+          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+        }
+        setIsSubmitting(false);
+        setLoginAuthStage('idle');
+        setErrorMessage('Incorrect password. Please try again.');
         return;
       }
 
       if (matchedUser.isApproved === false && !matchedUser.isAdmin) {
+        const elapsed = Date.now() - authStartTime;
+        if (elapsed < 1800) {
+          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+        }
         setIsSubmitting(false);
+        setLoginAuthStage('idle');
         setAccountNoticeType('PENDING');
         setErrorMessage('Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.');
         return;
@@ -564,8 +659,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         console.error(e);
       }
 
+      // 5. Keep authenticating animation visible for consistent period (~2.8s)
+      const elapsed = Date.now() - authStartTime;
+      const targetAuthTime = 2800;
+      if (elapsed < targetAuthTime) {
+        await new Promise((resolve) => setTimeout(resolve, targetAuthTime - elapsed));
+      }
+
+      // 6. Brief confirmation for genuine success: "Account details confirmed"
+      setLoginAuthStage('confirmed');
+      await new Promise((resolve) => setTimeout(resolve, 850));
+
       localStorage.setItem('fuhsi_active_user', JSON.stringify(userToLogin));
       setIsSubmitting(false);
+      setLoginAuthStage('idle');
       onLoginSuccess(userToLogin);
       onClose();
 
@@ -584,10 +691,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           localStorage.setItem('fuhsi_users_db', JSON.stringify(mergeUsers(local, incoming)));
         }
       }).catch(() => {});
-    } else {
+    } catch (err) {
+      console.error('Login error:', err);
       setIsSubmitting(false);
-      setErrorMessage('Account does not exist. No account was found for this username or email. Please click "Sign Up" below to create an account.');
-      return;
+      setLoginAuthStage('idle');
+      setErrorMessage('Connection error. Please try again.');
     }
   };
 
@@ -758,7 +866,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Scrollable Form Body */}
         <div className="p-5 overflow-y-auto space-y-4 flex-1">
-          {errorMessage && (
+          {errorMessage && !showRegisterConfirm && (
             <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold space-y-2">
               <div className="flex items-start gap-2">
                 <Info size={16} className="text-rose-600 shrink-0 mt-0.5" />
@@ -804,6 +912,110 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
 
           {mode === 'REGISTER' ? (
+            showRegisterConfirm && validatedRegPayload ? (
+              <div className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
+                <div className="text-center space-y-1.5 pt-1">
+                  <div className="w-12 h-12 rounded-2xl bg-teal-50 border border-teal-200/90 text-teal-700 mx-auto flex items-center justify-center shadow-xs">
+                    <ShieldCheck size={26} />
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+                    Confirm Your Details
+                  </h3>
+                </div>
+
+                {/* Prompt Review & Warning */}
+                <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200/90 text-amber-950 text-xs leading-relaxed space-y-1.5">
+                  <p className="font-extrabold text-amber-900">
+                    Are you sure the information you provided is correct?
+                  </p>
+                  <p className="text-amber-800/95 font-medium">
+                    Please review your details before creating your account. Providing false or inaccurate information may result in your registration being declined or your account being revoked.
+                  </p>
+                </div>
+
+                {/* Details Review Summary */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200/90 rounded-xl space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-semibold">Account Type</span>
+                    <span className="font-extrabold text-teal-800">{validatedRegPayload.accountType}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-semibold">Username</span>
+                    <span className="font-bold text-slate-900">{validatedRegPayload.cleanNickname}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-semibold">Full Name</span>
+                    <span className="font-bold text-slate-900">{validatedRegPayload.cleanRealName}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-semibold">Email</span>
+                    <span className="font-medium text-slate-900 break-all">{validatedRegPayload.cleanEmail}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                    <span className="text-slate-500 font-semibold">Phone</span>
+                    <span className="font-medium text-slate-900">{validatedRegPayload.cleanPhone}</span>
+                  </div>
+                  {validatedRegPayload.accountType === 'Student' && (
+                    <>
+                      <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                        <span className="text-slate-500 font-semibold">Department</span>
+                        <span className="font-bold text-slate-900 truncate max-w-[200px]" title={validatedRegPayload.department}>
+                          {validatedRegPayload.department}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                        <span className="text-slate-500 font-semibold">Level</span>
+                        <span className="font-bold text-slate-900">{validatedRegPayload.level}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-1">
+                        <span className="text-slate-500 font-semibold">Matric Number</span>
+                        <span className="font-mono font-bold text-slate-900">{validatedRegPayload.matricTrimmed}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {errorMessage && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">
+                    {errorMessage}
+                  </div>
+                )}
+
+                {/* Confirmation Actions: Go Back | Confirm & Create Account */}
+                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => {
+                      setShowRegisterConfirm(false);
+                      setErrorMessage('');
+                    }}
+                    className="py-2.5 px-3.5 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    Go Back
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={handleConfirmAndCreateAccount}
+                    className="py-2.5 px-3.5 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-75 disabled:cursor-wait"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin" />
+                        <span>Creating Account...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={15} />
+                        <span>Confirm & Create Account</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={handleRegister} noValidate className="space-y-4">
               {/* Account Type Selection: Student or Guest */}
               <div>
@@ -1034,46 +1246,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
 
-              {/* Inline Error Message Directly Above Submit Button */}
-              {errorMessage && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold space-y-2 animate-in fade-in duration-200">
-                  <div className="flex items-start gap-2">
-                    <Info size={16} className="text-rose-600 shrink-0 mt-0.5" />
-                    <span className="leading-relaxed">{errorMessage}</span>
-                  </div>
-                  {(matricConflictDetected || errorMessage.includes('already associated with an account')) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setErrorMessage('');
-                        setMode('SUPPORT_DESK');
-                      }}
-                      className="w-full py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                    >
-                      <LifeBuoy size={14} />
-                      <span>Need Help? Contact Help Desk</span>
-                    </button>
-                  )}
-                </div>
-              )}
-
               {/* Submit Registration Button */}
               <button
                 type="submit"
                 disabled={isSubmitting}
                 className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
               >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    <span>Creating {accountType === 'Student' ? 'Student' : 'Guest'} Account...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 size={16} />
-                    <span>Create {accountType === 'Student' ? 'Student' : 'Guest'} Account</span>
-                  </>
-                )}
+                <CheckCircle2 size={16} />
+                <span>Create Account</span>
               </button>
 
               <div className="text-center pt-2 border-t border-slate-100">
@@ -1083,6 +1263,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   onClick={() => {
                     setErrorMessage('');
                     setResetSuccessMessage('');
+                    setShowRegisterConfirm(false);
                     setMode('LOGIN');
                   }}
                   className="text-xs font-extrabold text-teal-700 hover:text-teal-900 hover:underline cursor-pointer"
@@ -1094,6 +1275,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     type="button"
                     onClick={() => {
                       setErrorMessage('');
+                      setShowRegisterConfirm(false);
                       setMode('SUPPORT_DESK');
                     }}
                     className="text-[11px] font-bold text-slate-500 hover:text-teal-700 hover:underline flex items-center justify-center gap-1 mx-auto cursor-pointer"
@@ -1104,6 +1286,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
             </form>
+            )
           ) : mode === 'LOGIN' ? (
             <form onSubmit={handleLogin} className="space-y-4">
               {pendingUserNotice && (
@@ -1145,15 +1328,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-1">
-                  Username <span className="text-rose-500">*</span>
+                  Username/email <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <User size={15} className="absolute left-3 top-2.5 text-slate-400" />
                   <input
                     type="text"
                     value={loginIdentifier}
-                    onChange={(e) => setLoginIdentifier(e.target.value)}
-                    placeholder="Enter Username"
+                    onChange={(e) => {
+                      setLoginIdentifier(e.target.value);
+                      setErrorMessage('');
+                    }}
+                    placeholder="Enter username or email"
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                     required
                   />
@@ -1169,7 +1355,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <input
                     type={showLoginPassword ? 'text' : 'password'}
                     value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
+                    onChange={(e) => {
+                      setLoginPassword(e.target.value);
+                      setErrorMessage('');
+                    }}
                     placeholder="••••••••"
                     className="w-full pl-9 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                     required
@@ -1204,22 +1393,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 type="submit"
                 disabled={isSubmitting}
                 className={`w-full py-3 px-4 font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-white active:scale-[0.98] ${
-                  isSubmitting ? 'opacity-80 cursor-wait' : 'cursor-pointer'
+                  isSubmitting ? 'opacity-85 cursor-wait' : 'cursor-pointer'
                 } ${
-                  isAdminPortal
+                  loginAuthStage === 'confirmed'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : isAdminPortal
                     ? 'bg-amber-600 hover:bg-amber-700'
                     : 'bg-teal-600 hover:bg-teal-700'
                 }`}
               >
-                {isSubmitting ? (
+                {loginAuthStage === 'confirmed' ? (
+                  <>
+                    <CheckCircle2 size={16} className="text-white" />
+                    <span>Account details confirmed</span>
+                  </>
+                ) : isSubmitting || loginAuthStage === 'authenticating' ? (
                   <>
                     <Loader2 size={16} className="animate-spin" />
-                    <span>Signing In...</span>
+                    <span>Logging in...</span>
                   </>
                 ) : (
                   <>
                     <LogIn size={16} />
-                    <span>Sign In</span>
+                    <span>Login</span>
                   </>
                 )}
               </button>
