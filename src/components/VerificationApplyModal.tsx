@@ -137,7 +137,7 @@ export const VerificationApplyModal: React.FC<VerificationApplyModalProps> = ({
                     required
                     value={matricNumber}
                     onChange={(e) => setMatricNumber(e.target.value)}
-                    placeholder="Enter Matric Number"
+                    placeholder=""
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-hidden focus:border-amber-600 font-mono"
                   />
                 </div>

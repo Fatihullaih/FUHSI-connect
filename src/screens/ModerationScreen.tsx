@@ -850,7 +850,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
             type="text"
             value={studentSearchQuery}
             onChange={(e) => { setStudentSearchQuery(e.target.value); setStudentCurrentPage(1); }}
-            placeholder="Search students by @username, Real Name, Matric Number (e.g. 24/PRT/007), Email, or Phone..."
+            placeholder="Search students by @username, Real Name, Matric Number, Email, or Phone..."
             className="w-full pl-10 pr-9 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-900 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all placeholder:text-slate-400"
           />
           {studentSearchQuery && (

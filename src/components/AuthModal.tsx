@@ -1196,21 +1196,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                             setMatricConflictDetected(false);
                             setErrorMessage('');
                           }}
-                          placeholder={
-                            level && LEVEL_TO_MATRIC_YEAR_MAP[level]
-                              ? `e.g. ${LEVEL_TO_MATRIC_YEAR_MAP[level]}/${(department && FUHSI_DEPARTMENT_MAPPINGS[department]?.primary) || 'MCB'}/001`
-                              : 'e.g. 25/MCB/001'
-                          }
+                          placeholder=""
                           autoComplete="off"
                           autoCorrect="off"
                           spellCheck={false}
                           className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold uppercase text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                         />
-                        {level && LEVEL_TO_MATRIC_YEAR_MAP[level] && (
-                          <p className="text-[10px] text-teal-800 font-semibold mt-1">
-                            Must start with <span className="font-mono font-bold">{LEVEL_TO_MATRIC_YEAR_MAP[level]}/</span> for {level}
-                          </p>
-                        )}
                       </div>
                     )}
                   </div>
