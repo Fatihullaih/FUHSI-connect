@@ -4,7 +4,7 @@ import { UserProfile } from '../types';
 import { getStoredUsers, upsertUser, updateUserPassword, unmarkUserPermanentlyDeleted, isUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
 import { fetchServerDb, mergeUsers, pushServerDbSync } from '../utils/apiSync';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
-import { validateMatricCredentials, checkMatricUniqueness, normalizeMatricNumber } from '../utils/matricValidation';
+import { validateMatricCredentials, checkMatricUniqueness, normalizeMatricNumber, LEVEL_TO_MATRIC_YEAR_MAP, FUHSI_DEPARTMENT_MAPPINGS } from '../utils/matricValidation';
 import { saveUserToFirestore, fetchUsersFromFirestore } from '../lib/firestoreSync';
 import { AvatarIcon } from './AvatarIcon';
 import { 
@@ -279,6 +279,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
       if (!level) {
         setErrorMessage('Please select your Level.');
+        return;
+      }
+      if (level === '100L') {
+        setErrorMessage('100l students have not been issued matric numbers yet. Student registration is currently unavailable for 100l You may create a Guest account instead.');
         return;
       }
       if (!matricNumber.trim()) {
@@ -1161,8 +1165,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <select
                         value={level}
                         onChange={(e) => {
-                          setLevel(e.target.value);
+                          const newLevel = e.target.value;
+                          setLevel(newLevel);
                           setErrorMessage('');
+                          if (newLevel === '100L') {
+                            setMatricNumber('');
+                          }
                         }}
                         className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                       >
@@ -1175,26 +1183,63 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </select>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 mb-1">
-                        Matric Number <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={matricNumber}
-                        onChange={(e) => {
-                          setMatricNumber(e.target.value);
-                          setMatricConflictDetected(false);
+                    {level !== '100L' && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 mb-1">
+                          Matric Number <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={matricNumber}
+                          onChange={(e) => {
+                            setMatricNumber(e.target.value);
+                            setMatricConflictDetected(false);
+                            setErrorMessage('');
+                          }}
+                          placeholder={
+                            level && LEVEL_TO_MATRIC_YEAR_MAP[level]
+                              ? `e.g. ${LEVEL_TO_MATRIC_YEAR_MAP[level]}/${(department && FUHSI_DEPARTMENT_MAPPINGS[department]?.primary) || 'MCB'}/001`
+                              : 'e.g. 25/MCB/001'
+                          }
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold uppercase text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
+                        />
+                        {level && LEVEL_TO_MATRIC_YEAR_MAP[level] && (
+                          <p className="text-[10px] text-teal-800 font-semibold mt-1">
+                            Must start with <span className="font-mono font-bold">{LEVEL_TO_MATRIC_YEAR_MAP[level]}/</span> for {level}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 100L Notice and Option to create Guest account instead */}
+                  {level === '100L' && (
+                    <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl space-y-2.5 animate-in fade-in">
+                      <div className="flex items-start gap-2">
+                        <Info size={16} className="text-amber-700 shrink-0 mt-0.5" />
+                        <p className="text-xs text-amber-950 font-semibold leading-relaxed">
+                          100l students have not been issued matric numbers yet. Student registration is currently unavailable for 100l You may create a Guest account instead.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountType('Guest');
+                          setLevel('');
+                          setDepartment('');
+                          setMatricNumber('');
                           setErrorMessage('');
                         }}
-                        placeholder=""
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold uppercase text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
-                      />
+                        className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-extrabold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <UserPlus size={14} />
+                        <span>Create Guest Account</span>
+                      </button>
                     </div>
-                  </div>
+                  )}
                 </>
               )}
 
@@ -1249,11 +1294,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {/* Submit Registration Button */}
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+                disabled={isSubmitting || (accountType === 'Student' && level === '100L')}
+                className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <CheckCircle2 size={16} />
-                <span>Create Account</span>
+                <span>{accountType === 'Student' && level === '100L' ? 'Student Registration Unavailable for 100L' : 'Create Account'}</span>
               </button>
 
               <div className="text-center pt-2 border-t border-slate-100">

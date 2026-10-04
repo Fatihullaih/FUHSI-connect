@@ -6,8 +6,8 @@ import { isUserPermanentlyDeleted } from './userDbUtils';
  */
 export const FUHSI_DEPARTMENT_MAPPINGS: Record<string, { primary: string; aliases: string[] }> = {
   'Medicine and Surgery': {
-    primary: 'MBBS',
-    aliases: ['MBBS', 'MBS', 'MED'],
+    primary: 'MBS',
+    aliases: ['MBS', 'MBBS', 'MED'],
   },
   'Nursing Science': {
     primary: 'NSC',
@@ -30,8 +30,8 @@ export const FUHSI_DEPARTMENT_MAPPINGS: Record<string, { primary: string; aliase
     aliases: ['PHM', 'PCO', 'PHA', 'PHAR'],
   },
   'Nutrition and Dietetics': {
-    primary: 'HND',
-    aliases: ['HND', 'NUT', 'NUD', 'NAD', 'NTD'],
+    primary: 'NUT',
+    aliases: ['NUT', 'HND', 'NUD', 'NAD', 'NTD'],
   },
   'Information Technology and Health Informatics': {
     primary: 'ITH',
@@ -61,27 +61,27 @@ export const FUHSI_DEPARTMENT_MAPPINGS: Record<string, { primary: string; aliase
 
 /**
  * Official Matriculation Year Prefix to Academic Level Mapping
- * 22/ = 400L
- * 23/ = 300L
- * 24/ = 200L
- * 25/ = 100L
+ * New Mapping:
+ * 25/ = 200L
+ * 24/ = 300L
+ * 23/ = 400L
+ * 22/ = 500L
+ * 
+ * Note: 100L students have not been issued matriculation numbers yet.
+ * Student registration is currently unavailable for 100L.
  */
 export const MATRIC_YEAR_TO_LEVEL_MAP: Record<string, string> = {
-  '22': '400L',
-  '23': '300L',
-  '24': '200L',
-  '25': '100L',
-  '21': '500L',
-  '20': '600L',
+  '25': '200L',
+  '24': '300L',
+  '23': '400L',
+  '22': '500L',
 };
 
 export const LEVEL_TO_MATRIC_YEAR_MAP: Record<string, string> = {
-  '400L': '22',
-  '300L': '23',
-  '200L': '24',
-  '100L': '25',
-  '500L': '21',
-  '600L': '20',
+  '200L': '25',
+  '300L': '24',
+  '400L': '23',
+  '500L': '22',
 };
 
 /**
@@ -173,17 +173,34 @@ export interface MatricValidationResult {
   conflictUser?: UserProfile;
 }
 
+export function is100LevelBlocked(level?: string): boolean {
+  if (!level) return false;
+  const clean = level.trim().toUpperCase().replace(/\s*LEVEL$/i, 'L');
+  return clean === '100L';
+}
+
 /**
  * Comprehensive Validation for FUHSI Matriculation Numbers:
- * 1. Matric Year Prefix must match selected Academic Level (22/ = 400L, 23/ = 300L, 24/ = 200L, 25/ = 100L).
- * 2. Course Abbreviation must match the selected Department/Programme (e.g. MLS -> Medical Laboratory Science).
- * 3. Matric Year + Course Abbreviation + Selected Level are validated together.
+ * 1. 100L students are not issued matriculation numbers yet, and cannot register as Student.
+ * 2. Matric Year Prefix must match selected Academic Level (25/ = 200L, 24/ = 300L, 23/ = 400L, 22/ = 500L).
+ * 3. Course Abbreviation must match the selected Department/Programme (e.g. MLS -> Medical Laboratory Science, MBS -> Medicine and Surgery, MCB -> Microbiology).
+ * 4. Matric Year + Course Abbreviation + Selected Level + 3-digit serial number are validated together.
  */
 export function validateMatricCredentials(
   matricRaw: string,
   department: string,
   level: string
 ): MatricValidationResult {
+  const cleanSelectedLevel = (level || '').trim().toUpperCase().replace(/\s*LEVEL$/i, 'L');
+
+  // 100 Level students have not been issued matric numbers yet
+  if (cleanSelectedLevel === '100L') {
+    return {
+      isValid: false,
+      errorMessage: '100l students have not been issued matric numbers yet. Student registration is currently unavailable for 100l You may create a Guest account instead.',
+    };
+  }
+
   if (!matricRaw || !matricRaw.trim()) {
     return {
       isValid: false,
@@ -220,7 +237,7 @@ export function validateMatricCredentials(
   const extractedAbbr = parts[1].toUpperCase();
   const serialNumber = parts[2];
 
-  // 1. Validate Year Prefix
+  // 1. Validate Year Prefix (must be 25 for 200L, 24 for 300L, 23 for 400L, 22 for 500L)
   const expectedLevel = MATRIC_YEAR_TO_LEVEL_MAP[yearPrefix];
   if (!expectedLevel) {
     return {
@@ -231,8 +248,7 @@ export function validateMatricCredentials(
     };
   }
 
-  // Enforce Year Prefix must match Level
-  const cleanSelectedLevel = level.trim().toUpperCase().replace(/\s*LEVEL$/i, 'L');
+  // Enforce Year Prefix must match selected Level
   const cleanExpectedLevel = expectedLevel.trim().toUpperCase().replace(/\s*LEVEL$/i, 'L');
   if (cleanSelectedLevel !== cleanExpectedLevel) {
     return {

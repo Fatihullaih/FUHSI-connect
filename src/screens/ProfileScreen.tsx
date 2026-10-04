@@ -165,7 +165,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [nickname, setNickname] = useState(userProfile?.nickname || '@Student');
   const [realName, setRealName] = useState(userProfile?.realNameHidden || userProfile?.realName || '');
   const [studentEmail, setStudentEmail] = useState(userProfile?.studentEmail || '');
-  const [department, setDepartment] = useState(isMod ? '' : (userProfile?.department || 'Medicine and Surgery (MBBS)'));
+  const [department, setDepartment] = useState(isMod ? '' : (userProfile?.department || 'Medicine and Surgery (MBS)'));
   const [level, setLevel] = useState(isMod ? '' : (userProfile?.level || '300L'));
   const [bio, setBio] = useState(userProfile?.bio || '');
   const [emergencyPhone, setEmergencyPhone] = useState(userProfile?.emergencyHomePhone || '');
@@ -348,13 +348,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   }, [showFollowersModal, confirmLogout, showPictureModal, showPointsBreakdown, isEditingSettings, settingsSubpage]);
 
   const departments = [
-    'Medicine and Surgery (MBBS)',
+    'Medicine and Surgery (MBS)',
     'Nursing Science (NSC)',
     'Medical Laboratory Science (MLS)',
     'Doctor of Physiotherapy (DPT)',
     'Audiology (AUD)',
     'Pharmacology (PHM)',
-    'Nutrition and Dietetics (HND)',
+    'Nutrition and Dietetics (NUT)',
     'Information Technology and Health Informatics (ITH)',
     'Microbiology (MCB)',
     'Biochemistry (BCH)',
@@ -484,7 +484,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       setRealName(userProfile.realNameHidden || userProfile.realName || '');
       setStudentEmail(userProfile.studentEmail || '');
       const isMod = isModulaAccount(userProfile);
-      setDepartment(isMod ? '' : (userProfile.department || 'Medicine and Surgery (MBBS)'));
+      setDepartment(isMod ? '' : (userProfile.department || 'Medicine and Surgery (MBS)'));
       setLevel(isMod ? '' : (userProfile.level || '300L'));
       setBio(userProfile.bio || '');
       setEmergencyPhone(userProfile.emergencyHomePhone || '');
