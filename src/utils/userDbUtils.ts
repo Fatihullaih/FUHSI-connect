@@ -817,7 +817,7 @@ export function saveStoredUsers(users: UserProfile[]): void {
     console.error('Error batch saving users to Firestore:', err);
   });
   // Sync to central server database asynchronously
-  pushServerDbSync({ users: cleaned, replaceUsers: true } as any).catch((err) => {
+  pushServerDbSync({ users: cleaned } as any).catch((err) => {
     console.error('Error syncing users to server:', err);
   });
 }
@@ -1000,15 +1000,19 @@ export function upsertUser(user: UserProfile): UserProfile[] {
     users.push(updatedUser);
   }
 
-  // Save single user to Firestore immediately
+  // Save single user to Firestore & server immediately
   saveUserToFirestore(updatedUser).catch((err) => {
     console.error('Error saving single user to Firestore:', err);
+  });
+  pushServerDbSync({ users: [updatedUser] } as any).catch((err) => {
+    console.error('Error saving single user to server DB:', err);
   });
 
   saveStoredUsers(users);
   try {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: updatedUser }));
+      window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: updatedUser }));
     }
   } catch (e) {}
   return users;

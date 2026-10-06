@@ -150,7 +150,8 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
       const existing = mergedList[existingIndex];
       const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
       const incomingTime = u.updatedAt ? new Date(u.updatedAt).getTime() : 0;
-      const useIncoming = incomingTime >= existingTime;
+      // Prefer newer record; if equal or older, preserve existing local record
+      const useIncoming = incomingTime > existingTime;
 
       const primary = useIncoming ? u : existing;
       const secondary = useIncoming ? existing : u;

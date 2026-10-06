@@ -199,6 +199,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   useEffect(() => {
     if (userProfile) {
+      setNickname(userProfile.nickname || '@Student');
+      setRealName(userProfile.realNameHidden || userProfile.realName || '');
+      setStudentEmail(userProfile.studentEmail || '');
+      const isModAcc = isModulaAccount(userProfile);
+      setDepartment(isModAcc ? '' : (userProfile.department || 'Medicine and Surgery (MBS)'));
+      setLevel(isModAcc ? '' : (userProfile.level || '300L'));
+      setBio(userProfile.bio || '');
+      setEmergencyPhone(userProfile.emergencyHomePhone || '');
+      setSelectedAvatarKey(userProfile.avatarKey || 'caduceus');
+      setAvatarUrl(userProfile.avatarUrl || '');
+
       setIsAccountPrivate(Boolean(userProfile.isPrivate));
       setDefaultPostAudience(userProfile.defaultPostAudience || 'everyone');
       setAllowDirectMessagesFrom(userProfile.allowDirectMessagesFrom || 'everyone');
@@ -206,6 +217,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       setSearchDiscoverable(userProfile.searchDiscoverable !== false);
     }
   }, [
+    userProfile?.id,
+    userProfile?.nickname,
+    userProfile?.emergencyHomePhone,
+    userProfile?.realName,
+    userProfile?.studentEmail,
+    userProfile?.department,
+    userProfile?.level,
+    userProfile?.bio,
+    userProfile?.avatarUrl,
+    userProfile?.avatarKey,
+    userProfile?.updatedAt,
     userProfile?.isPrivate,
     userProfile?.defaultPostAudience,
     userProfile?.allowDirectMessagesFrom,
@@ -1992,7 +2014,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                             <span>Academic Registration Data</span>
                           </span>
                           <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                            Department Locked 🔒
+                            Department & Level Locked 🔒
                           </span>
                         </div>
 
@@ -2000,7 +2022,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           {/* Department (Read-only / Immutable) */}
                           <div className="space-y-1">
                             <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400">
-                              Department (Permanent)
+                              Department
                             </label>
                             <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-700/80 text-xs font-extrabold text-slate-800 dark:text-slate-200 flex items-center justify-between select-none">
                               <span className="truncate">{userProfile?.department || department || 'FUHSI Department'}</span>
@@ -2008,29 +2030,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                             </div>
                           </div>
 
-                          {/* Academic Level (Editable) */}
+                          {/* Academic Level (Read-only / Immutable for Students) */}
                           <div className="space-y-1">
-                            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                            <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400">
                               Academic Level
                             </label>
-                            <select
-                              value={level}
-                              onChange={(e) => setLevel(e.target.value)}
-                              className="w-full text-xs rounded-xl border border-slate-200 dark:border-slate-700 p-2.5 text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-teal-500"
-                            >
-                              {levels.map((l) => (
-                                <option key={l} value={l}>{l}</option>
-                              ))}
-                            </select>
+                            <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-700/80 text-xs font-extrabold text-slate-800 dark:text-slate-200 flex items-center justify-between select-none">
+                              <span className="truncate">{userProfile?.level || level || 'Level'}</span>
+                              <Lock size={12} className="text-slate-400 shrink-0 ml-1" />
+                            </div>
                           </div>
                         </div>
-
-                        <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-start gap-1 leading-snug">
-                          <Info size={11} className="text-teal-600 shrink-0 mt-0.5" />
-                          <span>
-                            Department cannot be changed because it is linked to your matric credentials.
-                          </span>
-                        </p>
                       </div>
                     )}
 

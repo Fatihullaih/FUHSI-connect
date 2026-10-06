@@ -289,11 +289,22 @@ export const App: React.FC = () => {
     window.addEventListener('fuhsi-theme-changed', handleThemeEvent);
     window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
     window.addEventListener('fuhsi_account_purged', handleAccountPurged);
+
+    const handleUsersUpdateEvent = () => {
+      const stored = getStoredUsers();
+      setAppTotalMembers(stored.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
+      setNotifTrigger((prev) => prev + 1);
+    };
+    window.addEventListener('fuhsi_users_updated', handleUsersUpdateEvent);
+    window.addEventListener('fuhsi_profile_updated', handleUsersUpdateEvent);
+
     return () => {
       cleanup();
       window.removeEventListener('fuhsi-theme-changed', handleThemeEvent);
       window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
       window.removeEventListener('fuhsi_account_purged', handleAccountPurged);
+      window.removeEventListener('fuhsi_users_updated', handleUsersUpdateEvent);
+      window.removeEventListener('fuhsi_profile_updated', handleUsersUpdateEvent);
     };
   }, []);
 
@@ -586,7 +597,7 @@ export const App: React.FC = () => {
       const localStoredUsers = getStoredUsers();
       const mergedUsers = mergeUsers(localStoredUsers, validUsers);
       localStorage.setItem('fuhsi_users_db', JSON.stringify(mergedUsers));
-      setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined).length);
+      setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
       setNotifTrigger((prev) => prev + 1);
 
       // Reconcile active logged-in user profile
@@ -614,10 +625,12 @@ export const App: React.FC = () => {
             setShowAuthModal(true);
             return;
           } else if (!found && !isModulaAccount(parsed)) {
-            localStorage.removeItem('fuhsi_active_user');
-            setUserProfile(EMPTY_USER_PROFILE);
-            setIsLoggedIn(false);
-            setShowAuthModal(true);
+            // User was created or updated locally and not yet synced to remote snapshot
+            // Preserve the user, upsert into DB, and sync to server
+            upsertUser(parsed);
+            pushServerDbSync({ users: [parsed] } as any).catch(console.error);
+            saveUserToFirestore(parsed).catch(console.error);
+            setUserProfile(parsed);
             return;
           } else if (found) {
             if (found.isApproved === false && !parsed.isAdmin) {
@@ -630,7 +643,11 @@ export const App: React.FC = () => {
                 if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
                 const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
                 const foundTime = found.updatedAt ? new Date(found.updatedAt).getTime() : 0;
-                const isRecentlySaved = Date.now() - lastProfileSaveTimestampRef.current < 20000;
+                const savedTs = Math.max(
+                  lastProfileSaveTimestampRef.current || 0,
+                  Number(localStorage.getItem('fuhsi_last_profile_save') || 0)
+                );
+                const isRecentlySaved = Date.now() - savedTs < 60000;
                 const preferLocal = isRecentlySaved || prevTime >= foundTime;
 
                 const nextAvatarUrl = preferLocal 
@@ -990,7 +1007,7 @@ export const App: React.FC = () => {
           const localStoredUsers = getStoredUsers();
           const mergedUsers = mergeUsers(localStoredUsers, validUsers);
           localStorage.setItem('fuhsi_users_db', JSON.stringify(mergedUsers));
-          setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined).length);
+          setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
 
           const activeUserJson = localStorage.getItem('fuhsi_active_user');
           if (activeUserJson) {
@@ -1017,10 +1034,12 @@ export const App: React.FC = () => {
                 setShowAuthModal(true);
                 return;
               } else if (!found && !isModulaAccount(parsed)) {
-                localStorage.removeItem('fuhsi_active_user');
-                setUserProfile(EMPTY_USER_PROFILE);
-                setIsLoggedIn(false);
-                setShowAuthModal(true);
+                // User was created or updated locally and not yet synced to remote snapshot
+                // Preserve the user, upsert into DB, and sync to server
+                upsertUser(parsed);
+                pushServerDbSync({ users: [parsed] } as any).catch(console.error);
+                saveUserToFirestore(parsed).catch(console.error);
+                setUserProfile(parsed);
                 return;
               } else if (found) {
                 if (found.isApproved === false && !parsed.isAdmin) {
@@ -1033,7 +1052,11 @@ export const App: React.FC = () => {
                     if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
                     const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
                     const foundTime = found.updatedAt ? new Date(found.updatedAt).getTime() : 0;
-                    const isRecentlySaved = Date.now() - lastProfileSaveTimestampRef.current < 20000;
+                    const savedTs = Math.max(
+                      lastProfileSaveTimestampRef.current || 0,
+                      Number(localStorage.getItem('fuhsi_last_profile_save') || 0)
+                    );
+                    const isRecentlySaved = Date.now() - savedTs < 60000;
                     const preferLocal = isRecentlySaved || prevTime >= foundTime;
 
                     const nextAvatarUrl = preferLocal 
@@ -3436,6 +3459,9 @@ export const App: React.FC = () => {
 
     // Mark recent save timestamp to shield local state against stale race-condition server syncs
     lastProfileSaveTimestampRef.current = Date.now();
+    try {
+      localStorage.setItem('fuhsi_last_profile_save', String(Date.now()));
+    } catch (e) {}
 
     // 1. Update React state
     setUserProfile(updated);
@@ -3639,6 +3665,11 @@ export const App: React.FC = () => {
     setShowFollowersDirectoryModal(false);
     setShowCreatePostModal(false);
     setShowPwaModal(false);
+
+    // Update app total members count and trigger allUsers recomputation
+    const updatedUsers = getStoredUsers();
+    setAppTotalMembers(updatedUsers.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
+    setNotifTrigger((prev) => prev + 1);
   }, []);
 
   if (!isLoggedIn) {

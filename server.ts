@@ -460,6 +460,11 @@ app.post('/api/db/sync', (req, res) => {
         activeDb.deletedUserNicknames = (activeDb.deletedUserNicknames || []).filter((n: string) => !unNicks.has(n.toLowerCase().replace(/^@/, '')));
         changed = true;
       }
+      if (Array.isArray(updates.unDeleteUserIds)) {
+        const unIds = new Set(updates.unDeleteUserIds.map((id: any) => String(id)));
+        activeDb.deletedUserIds = (activeDb.deletedUserIds || []).filter((id: string) => !unIds.has(String(id)));
+        changed = true;
+      }
 
       // Handle globally deleted posts
       if (Array.isArray(updates.deletedPostIds) && updates.deletedPostIds.length > 0) {
@@ -490,9 +495,75 @@ app.post('/api/db/sync', (req, res) => {
           return !deletedIds.has(uId) && !deletedNicks.has(uNick);
         });
 
-        // Always merge users to preserve all registered accounts across devices, safely excluding deleted accounts
-        const merged = mergeUsers(activeDb.users, filteredIncoming);
-        activeDb.users = merged.filter((u: any) => {
+        // Always safely merge incoming user updates so existing users are never accidentally wiped
+        const userMap = new Map<string, any>();
+        for (const u of (activeDb.users || [])) {
+          const key = u.id || (u.nickname ? u.nickname.toLowerCase().replace(/^@/, '') : '');
+          if (key) userMap.set(key, u);
+        }
+
+        for (const incoming of filteredIncoming) {
+          const inId = String(incoming.id || '');
+          const inNick = incoming.nickname ? String(incoming.nickname).toLowerCase().replace(/^@/, '') : '';
+          const inEmail = incoming.studentEmail ? String(incoming.studentEmail).toLowerCase().trim() : '';
+
+          // Match existing account by permanent ID (primary), email (secondary), or previous nickname
+          let matchedKey: string | null = null;
+          if (inId && userMap.has(inId)) {
+            matchedKey = inId;
+          } else {
+            for (const [key, existing] of userMap.entries()) {
+              if (inId && existing.id === inId) {
+                matchedKey = key;
+                break;
+              }
+              const exNick = existing.nickname ? String(existing.nickname).toLowerCase().replace(/^@/, '') : '';
+              if (inNick && exNick && inNick === exNick) {
+                matchedKey = key;
+                break;
+              }
+              const exEmail = existing.studentEmail ? String(existing.studentEmail).toLowerCase().trim() : '';
+              if (inEmail && exEmail && inEmail === exEmail && !inEmail.includes('admin@fuhsi.edu.ng')) {
+                matchedKey = key;
+                break;
+              }
+            }
+          }
+
+          if (matchedKey) {
+            const existing = userMap.get(matchedKey);
+            userMap.set(matchedKey, {
+              ...existing,
+              ...incoming,
+              id: existing.id || incoming.id,
+              nickname: incoming.nickname || existing.nickname,
+              emergencyHomePhone: incoming.emergencyHomePhone !== undefined ? incoming.emergencyHomePhone : existing.emergencyHomePhone,
+              realName: incoming.realName !== undefined ? incoming.realName : existing.realName,
+              studentEmail: incoming.studentEmail !== undefined ? incoming.studentEmail : existing.studentEmail,
+              level: incoming.level !== undefined ? incoming.level : existing.level,
+              department: incoming.department !== undefined ? incoming.department : existing.department,
+              matricNumber: incoming.matricNumber !== undefined ? incoming.matricNumber : existing.matricNumber,
+              bio: incoming.bio !== undefined ? incoming.bio : existing.bio,
+              avatarUrl: incoming.avatarUrl !== undefined ? incoming.avatarUrl : existing.avatarUrl,
+              avatarKey: incoming.avatarKey || existing.avatarKey,
+              savedPassword: incoming.savedPassword || (incoming as any).password || existing.savedPassword || (existing as any).password,
+              password: incoming.password || incoming.savedPassword || existing.password || existing.savedPassword,
+              isApproved: incoming.isApproved !== undefined ? incoming.isApproved : existing.isApproved,
+              isDeclined: incoming.isDeclined !== undefined ? incoming.isDeclined : existing.isDeclined,
+              isVerified: incoming.isVerified !== undefined ? incoming.isVerified : existing.isVerified,
+              verificationStatus: incoming.verificationStatus || existing.verificationStatus,
+              badgeType: incoming.badgeType !== undefined ? incoming.badgeType : existing.badgeType,
+              badgeTitle: incoming.badgeTitle !== undefined ? incoming.badgeTitle : existing.badgeTitle,
+              reputationScore: incoming.reputationScore !== undefined ? incoming.reputationScore : existing.reputationScore,
+              updatedAt: incoming.updatedAt || new Date().toISOString(),
+            });
+          } else {
+            const newKey = inId || inNick || `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+            userMap.set(newKey, incoming);
+          }
+        }
+
+        activeDb.users = Array.from(userMap.values()).filter((u: any) => {
           const uId = String(u.id || '');
           const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
           return !deletedIds.has(uId) && !deletedNicks.has(uNick);

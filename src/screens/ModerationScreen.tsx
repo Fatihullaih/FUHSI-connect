@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeType, CampusNotification } from '../types';
-import { getStoredUsers, saveStoredUsers, isGuestAccount, markUserPermanentlyDeleted, purgeAccountPermanently, updateUserBadgeAndVerification } from '../utils/userDbUtils';
-import { pushServerDbSync } from '../utils/apiSync';
-import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
+import { getStoredUsers, saveStoredUsers, isGuestAccount, isModulaAccount, markUserPermanentlyDeleted, purgeAccountPermanently, updateUserBadgeAndVerification } from '../utils/userDbUtils';
+import { pushServerDbSync, fetchServerDb, mergeUsers } from '../utils/apiSync';
+import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
 import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User } from 'lucide-react';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
+import { FUHSI_DEPARTMENTS } from '../components/AuthModal';
 import { AdminTradeDesk } from '../components/AdminTradeDesk';
 import { AdminChatReportsDesk } from '../components/AdminChatReportsDesk';
 import { INITIAL_VERIFICATION_CANDIDATES, INITIAL_USER_PROFILE } from '../data/initialData';
@@ -174,14 +175,121 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   // Dedicated Student Badge & Title Reassigner State
   const [studentBadgeColor, setStudentBadgeColor] = useState<BadgeType>('BLUE');
   const [studentBadgeTitle, setStudentBadgeTitle] = useState('');
+  const [studentLevelEdit, setStudentLevelEdit] = useState('');
+  const [studentDeptEdit, setStudentDeptEdit] = useState('');
 
   const openStudentDossier = (u: UserProfile) => {
     setSelectedStudentForView(u);
+    setStudentLevelEdit(u.level || '200L');
+    setStudentDeptEdit(u.department || '');
     const bInfo = getUserBadgeInfo(u.nickname, u);
     setStudentBadgeColor(
       (bInfo.badgeType && bInfo.badgeType !== 'NONE' ? bInfo.badgeType : (u.badgeType && u.badgeType !== 'NONE' ? u.badgeType : 'BLUE')) as BadgeType
     );
     setStudentBadgeTitle(bInfo.badgeTitle || u.badgeTitle || '');
+  };
+
+  const handleUpdateStudentAcademicData = (student: UserProfile, targetLevel?: string, targetDept?: string) => {
+    const nextLevel = targetLevel || studentLevelEdit || student.level || '200L';
+    const nextDept = targetDept !== undefined ? targetDept : (studentDeptEdit || student.department || '');
+    if (!student) return;
+
+    const storedList = getStoredUsers();
+    let updatedStudent: UserProfile | null = null;
+    const updatedList = storedList.map((u) => {
+      const match = (student.id && u.id === student.id) || 
+                    (student.nickname && u.nickname && u.nickname.toLowerCase() === student.nickname.toLowerCase());
+      if (match) {
+        updatedStudent = {
+          ...u,
+          level: nextLevel,
+          department: nextDept,
+          updatedAt: new Date().toISOString(),
+        };
+        return updatedStudent;
+      }
+      return u;
+    });
+
+    if (updatedStudent) {
+      saveStoredUsers(updatedList);
+      saveUserToFirestore(updatedStudent).catch(console.error);
+      pushServerDbSync({ users: [updatedStudent] } as any).catch(console.error);
+
+      // If updating currently logged in user
+      const activeRaw = localStorage.getItem('fuhsi_active_user');
+      if (activeRaw) {
+        try {
+          const activeUser = JSON.parse(activeRaw);
+          if (activeUser.id === (updatedStudent as UserProfile).id || activeUser.nickname?.toLowerCase() === (updatedStudent as UserProfile).nickname?.toLowerCase()) {
+            localStorage.setItem('fuhsi_active_user', JSON.stringify({ ...activeUser, level: nextLevel, department: nextDept }));
+          }
+        } catch (e) {}
+      }
+
+      window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: updatedStudent }));
+      window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: updatedStudent }));
+      setSelectedStudentForView(updatedStudent);
+      refreshUsersList();
+      setApprovalToast(`✓ Academic profile for ${student.nickname} updated: ${nextDept} (${nextLevel})!`);
+      setTimeout(() => setApprovalToast(null), 4000);
+    }
+  };
+
+  const handleBulkPromoteNewSession = () => {
+    if (!window.confirm('Are you sure you want to promote all active students to the next academic level for the new academic session?\n\n• 200L -> 300L\n• 300L -> 400L\n• 400L -> 500L\n• 500L -> Graduated / Alumni')) {
+      return;
+    }
+
+    const storedList = getStoredUsers();
+    let promotedCount = 0;
+    const updatedList = storedList.map((u) => {
+      if (u.isAdmin || isGuestAccount(u) || isModulaAccount(u)) return u;
+
+      const cur = (u.level || '').trim().toUpperCase();
+      let next = cur;
+      if (cur === '200L' || cur === '200 LEVEL') next = '300L';
+      else if (cur === '300L' || cur === '300 LEVEL') next = '400L';
+      else if (cur === '400L' || cur === '400 LEVEL') next = '500L';
+      else if (cur === '500L' || cur === '500 LEVEL') next = 'Graduated';
+
+      if (next !== cur) {
+        promotedCount++;
+        return {
+          ...u,
+          level: next,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return u;
+    });
+
+    if (promotedCount > 0) {
+      saveStoredUsers(updatedList);
+      saveUsersBatchToFirestore(updatedList).catch(console.error);
+      pushServerDbSync({ users: updatedList } as any).catch(console.error);
+
+      // Reconcile active user if student
+      const activeRaw = localStorage.getItem('fuhsi_active_user');
+      if (activeRaw) {
+        try {
+          const activeUser = JSON.parse(activeRaw);
+          const found = updatedList.find((u) => u.id === activeUser.id);
+          if (found && found.level) {
+            localStorage.setItem('fuhsi_active_user', JSON.stringify({ ...activeUser, level: found.level }));
+          }
+        } catch (e) {}
+      }
+
+      window.dispatchEvent(new CustomEvent('fuhsi_users_updated'));
+      window.dispatchEvent(new CustomEvent('fuhsi_profile_updated'));
+      refreshUsersList();
+      setApprovalToast(`🎉 Academic Session Promotion Completed! ${promotedCount} students promoted to their next academic level.`);
+      setTimeout(() => setApprovalToast(null), 5000);
+    } else {
+      setApprovalToast('No eligible students found to promote.');
+      setTimeout(() => setApprovalToast(null), 3000);
+    }
   };
 
   const handleSaveStudentBadge = (student: UserProfile) => {
@@ -309,6 +417,15 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   const refreshUsersList = () => {
     const list = getStoredUsers();
     setAllUsersList(list);
+    fetchServerDb().then((sDb) => {
+      if (sDb && Array.isArray(sDb.users) && sDb.users.length > 0) {
+        const merged = mergeUsers(list, sDb.users);
+        setAllUsersList(merged);
+        try {
+          localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
+        } catch (e) {}
+      }
+    }).catch(() => {});
   };
 
   useEffect(() => {
@@ -319,10 +436,14 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       refreshUsersList();
     };
     window.addEventListener('fuhsi_badge_updated', handleBadgeEvent);
+    window.addEventListener('fuhsi_users_updated', handleBadgeEvent);
+    window.addEventListener('fuhsi_profile_updated', handleBadgeEvent);
 
     return () => {
       clearInterval(interval);
       window.removeEventListener('fuhsi_badge_updated', handleBadgeEvent);
+      window.removeEventListener('fuhsi_users_updated', handleBadgeEvent);
+      window.removeEventListener('fuhsi_profile_updated', handleBadgeEvent);
     };
   }, []);
 
@@ -662,7 +783,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
           {/* 1. Student Accounts */}
           <button
             type="button"
-            onClick={() => navigateToDesk('student-accounts-desk', 'PENDING')}
+            onClick={() => navigateToDesk('student-accounts-desk', adminTasks.studentAccounts > 0 ? 'PENDING' : 'ALL')}
             className={`p-3 rounded-xl border transition-all flex flex-col justify-between cursor-pointer text-left ${
               adminTasks.studentAccounts > 0
                 ? 'bg-amber-50/80 border-amber-300 hover:bg-amber-100/90 shadow-2xs'
@@ -839,6 +960,15 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
               }`}
             >
               Approved ({allUsersList.filter((u) => u.isApproved && !u.isAdmin && u.nickname !== '@modula').length})
+            </button>
+            <button
+              type="button"
+              onClick={handleBulkPromoteNewSession}
+              className="px-2.5 py-1 rounded-lg text-xs font-extrabold transition-all cursor-pointer bg-sky-100 hover:bg-sky-200 text-sky-900 border border-sky-300 flex items-center gap-1 shadow-2xs"
+              title="Promote all eligible students to next academic level for new academic session"
+            >
+              <GraduationCap size={13} className="text-sky-700 shrink-0" />
+              <span>Promote All (New Session)</span>
             </button>
           </div>
         </div>
@@ -2057,6 +2187,70 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* Academic Department & Level Management for Students (Admin Exclusive) */}
+              {!isGuestAccount(student) && !isModulaAccount(student) && (
+                <div className="bg-emerald-50/70 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="font-extrabold text-xs text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5">
+                      <GraduationCap size={15} className="text-emerald-700 dark:text-emerald-400" />
+                      <span>Academic Section Management & Level Promotion</span>
+                    </h4>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300">
+                      {student.department || 'Department'} • {student.level || '200L'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Department (Admin Control)
+                      </label>
+                      <select
+                        value={studentDeptEdit || student.department || ''}
+                        onChange={(e) => setStudentDeptEdit(e.target.value)}
+                        className="w-full bg-white dark:bg-slate-900 text-xs rounded-xl border border-slate-300 dark:border-slate-700 p-2 font-bold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="">Select Department</option>
+                        {FUHSI_DEPARTMENTS.map((dept) => (
+                          <option key={dept} value={dept}>{dept}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Academic Level (Promotion)
+                      </label>
+                      <select
+                        value={studentLevelEdit || student.level || '200L'}
+                        onChange={(e) => setStudentLevelEdit(e.target.value)}
+                        className="w-full bg-white dark:bg-slate-900 text-xs rounded-xl border border-slate-300 dark:border-slate-700 p-2 font-bold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="200L">200 Level (200L)</option>
+                        <option value="300L">300 Level (300L)</option>
+                        <option value="400L">400 Level (400L)</option>
+                        <option value="500L">500 Level (500L)</option>
+                        <option value="Graduated">Graduated / Alumni</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
+                    <p className="text-[10px] text-emerald-800 dark:text-emerald-300 leading-snug">
+                      Students cannot change department or level themselves. Updates apply immediately across their profile, feeds, and directory.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateStudentAcademicData(student, studentLevelEdit || student.level || '200L', studentDeptEdit || student.department || '')}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95 shrink-0"
+                    >
+                      <GraduationCap size={14} />
+                      <span>Update Academic Section</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Actions toolbar inside modal */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">

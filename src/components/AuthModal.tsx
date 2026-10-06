@@ -387,6 +387,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         password: regPassword,
         joinedDate: new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date()),
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
 
       // Clear any tombstone if user is registering afresh
@@ -399,8 +400,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       // Store user permanently in local and cloud DB
       upsertUser(newUserProfile);
       localStorage.setItem('fuhsi_active_user', JSON.stringify(newUserProfile));
-      saveUserToFirestore(newUserProfile).catch((err) => console.error(err));
-      pushServerDbSync({ users: [newUserProfile], unDeleteUserNicknames: [cleanNickname] } as any).catch((err) => console.error(err));
+      
+      try {
+        await Promise.all([
+          saveUserToFirestore(newUserProfile).catch(console.error),
+          pushServerDbSync({ users: [newUserProfile], unDeleteUserNicknames: [cleanNickname], unDeleteUserIds: [newUserProfile.id] } as any).catch(console.error),
+        ]);
+      } catch (syncErr) {
+        console.error('Registration background sync notice:', syncErr);
+      }
+
+      try {
+        window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: newUserProfile }));
+        window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: newUserProfile }));
+      } catch (e) {}
 
       setShowRegisterConfirm(false);
       onLoginSuccess(newUserProfile);
@@ -423,7 +436,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const trimmedPassword = loginPassword.trim();
 
     if (!trimmedIdentifier) {
-      setErrorMessage('Please enter your Username (@nickname) or Student Email.');
+      setErrorMessage('Please enter your Username.');
+      return;
+    }
+
+    if (trimmedIdentifier.includes('@') && trimmedIdentifier.includes('.') && !trimmedIdentifier.startsWith('@')) {
+      setErrorMessage('Please log in with your Username only, not your email address.');
       return;
     }
     if (!trimmedPassword) {
@@ -507,23 +525,48 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       // 2. Perform backend authentication: search local users database first
       let matchedUser: any = null;
       let localUsers: any[] = [];
+
+      const cleanSearch = searchKey.replace(/^@/, '');
+      const isMatchingUser = (u: any) => {
+        if (!u) return false;
+        const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
+        if (uNick && uNick === cleanSearch) return true;
+        return false;
+      };
+
       try {
-        const stored = localStorage.getItem('fuhsi_users_db');
-        localUsers = stored ? JSON.parse(stored) : existingUsers;
-        
-        matchedUser = localUsers.find(
-          (u) =>
-            u.nickname?.toLowerCase() === searchKey ||
-            u.nickname?.toLowerCase() === `@${searchKey}` ||
-            `@${u.nickname?.toLowerCase()}` === searchKey ||
-            (u.studentEmail && u.studentEmail.toLowerCase() === searchKey)
-        ) || null;
+        localUsers = getStoredUsers();
+        matchedUser = localUsers.find(isMatchingUser) || null;
+
+        if (!matchedUser) {
+          const stored = localStorage.getItem('fuhsi_users_db');
+          if (stored) {
+            const rawParsed = JSON.parse(stored);
+            if (Array.isArray(rawParsed)) {
+              matchedUser = rawParsed.find(isMatchingUser) || null;
+            }
+          }
+        }
 
         if (matchedUser && isUserPermanentlyDeleted(matchedUser)) {
           matchedUser = null;
         }
       } catch {
         matchedUser = null;
+      }
+
+      // Check fuhsi_active_user as fallback
+      if (!matchedUser) {
+        try {
+          const activeStr = localStorage.getItem('fuhsi_active_user');
+          if (activeStr) {
+            const activeParsed = JSON.parse(activeStr);
+            if (activeParsed && !isDemoUser(activeParsed) && isMatchingUser(activeParsed)) {
+              matchedUser = activeParsed;
+              upsertUser(activeParsed);
+            }
+          }
+        } catch (e) {}
       }
 
       // If not found locally, query central DB with timeout
@@ -549,15 +592,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             const merged = mergeUsers(curLocal, incomingCentralUsers);
             localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
 
-            const refreshedUser = merged.find(
-              (u) =>
-                u.nickname?.toLowerCase() === searchKey ||
-                u.nickname?.toLowerCase() === `@${searchKey}` ||
-                `@${u.nickname?.toLowerCase()}` === searchKey ||
-                (u.studentEmail && u.studentEmail.toLowerCase() === searchKey)
-            );
+            const refreshedUser = merged.find(isMatchingUser);
             if (refreshedUser && !isUserPermanentlyDeleted(refreshedUser)) {
               matchedUser = refreshedUser;
+              upsertUser(refreshedUser);
             }
           }
         } catch (err) {
@@ -1358,13 +1396,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               ) : (
                 <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex items-center justify-between gap-2">
-                  <span>Enter your registered <span className="font-bold text-slate-900">Username (@nickname)</span> and password to sign in.</span>
+                  <span>Enter your registered <span className="font-bold text-slate-900">Username</span> and password to sign in.</span>
                 </div>
               )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-1">
-                  Username/email <span className="text-rose-500">*</span>
+                  Username <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <User size={15} className="absolute left-3 top-2.5 text-slate-400" />
@@ -1375,7 +1413,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       setLoginIdentifier(e.target.value);
                       setErrorMessage('');
                     }}
-                    placeholder="Enter username or email"
+                    placeholder="Enter your username"
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                     required
                   />
