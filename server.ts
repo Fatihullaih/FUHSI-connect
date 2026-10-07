@@ -18,6 +18,7 @@ import {
   mergeChatRestrictions,
   mergeFollows,
 } from './src/utils/apiSync';
+import { normalizeMatricNumber } from './src/utils/matricValidation';
 import {
   isDemoUser,
   isDemoPost,
@@ -189,6 +190,24 @@ app.get('/api/db', (req, res) => {
   return res.json({ success: true, db: activeDb });
 });
 
+function isUsernameSuperseded(cleanUsername: string): boolean {
+  if (!(activeDb as any).supersededUsernames || !(activeDb as any).supersededUsernames[cleanUsername]) {
+    return false;
+  }
+  // Check if any user in activeDb currently has cleanUsername as their active nickname
+  const currentUserWithThisNick = (activeDb.users || []).find((u: any) => {
+    if (!u || !u.nickname) return false;
+    const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
+    return uNick === cleanUsername;
+  });
+  if (currentUserWithThisNick) {
+    delete (activeDb as any).supersededUsernames[cleanUsername];
+    persistServerDb();
+    return false;
+  }
+  return true;
+}
+
 // Centralized Authentication Endpoint - strictly validates against the current authoritative central record
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -203,12 +222,7 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Please enter your password.' });
     }
 
-    const cleanUsername = trimmedUsername.toLowerCase().replace(/^@/, '');
-
-    // Requirement 1 & 4: If username has been replaced/superseded by a username change, reject immediately!
-    if ((activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
-      return res.status(404).json({ success: false, error: 'Account not found. Please check your login details.' });
-    }
+    const cleanUsername = trimmedUsername.toLowerCase().replace(/^@+/, '').trim();
 
     // Executive Admin account handle (@modula) with password (ibraheem)
     if (cleanUsername === 'modula') {
@@ -236,25 +250,65 @@ app.post('/api/auth/login', async (req, res) => {
       }
     }
 
-    // Look up user strictly by their CURRENT authoritative nickname in activeDb
-    let matched = (activeDb.users || []).find((u: any) => {
-      if (!u || !u.nickname) return false;
-      const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
-      return uNick === cleanUsername;
-    });
+    const findMatch = (list: any[]) => {
+      const normInput = normalizeMatricNumber(trimmedUsername);
+      const lowerInput = trimmedUsername.toLowerCase();
+      const cleanNick = lowerInput.replace(/^@+/, '').trim();
+      const cleanDigits = trimmedUsername.replace(/\D/g, '');
+
+      return list.find((u: any) => {
+        if (!u) return false;
+        // 1. Nickname match
+        if (u.nickname) {
+          const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
+          if (uNick === cleanNick || uNick === lowerInput) return true;
+        }
+        // 2. Matric number match
+        if (u.matricNumber) {
+          const uMatricNorm = normalizeMatricNumber(u.matricNumber);
+          if (normInput && uMatricNorm && normInput === uMatricNorm) return true;
+          const uMatricRaw = String(u.matricNumber).trim().toLowerCase().replace(/^fuhsi\//, '');
+          if (uMatricRaw === cleanNick.replace(/^fuhsi\//, '')) return true;
+        }
+        // 3. Email match
+        if (u.studentEmail) {
+          const uEmail = String(u.studentEmail).trim().toLowerCase();
+          if (uEmail === lowerInput || uEmail === cleanNick) return true;
+        }
+        // 4. Phone match (10 or 11 digits)
+        const uPhone = u.emergencyHomePhone || u.phone;
+        if (uPhone && cleanDigits.length >= 10) {
+          const uDigits = String(uPhone).replace(/\D/g, '');
+          if (uDigits && uDigits === cleanDigits) return true;
+        }
+        // 5. User ID match
+        if (u.id && String(u.id).toLowerCase() === lowerInput) return true;
+
+        return false;
+      });
+    };
+
+    // Look up user across active database
+    let matched = findMatch(activeDb.users || []);
+
+    // Also check superseded usernames (e.g. if username was updated, match by previous username)
+    if (!matched && (activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
+      const sup = (activeDb as any).supersededUsernames[cleanUsername];
+      if (sup && sup.userId) {
+        matched = (activeDb.users || []).find((u: any) => u.id === sup.userId);
+      }
+    }
 
     // If not found in memory activeDb, try fresh Firestore sync to ensure recent updates are caught
     if (!matched) {
       await syncFirestoreToActiveDb().catch(() => {});
-      // Verify again in case fresh sync discovered a change
-      if ((activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
-        return res.status(404).json({ success: false, error: 'Account not found. Please check your login details.' });
+      matched = findMatch(activeDb.users || []);
+      if (!matched && (activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
+        const sup = (activeDb as any).supersededUsernames[cleanUsername];
+        if (sup && sup.userId) {
+          matched = (activeDb.users || []).find((u: any) => u.id === sup.userId);
+        }
       }
-      matched = (activeDb.users || []).find((u: any) => {
-        if (!u || !u.nickname) return false;
-        const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
-        return uNick === cleanUsername;
-      });
     }
 
     if (!matched) {

@@ -250,12 +250,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     if (!phone.trim()) {
-      setErrorMessage('Phone Number is required for account registration.');
+      setErrorMessage('Phone Number is required.');
       return;
     }
-    const cleanPhoneDigits = phone.trim().replace(/[^0-9+]/g, '');
-    if (cleanPhoneDigits.length < 10) {
-      setErrorMessage('Please enter a valid Phone Number (at least 10 digits).');
+    const cleanPhone = phone.trim().replace(/[\s-]/g, '');
+    if (!/^\d{11}$/.test(cleanPhone)) {
+      setErrorMessage('Invalid phone number');
       return;
     }
 
@@ -436,14 +436,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const trimmedPassword = loginPassword.trim();
 
     if (!trimmedIdentifier) {
-      setErrorMessage('Please enter your Username.');
+      setErrorMessage('Please enter your Username, Matric Number, or Email.');
       return;
     }
 
-    if (trimmedIdentifier.includes('@') && trimmedIdentifier.includes('.') && !trimmedIdentifier.startsWith('@')) {
-      setErrorMessage('Please log in with your Username only, not your email address.');
-      return;
-    }
     if (!trimmedPassword) {
       setErrorMessage('Please enter your password.');
       return;
@@ -558,33 +554,63 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           setAccountNoticeType('PENDING');
           setErrorMessage(data?.error || 'Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.');
           return;
-        } else if (res.status === 404) {
-          // Centrally rejected: username does not exist or has been superseded by a username change!
-          const elapsed = Date.now() - authStartTime;
-          if (elapsed < 1800) {
-            await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-          }
-          setIsSubmitting(false);
-          setLoginAuthStage('idle');
-          setErrorMessage('Account not found. Please check your login details.');
-          return;
         }
       } catch (err) {
         console.warn('Central server auth error:', err);
       }
 
-      // If not resolved from server, check Firestore directly (guarantees central consistency across devices)
+      const matchUserFromList = (list: any[]) => {
+        const normInput = normalizeMatricNumber(trimmedIdentifier);
+        const lowerInput = trimmedIdentifier.toLowerCase();
+        const cleanNick = lowerInput.replace(/^@+/, '').trim();
+        const cleanDigits = trimmedIdentifier.replace(/\D/g, '');
+
+        let found = (list || []).find((u: any) => {
+          if (!u || isUserPermanentlyDeleted(u)) return false;
+          if (u.nickname) {
+            const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
+            if (uNick === cleanNick || uNick === lowerInput) return true;
+          }
+          if (u.matricNumber) {
+            const uMatricNorm = normalizeMatricNumber(u.matricNumber);
+            if (normInput && uMatricNorm && normInput === uMatricNorm) return true;
+            const uMatricRaw = String(u.matricNumber).trim().toLowerCase().replace(/^fuhsi\//, '');
+            if (uMatricRaw === cleanNick.replace(/^fuhsi\//, '')) return true;
+          }
+          if (u.studentEmail) {
+            const uEmail = String(u.studentEmail).trim().toLowerCase();
+            if (uEmail === lowerInput || uEmail === cleanNick) return true;
+          }
+          const uPhone = u.emergencyHomePhone || u.phone;
+          if (uPhone && cleanDigits.length >= 10) {
+            const uDigits = String(uPhone).replace(/\D/g, '');
+            if (uDigits && uDigits === cleanDigits) return true;
+          }
+          if (u.id && String(u.id).toLowerCase() === lowerInput) return true;
+          return false;
+        });
+
+        if (!found) {
+          try {
+            const rawSup = localStorage.getItem('fuhsi_superseded_usernames');
+            if (rawSup) {
+              const supObj = JSON.parse(rawSup);
+              if (supObj[cleanNick] && supObj[cleanNick].userId) {
+                found = (list || []).find((u: any) => u.id === supObj[cleanNick].userId && !isUserPermanentlyDeleted(u));
+              }
+            }
+          } catch {}
+        }
+        return found;
+      };
+
+      // If not resolved from server, check Firestore directly (guarantees consistency across devices)
       if (!matchedUser) {
         try {
           const fsUsers = await fetchUsersFromFirestore();
-          const cleanSearch = searchKey.replace(/^@/, '');
-          const fsMatched = (fsUsers || []).find((u: any) => {
-            if (!u || !u.nickname) return false;
-            const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
-            return uNick === cleanSearch;
-          });
+          const fsMatched = matchUserFromList(fsUsers || []);
 
-          if (fsMatched && !isUserPermanentlyDeleted(fsMatched)) {
+          if (fsMatched) {
             const expectedPassword = fsMatched.savedPassword || fsMatched.password || 'password123';
             if (trimmedPassword !== expectedPassword) {
               const elapsed = Date.now() - authStartTime;
@@ -602,6 +628,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           }
         } catch (err) {
           console.warn('Firestore fallback auth error:', err);
+        }
+      }
+
+      // If still not resolved, check local storage database
+      if (!matchedUser) {
+        try {
+          const stored = localStorage.getItem('fuhsi_users_db');
+          if (stored) {
+            const localUsers = JSON.parse(stored);
+            const localMatched = matchUserFromList(localUsers || []);
+
+            if (localMatched) {
+              const expectedPassword = localMatched.savedPassword || localMatched.password || 'password123';
+              if (trimmedPassword !== expectedPassword) {
+                const elapsed = Date.now() - authStartTime;
+                if (elapsed < 1800) {
+                  await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+                }
+                setIsSubmitting(false);
+                setLoginAuthStage('idle');
+                setErrorMessage('Incorrect password. Please try again.');
+                return;
+              }
+              matchedUser = localMatched;
+              pushServerDbSync({ users: [matchedUser] }).catch(() => {});
+            }
+          }
+        } catch (err) {
+          console.warn('Local storage fallback auth error:', err);
         }
       }
 
@@ -1096,7 +1151,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
                 <p className="text-[11px] text-slate-500 mt-1.5 font-medium leading-relaxed">
                   {accountType === 'Student'
-                    ? 'For registered students of FUHSI (matric number, department & level required).'
+                    ? 'For registered students of FUHSI.'
                     : 'For prospective students, visitors, and general community members.'}
                 </p>
               </div>
@@ -1285,7 +1340,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         setPhone(e.target.value);
                         setErrorMessage('');
                       }}
-                      placeholder="e.g. 08012345678"
+                      placeholder=""
                       className="w-full pl-8 pr-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                     />
                   </div>
@@ -1394,13 +1449,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               ) : (
                 <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex items-center justify-between gap-2">
-                  <span>Enter your registered <span className="font-bold text-slate-900">Username</span> and password to sign in.</span>
+                  <span>Enter your registered <span className="font-bold text-slate-900">Username, Matric Number, or Email</span> and password to sign in.</span>
                 </div>
               )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-1">
-                  Username <span className="text-rose-500">*</span>
+                  Username, Matric Number, or Email <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <User size={15} className="absolute left-3 top-2.5 text-slate-400" />
@@ -1411,7 +1466,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       setLoginIdentifier(e.target.value);
                       setErrorMessage('');
                     }}
-                    placeholder="Enter your username"
+                    placeholder="Enter your username, matric number, or email"
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                     required
                   />

@@ -533,6 +533,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       return;
     }
 
+    if (emergencyPhone && emergencyPhone.trim()) {
+      const cleanDigits = emergencyPhone.trim().replace(/[^0-9]/g, '');
+      if (cleanDigits.length !== 11) {
+        setSaveErrorMessage('Invalid phone number.');
+        return;
+      }
+    }
+
     const isMod = isModulaAccount(userProfile);
     const error = onSaveProfile(
       trimmedNick,
@@ -1999,7 +2007,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           type="tel"
                           value={emergencyPhone}
                           onChange={(e) => setEmergencyPhone(e.target.value)}
-                          placeholder="e.g. 08012345678"
+                          placeholder=""
                           className="w-full text-xs rounded-xl border border-slate-200 dark:border-slate-700 p-2.5 text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
                         />
                       </div>

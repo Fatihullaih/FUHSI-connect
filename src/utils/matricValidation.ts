@@ -237,7 +237,17 @@ export function validateMatricCredentials(
   const extractedAbbr = parts[1].toUpperCase();
   const serialNumber = parts[2];
 
-  // 1. Validate Year Prefix (must be 25 for 200L, 24 for 300L, 23 for 400L, 22 for 500L)
+  // Strict Matriculation Number Format: XX/XXX/XXX (2 digits / 3 letters / 3 digits)
+  // 1. Validate Year Prefix (XX: exactly 2 digits, matching selected Level)
+  if (!yearPrefix || !/^\d{2}$/.test(yearPrefix)) {
+    return {
+      isValid: false,
+      errorMessage: 'Invalid matric number',
+      yearPrefix,
+      normalizedMatric: norm,
+    };
+  }
+
   const expectedLevel = MATRIC_YEAR_TO_LEVEL_MAP[yearPrefix];
   if (!expectedLevel) {
     return {
@@ -260,8 +270,8 @@ export function validateMatricCredentials(
     };
   }
 
-  // 2. Validate Course Abbreviation
-  if (!extractedAbbr || !/^[A-Z]{2,5}$/.test(extractedAbbr)) {
+  // 2. Validate Course Abbreviation (XXX: exactly 3 letters matching Department)
+  if (!extractedAbbr || !/^[A-Z]{3}$/.test(extractedAbbr)) {
     return {
       isValid: false,
       errorMessage: 'Invalid matric number',
@@ -296,8 +306,8 @@ export function validateMatricCredentials(
     };
   }
 
-  // 3. Validate Serial Number component
-  if (!serialNumber || !/^\d{1,5}$/.test(serialNumber)) {
+  // 3. Validate Serial Number component (XXX: exactly 3 digits)
+  if (!serialNumber || !/^\d{3}$/.test(serialNumber)) {
     return {
       isValid: false,
       errorMessage: 'Invalid matric number',
