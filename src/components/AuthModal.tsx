@@ -558,6 +558,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           setAccountNoticeType('PENDING');
           setErrorMessage(data?.error || 'Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.');
           return;
+        } else if (res.status === 404) {
+          // Centrally rejected: username does not exist or has been superseded by a username change!
+          const elapsed = Date.now() - authStartTime;
+          if (elapsed < 1800) {
+            await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+          }
+          setIsSubmitting(false);
+          setLoginAuthStage('idle');
+          setErrorMessage('Account not found. Please check your login details.');
+          return;
         }
       } catch (err) {
         console.warn('Central server auth error:', err);

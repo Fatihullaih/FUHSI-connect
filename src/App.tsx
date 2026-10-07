@@ -716,6 +716,7 @@ export const App: React.FC = () => {
                       realNameHidden: nextRealName,
                       studentEmail: nextEmail,
                       emergencyHomePhone: nextPhone,
+                      matricNumber: isModulaAccount(prev) ? '' : (found.matricNumber || prev.matricNumber || ''),
                       department: isModulaAccount(prev) ? '' : (prev.department || found.department || ''),
                       level: isModulaAccount(prev) ? '' : (prev.level || found.level || ''),
                       bio: nextBio,
@@ -740,6 +741,7 @@ export const App: React.FC = () => {
                       realNameHidden: nextRealName,
                       studentEmail: nextEmail,
                       emergencyHomePhone: nextPhone,
+                      matricNumber: isModulaAccount(found) ? '' : (found.matricNumber || prev.matricNumber || ''),
                       department: isModulaAccount(found) ? '' : (found.department || prev.department || ''),
                       level: isModulaAccount(found) ? '' : (found.level || prev.level || ''),
                       bio: nextBio,
@@ -1111,6 +1113,7 @@ export const App: React.FC = () => {
                           realNameHidden: nextRealName,
                           studentEmail: nextEmail,
                           emergencyHomePhone: nextPhone,
+                          matricNumber: isModulaAccount(prev) ? '' : (found.matricNumber || prev.matricNumber || ''),
                           department: isModulaAccount(prev) ? '' : (prev.department || found.department || ''),
                           level: isModulaAccount(prev) ? '' : (prev.level || found.level || ''),
                           bio: nextBio,
@@ -1132,6 +1135,7 @@ export const App: React.FC = () => {
                           realNameHidden: nextRealName,
                           studentEmail: nextEmail,
                           emergencyHomePhone: nextPhone,
+                          matricNumber: isModulaAccount(found) ? '' : (found.matricNumber || prev.matricNumber || ''),
                           department: isModulaAccount(found) ? '' : (found.department || prev.department || ''),
                           level: isModulaAccount(found) ? '' : (found.level || prev.level || ''),
                           bio: nextBio,
@@ -1414,6 +1418,7 @@ export const App: React.FC = () => {
           ...parsed,
           ...found,
           nickname: found.nickname || parsed.nickname,
+          matricNumber: isModulaAccount(parsed) ? '' : (found.matricNumber || parsed.matricNumber || ''),
           avatarUrl: found.avatarUrl || parsed.avatarUrl,
         };
       }
@@ -1449,6 +1454,7 @@ export const App: React.FC = () => {
                   ...cur,
                   ...centralUser,
                   nickname: centralUser.nickname || cur.nickname,
+                  matricNumber: isModulaAccount(cur) ? '' : (centralUser.matricNumber || cur.matricNumber || ''),
                 };
                 localStorage.setItem('fuhsi_active_user', JSON.stringify(nextUser));
                 return nextUser;
@@ -3505,6 +3511,38 @@ export const App: React.FC = () => {
     // 3. Persist to database (localStorage, Firestore, and server DB)
     try {
       upsertUser(updated);
+
+      if (cleanNewNick !== currentNickClean && userProfile.id && !isModulaAccount(userProfile)) {
+        fetch('/api/users/change-username', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: userProfile.id,
+            newNickname: formattedNick,
+            oldNickname: userProfile.nickname,
+          }),
+        }).catch((err) => console.error('Error syncing username change to central backend:', err));
+
+        // Record in client-side superseded registry and clean old cached identifier references
+        try {
+          const rawSup = localStorage.getItem('fuhsi_superseded_usernames');
+          const superseded = rawSup ? JSON.parse(rawSup) : {};
+          superseded[currentNickClean] = {
+            newNickname: formattedNick,
+            userId: userProfile.id,
+            changedAt: new Date().toISOString(),
+          };
+          localStorage.setItem('fuhsi_superseded_usernames', JSON.stringify(superseded));
+
+          ['fuhsi_last_login_username', 'fuhsi_remembered_username', 'fuhsi_recent_login_handle'].forEach((k) => {
+            const val = localStorage.getItem(k);
+            if (val && val.toLowerCase().replace(/^@/, '') === currentNickClean) {
+              localStorage.setItem(k, formattedNick);
+            }
+          });
+        } catch (e) {}
+      }
+
       saveUserToFirestore(updated, currentNickClean).catch((err) => {
         console.error('Error persisting user to Firestore:', err);
       });

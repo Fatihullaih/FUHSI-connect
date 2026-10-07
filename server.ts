@@ -72,6 +72,7 @@ function sanitizeServerDb(dbObj: typeof DEFAULT_SERVER_DB): typeof DEFAULT_SERVE
     chatReports: (dbObj.chatReports || []).filter((cr: any) => !isDemoNickname(cr.reportedNickname) && !isDemoNickname(cr.reporterNickname)),
     chatRestrictions: (dbObj.chatRestrictions || []).filter((cr: any) => !isDemoNickname(cr.nickname) && !isDemoNickname(cr.userNickname)),
     follows: (dbObj.follows || []).filter((f: any) => !isDemoNickname(f?.followerNickname) && !isDemoNickname(f?.followingNickname)),
+    supersededUsernames: (dbObj as any).supersededUsernames || {},
   };
 }
 
@@ -108,6 +109,7 @@ function initAndLoadServerDb() {
       activeDb = sanitizeServerDb({
         ...DEFAULT_SERVER_DB,
         ...parsed,
+        supersededUsernames: { ...((DEFAULT_SERVER_DB as any).supersededUsernames || {}), ...(parsed.supersededUsernames || {}) },
         deletedUserIds: Array.from(savedDeletedIds),
         deletedUserNicknames: Array.from(savedDeletedNicks),
         users: mergeUsers(nonDeletedDefaultUsers, loadedUsers),
@@ -203,6 +205,11 @@ app.post('/api/auth/login', async (req, res) => {
 
     const cleanUsername = trimmedUsername.toLowerCase().replace(/^@/, '');
 
+    // Requirement 1 & 4: If username has been replaced/superseded by a username change, reject immediately!
+    if ((activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
+      return res.status(404).json({ success: false, error: 'Account not found. Please check your login details.' });
+    }
+
     // Executive Admin account handle (@modula) with password (ibraheem)
     if (cleanUsername === 'modula') {
       if (trimmedPassword === 'ibraheem') {
@@ -239,6 +246,10 @@ app.post('/api/auth/login', async (req, res) => {
     // If not found in memory activeDb, try fresh Firestore sync to ensure recent updates are caught
     if (!matched) {
       await syncFirestoreToActiveDb().catch(() => {});
+      // Verify again in case fresh sync discovered a change
+      if ((activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
+        return res.status(404).json({ success: false, error: 'Account not found. Please check your login details.' });
+      }
       matched = (activeDb.users || []).find((u: any) => {
         if (!u || !u.nickname) return false;
         const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
@@ -268,6 +279,99 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err: any) {
     console.error('[Auth API] Login error:', err);
     return res.status(500).json({ success: false, error: 'Authentication service error' });
+  }
+});
+
+// Dedicated Central Username Change Endpoint - ensures authoritative central synchronization across all devices
+app.post('/api/users/change-username', async (req, res) => {
+  try {
+    const { userId, newNickname, oldNickname } = req.body || {};
+    if (!userId || !newNickname) {
+      return res.status(400).json({ success: false, error: 'User ID and new username are required' });
+    }
+
+    const rawNew = String(newNickname).trim();
+    const cleanNew = rawNew.toLowerCase().replace(/^@/, '');
+    const cleanOld = oldNickname ? String(oldNickname).trim().toLowerCase().replace(/^@/, '') : '';
+    const formattedNew = rawNew.startsWith('@') ? rawNew : `@${rawNew}`;
+
+    if (!cleanNew) {
+      return res.status(400).json({ success: false, error: 'Invalid username' });
+    }
+
+    if (cleanNew.includes('anonymous') || cleanNew.includes('anon')) {
+      return res.status(400).json({ success: false, error: 'Username cannot contain anonymous or anon' });
+    }
+
+    // Check if new username is already taken by any other user
+    const existingOther = (activeDb.users || []).find((u: any) => {
+      if (!u || !u.nickname) return false;
+      const uId = String(u.id || '');
+      const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
+      return uId !== String(userId) && uNick === cleanNew;
+    });
+
+    if (existingOther) {
+      return res.status(409).json({ success: false, error: `The handle "${formattedNew}" is already taken.` });
+    }
+
+    // Find user by permanent internal ID in activeDb.users
+    const userIndex = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === String(userId));
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, error: 'User account not found' });
+    }
+
+    const currentUser = activeDb.users[userIndex];
+    const previousNickClean = cleanOld || String(currentUser.nickname || '').toLowerCase().replace(/^@/, '');
+
+    // Update username centrally
+    const nowIso = new Date().toISOString();
+    activeDb.users[userIndex] = {
+      ...currentUser,
+      nickname: formattedNew,
+      updatedAt: nowIso,
+    };
+
+    // Invalidate old username centrally so it can NEVER be used to log in on any device
+    if (previousNickClean && previousNickClean !== cleanNew) {
+      if (!(activeDb as any).supersededUsernames) (activeDb as any).supersededUsernames = {};
+      (activeDb as any).supersededUsernames[previousNickClean] = {
+        newNickname: formattedNew,
+        userId: String(userId),
+        changedAt: nowIso,
+      };
+    }
+
+    persistServerDb();
+
+    // Sync to Firestore
+    try {
+      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const { initializeApp, getApps } = await import('firebase/app');
+        const { getFirestore, doc, setDoc, deleteDoc } = await import('firebase/firestore');
+        const app = !getApps().length ? initializeApp(config) : getApps()[0];
+        const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
+        
+        await setDoc(doc(firestoreDb, 'users', String(userId)), {
+          nickname: formattedNew,
+          updatedAt: nowIso,
+        }, { merge: true });
+
+        if (previousNickClean) {
+          await deleteDoc(doc(firestoreDb, 'users', previousNickClean)).catch(() => {});
+        }
+      }
+    } catch (fsErr) {
+      console.warn('[Username Change] Firestore sync warning:', fsErr);
+    }
+
+    console.log(`[Username Change] Central account ${userId} changed: @${previousNickClean} -> ${formattedNew}`);
+    return res.json({ success: true, user: activeDb.users[userIndex] });
+  } catch (err: any) {
+    console.error('[Username Change] Error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to update username centrally' });
   }
 });
 
@@ -638,17 +742,44 @@ app.post('/api/db/sync', (req, res) => {
 
           if (matchedKey) {
             const existing = userMap.get(matchedKey);
+
+            // REQUIREMENT 3, 4, 7: Protect central username from being regressed by stale client devices!
+            let authoritativeNick = existing.nickname;
+            const inNickClean = incoming.nickname ? String(incoming.nickname).toLowerCase().replace(/^@/, '') : '';
+            const exNickClean = existing.nickname ? String(existing.nickname).toLowerCase().replace(/^@/, '') : '';
+
+            // If incoming has a nickname that is superseded (old), discard it and keep existing!
+            if ((activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[inNickClean]) {
+              authoritativeNick = existing.nickname;
+            } else if (incoming.nickname && incoming.nickname !== existing.nickname) {
+              const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+              const incomingTime = incoming.updatedAt ? new Date(incoming.updatedAt).getTime() : 0;
+              if (incomingTime > existingTime) {
+                authoritativeNick = incoming.nickname;
+                if (exNickClean && exNickClean !== inNickClean) {
+                  if (!(activeDb as any).supersededUsernames) (activeDb as any).supersededUsernames = {};
+                  (activeDb as any).supersededUsernames[exNickClean] = {
+                    newNickname: incoming.nickname,
+                    userId: String(existing.id || incoming.id),
+                    changedAt: incoming.updatedAt || new Date().toISOString(),
+                  };
+                }
+              }
+            }
+
             userMap.set(matchedKey, {
               ...existing,
               ...incoming,
               id: existing.id || incoming.id,
-              nickname: incoming.nickname || existing.nickname,
+              nickname: authoritativeNick,
               emergencyHomePhone: incoming.emergencyHomePhone !== undefined ? incoming.emergencyHomePhone : existing.emergencyHomePhone,
               realName: incoming.realName !== undefined ? incoming.realName : existing.realName,
               studentEmail: incoming.studentEmail !== undefined ? incoming.studentEmail : existing.studentEmail,
               level: incoming.level !== undefined ? incoming.level : existing.level,
               department: incoming.department !== undefined ? incoming.department : existing.department,
-              matricNumber: incoming.matricNumber !== undefined ? incoming.matricNumber : existing.matricNumber,
+              matricNumber: (incoming.matricNumber && incoming.matricNumber.trim()) 
+                ? incoming.matricNumber 
+                : (existing.matricNumber || incoming.matricNumber || ''),
               bio: incoming.bio !== undefined ? incoming.bio : existing.bio,
               avatarUrl: incoming.avatarUrl !== undefined ? incoming.avatarUrl : existing.avatarUrl,
               avatarKey: incoming.avatarKey || existing.avatarKey,

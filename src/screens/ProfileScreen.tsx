@@ -2005,7 +2005,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       </div>
                     </div>
 
-                    {/* Department & Academic Level - Students Only (Not for Guest or Admin @modula) */}
+                    {/* Department, Academic Level & Matric Number - Students Only (Not for Guest or Admin @modula) */}
                     {!isGuestAccount(userProfile) && !isModulaAccount(userProfile) && (
                       <div className="p-3 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5">
                         <div className="flex items-center justify-between">
@@ -2014,11 +2014,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                             <span>Academic Registration Data</span>
                           </span>
                           <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                            Department & Level Locked 🔒
+                            Academic Data Locked 🔒
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                           {/* Department (Read-only / Immutable) */}
                           <div className="space-y-1">
                             <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400">
@@ -2037,6 +2037,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                             </label>
                             <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-700/80 text-xs font-extrabold text-slate-800 dark:text-slate-200 flex items-center justify-between select-none">
                               <span className="truncate">{userProfile?.level || level || 'Level'}</span>
+                              <Lock size={12} className="text-slate-400 shrink-0 ml-1" />
+                            </div>
+                          </div>
+
+                          {/* Matriculation Number (Read-only / Immutable for Students) */}
+                          <div className="space-y-1">
+                            <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                              Matric Number
+                            </label>
+                            <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-700/80 text-xs font-mono font-extrabold text-slate-800 dark:text-slate-200 flex items-center justify-between select-none">
+                              <span className="truncate">{userProfile?.matricNumber || 'Not Issued'}</span>
                               <Lock size={12} className="text-slate-400 shrink-0 ml-1" />
                             </div>
                           </div>

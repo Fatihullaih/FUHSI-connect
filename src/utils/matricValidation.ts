@@ -225,7 +225,7 @@ export function validateMatricCredentials(
   const norm = normalizeMatricNumber(matricRaw);
   const parts = norm.split('/');
 
-  if (parts.length < 3) {
+  if (parts.length !== 3) {
     return {
       isValid: false,
       errorMessage: 'Invalid matric number',

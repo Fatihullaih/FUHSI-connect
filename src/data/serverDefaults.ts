@@ -31,4 +31,5 @@ export const DEFAULT_SERVER_DB = {
   deletedUserIds: [] as string[],
   deletedUserNicknames: [] as string[],
   deletedPostIds: [] as string[],
+  supersededUsernames: {} as Record<string, { newNickname: string; userId: string; changedAt: string }>,
 };

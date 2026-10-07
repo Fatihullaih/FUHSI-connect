@@ -155,7 +155,24 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
 
       const primary = useIncoming ? u : existing;
       const secondary = useIncoming ? existing : u;
-      const authoritativeNick = (useIncoming ? u.nickname : existing.nickname) || u.nickname || existing.nickname;
+      let authoritativeNick = (useIncoming ? u.nickname : existing.nickname) || u.nickname || existing.nickname;
+
+      // Check superseded / old nicknames from localStorage if present
+      try {
+        if (typeof localStorage !== 'undefined') {
+          const rawSup = localStorage.getItem('fuhsi_superseded_usernames');
+          if (rawSup) {
+            const superseded = JSON.parse(rawSup);
+            const exClean = (existing.nickname || '').toLowerCase().replace(/^@/, '');
+            const inClean = (u.nickname || '').toLowerCase().replace(/^@/, '');
+            if (superseded[exClean] && !superseded[inClean]) {
+              authoritativeNick = u.nickname;
+            } else if (superseded[inClean] && !superseded[exClean]) {
+              authoritativeNick = existing.nickname;
+            }
+          }
+        }
+      } catch {}
 
       let isDeclined = false;
       if (primary.isDeclined !== undefined) {
@@ -192,9 +209,9 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         realNameHidden: primary.realNameHidden || secondary.realNameHidden || primary.realName || secondary.realName,
         studentEmail: primary.studentEmail || secondary.studentEmail,
         emergencyHomePhone: primary.emergencyHomePhone || secondary.emergencyHomePhone,
-        department: primary.department || secondary.department,
-        matricNumber: primary.matricNumber || secondary.matricNumber,
-        level: primary.level || secondary.level,
+        department: (primary.department && primary.department.trim()) ? primary.department : (secondary.department || primary.department || ''),
+        matricNumber: (primary.matricNumber && primary.matricNumber.trim()) ? primary.matricNumber : (secondary.matricNumber || primary.matricNumber || ''),
+        level: (primary.level && primary.level.trim()) ? primary.level : (secondary.level || primary.level || ''),
         bio: primary.bio !== undefined ? primary.bio : (secondary.bio || ''),
         avatarKey: primary.avatarKey || secondary.avatarKey || 'caduceus',
         avatarUrl: primary.avatarUrl !== undefined ? primary.avatarUrl : secondary.avatarUrl,
