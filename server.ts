@@ -251,40 +251,13 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const findMatch = (list: any[]) => {
-      const normInput = normalizeMatricNumber(trimmedUsername);
       const lowerInput = trimmedUsername.toLowerCase();
       const cleanNick = lowerInput.replace(/^@+/, '').trim();
-      const cleanDigits = trimmedUsername.replace(/\D/g, '');
 
       return list.find((u: any) => {
-        if (!u) return false;
-        // 1. Nickname match
-        if (u.nickname) {
-          const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
-          if (uNick === cleanNick || uNick === lowerInput) return true;
-        }
-        // 2. Matric number match
-        if (u.matricNumber) {
-          const uMatricNorm = normalizeMatricNumber(u.matricNumber);
-          if (normInput && uMatricNorm && normInput === uMatricNorm) return true;
-          const uMatricRaw = String(u.matricNumber).trim().toLowerCase().replace(/^fuhsi\//, '');
-          if (uMatricRaw === cleanNick.replace(/^fuhsi\//, '')) return true;
-        }
-        // 3. Email match
-        if (u.studentEmail) {
-          const uEmail = String(u.studentEmail).trim().toLowerCase();
-          if (uEmail === lowerInput || uEmail === cleanNick) return true;
-        }
-        // 4. Phone match (10 or 11 digits)
-        const uPhone = u.emergencyHomePhone || u.phone;
-        if (uPhone && cleanDigits.length >= 10) {
-          const uDigits = String(uPhone).replace(/\D/g, '');
-          if (uDigits && uDigits === cleanDigits) return true;
-        }
-        // 5. User ID match
-        if (u.id && String(u.id).toLowerCase() === lowerInput) return true;
-
-        return false;
+        if (!u || !u.nickname) return false;
+        const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
+        return uNick === cleanNick;
       });
     };
 

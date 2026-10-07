@@ -436,7 +436,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const trimmedPassword = loginPassword.trim();
 
     if (!trimmedIdentifier) {
-      setErrorMessage('Please enter your Username, Matric Number, or Email.');
+      setErrorMessage('Please enter your Username.');
       return;
     }
 
@@ -560,34 +560,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       const matchUserFromList = (list: any[]) => {
-        const normInput = normalizeMatricNumber(trimmedIdentifier);
         const lowerInput = trimmedIdentifier.toLowerCase();
         const cleanNick = lowerInput.replace(/^@+/, '').trim();
-        const cleanDigits = trimmedIdentifier.replace(/\D/g, '');
 
         let found = (list || []).find((u: any) => {
-          if (!u || isUserPermanentlyDeleted(u)) return false;
-          if (u.nickname) {
-            const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
-            if (uNick === cleanNick || uNick === lowerInput) return true;
-          }
-          if (u.matricNumber) {
-            const uMatricNorm = normalizeMatricNumber(u.matricNumber);
-            if (normInput && uMatricNorm && normInput === uMatricNorm) return true;
-            const uMatricRaw = String(u.matricNumber).trim().toLowerCase().replace(/^fuhsi\//, '');
-            if (uMatricRaw === cleanNick.replace(/^fuhsi\//, '')) return true;
-          }
-          if (u.studentEmail) {
-            const uEmail = String(u.studentEmail).trim().toLowerCase();
-            if (uEmail === lowerInput || uEmail === cleanNick) return true;
-          }
-          const uPhone = u.emergencyHomePhone || u.phone;
-          if (uPhone && cleanDigits.length >= 10) {
-            const uDigits = String(uPhone).replace(/\D/g, '');
-            if (uDigits && uDigits === cleanDigits) return true;
-          }
-          if (u.id && String(u.id).toLowerCase() === lowerInput) return true;
-          return false;
+          if (!u || isUserPermanentlyDeleted(u) || !u.nickname) return false;
+          const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
+          return uNick === cleanNick;
         });
 
         if (!found) {
@@ -1447,15 +1426,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     Accessing executive moderation console. Enter your admin credentials to proceed.
                   </p>
                 </div>
-              ) : (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex items-center justify-between gap-2">
-                  <span>Enter your registered <span className="font-bold text-slate-900">Username, Matric Number, or Email</span> and password to sign in.</span>
-                </div>
-              )}
+              ) : null}
 
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-1">
-                  Username, Matric Number, or Email <span className="text-rose-500">*</span>
+                  Username <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <User size={15} className="absolute left-3 top-2.5 text-slate-400" />
@@ -1466,7 +1441,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       setLoginIdentifier(e.target.value);
                       setErrorMessage('');
                     }}
-                    placeholder="Enter your username, matric number, or email"
+                    placeholder="Enter your username"
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                     required
                   />
