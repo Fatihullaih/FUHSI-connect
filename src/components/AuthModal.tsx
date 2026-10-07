@@ -522,89 +522,88 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      // 2. Perform backend authentication: search local users database first
+      // 2. Perform backend authentication: query authoritative central backend first
       let matchedUser: any = null;
-      let localUsers: any[] = [];
-
-      const cleanSearch = searchKey.replace(/^@/, '');
-      const isMatchingUser = (u: any) => {
-        if (!u) return false;
-        const uNick = (u.nickname || '').toLowerCase().replace(/^@/, '');
-        if (uNick && uNick === cleanSearch) return true;
-        return false;
-      };
 
       try {
-        localUsers = getStoredUsers();
-        matchedUser = localUsers.find(isMatchingUser) || null;
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: trimmedIdentifier,
+            password: trimmedPassword,
+          }),
+        });
 
-        if (!matchedUser) {
-          const stored = localStorage.getItem('fuhsi_users_db');
-          if (stored) {
-            const rawParsed = JSON.parse(stored);
-            if (Array.isArray(rawParsed)) {
-              matchedUser = rawParsed.find(isMatchingUser) || null;
-            }
+        const data = await res.json().catch(() => null);
+
+        if (res.ok && data?.success && data?.user) {
+          matchedUser = data.user;
+        } else if (res.status === 401) {
+          const elapsed = Date.now() - authStartTime;
+          if (elapsed < 1800) {
+            await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
           }
+          setIsSubmitting(false);
+          setLoginAuthStage('idle');
+          setErrorMessage(data?.error || 'Incorrect password. Please try again.');
+          return;
+        } else if (res.status === 403 && data?.isPending) {
+          const elapsed = Date.now() - authStartTime;
+          if (elapsed < 1800) {
+            await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+          }
+          setIsSubmitting(false);
+          setLoginAuthStage('idle');
+          setAccountNoticeType('PENDING');
+          setErrorMessage(data?.error || 'Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.');
+          return;
         }
-
-        if (matchedUser && isUserPermanentlyDeleted(matchedUser)) {
-          matchedUser = null;
-        }
-      } catch {
-        matchedUser = null;
+      } catch (err) {
+        console.warn('Central server auth error:', err);
       }
 
-      // Check fuhsi_active_user as fallback
+      // If not resolved from server, check Firestore directly (guarantees central consistency across devices)
       if (!matchedUser) {
         try {
-          const activeStr = localStorage.getItem('fuhsi_active_user');
-          if (activeStr) {
-            const activeParsed = JSON.parse(activeStr);
-            if (activeParsed && !isDemoUser(activeParsed) && isMatchingUser(activeParsed)) {
-              matchedUser = activeParsed;
-              upsertUser(activeParsed);
+          const fsUsers = await fetchUsersFromFirestore();
+          const cleanSearch = searchKey.replace(/^@/, '');
+          const fsMatched = (fsUsers || []).find((u: any) => {
+            if (!u || !u.nickname) return false;
+            const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
+            return uNick === cleanSearch;
+          });
+
+          if (fsMatched && !isUserPermanentlyDeleted(fsMatched)) {
+            const expectedPassword = fsMatched.savedPassword || fsMatched.password || 'password123';
+            if (trimmedPassword !== expectedPassword) {
+              const elapsed = Date.now() - authStartTime;
+              if (elapsed < 1800) {
+                await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+              }
+              setIsSubmitting(false);
+              setLoginAuthStage('idle');
+              setErrorMessage('Incorrect password. Please try again.');
+              return;
             }
-          }
-        } catch (e) {}
-      }
-
-      // If not found locally, query central DB with timeout
-      if (!matchedUser) {
-        try {
-          const fetchTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
-          const [serverDb, firestoreUsers] = await Promise.race([
-            Promise.all([
-              fetchServerDb().catch(() => null),
-              fetchUsersFromFirestore().catch(() => []),
-            ]),
-            fetchTimeout.then(() => [null, []]),
-          ]) as any;
-
-          const incomingCentralUsers = [
-            ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
-            ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
-          ];
-
-          if (incomingCentralUsers.length > 0) {
-            const stored = localStorage.getItem('fuhsi_users_db');
-            const curLocal = stored ? JSON.parse(stored) : localUsers;
-            const merged = mergeUsers(curLocal, incomingCentralUsers);
-            localStorage.setItem('fuhsi_users_db', JSON.stringify(merged));
-
-            const refreshedUser = merged.find(isMatchingUser);
-            if (refreshedUser && !isUserPermanentlyDeleted(refreshedUser)) {
-              matchedUser = refreshedUser;
-              upsertUser(refreshedUser);
-            }
+            matchedUser = fsMatched;
+            // Sync to server so server DB is refreshed
+            pushServerDbSync({ users: [matchedUser] }).catch(() => {});
           }
         } catch (err) {
-          console.error('Central DB query during login error:', err);
+          console.warn('Firestore fallback auth error:', err);
         }
       }
 
-      // 3. User account not found
+      // 3. User account not found centrally
       if (!matchedUser) {
+        // If device has stale local storage containing an old username, refresh local storage with server DB
+        fetchServerDb().then((sDb) => {
+          if (sDb && Array.isArray(sDb.users)) {
+            localStorage.setItem('fuhsi_users_db', JSON.stringify(sDb.users));
+          }
+        }).catch(() => {});
+
         const elapsed = Date.now() - authStartTime;
         if (elapsed < 1800) {
           await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
@@ -615,19 +614,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      // 4. Validate password strictly against stored account password
-      const expectedPassword = matchedUser.savedPassword || matchedUser.password || 'password123';
-      if (trimmedPassword !== expectedPassword) {
-        const elapsed = Date.now() - authStartTime;
-        if (elapsed < 1800) {
-          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-        }
-        setIsSubmitting(false);
-        setLoginAuthStage('idle');
-        setErrorMessage('Incorrect password. Please try again.');
-        return;
-      }
-
+      // 4. Double check approval status
       if (matchedUser.isApproved === false && !matchedUser.isAdmin) {
         const elapsed = Date.now() - authStartTime;
         if (elapsed < 1800) {
@@ -712,6 +699,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setLoginAuthStage('confirmed');
       await new Promise((resolve) => setTimeout(resolve, 850));
 
+      upsertUser(userToLogin);
       localStorage.setItem('fuhsi_active_user', JSON.stringify(userToLogin));
       setIsSubmitting(false);
       setLoginAuthStage('idle');

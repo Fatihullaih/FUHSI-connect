@@ -608,7 +608,7 @@ export const App: React.FC = () => {
           const cleanParsedNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
           const found = mergedUsers.find(
             (u) => (u.id && parsed.id && u.id === parsed.id) ||
-                   (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanParsedNick)
+                   (isModulaAccount(parsed) && isModulaAccount(u))
           );
 
           const isDeleted = isUserPermanentlyDeleted(parsed);
@@ -641,6 +641,9 @@ export const App: React.FC = () => {
             } else {
               setUserProfile((prev) => {
                 if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
+                // Requirement 3 & 7 & 8: Central username is authoritative across all devices
+                const isUsernameChanged = Boolean(found.nickname && found.nickname !== prev.nickname);
+                const nextNickname = isUsernameChanged ? found.nickname : prev.nickname;
                 const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
                 const foundTime = found.updatedAt ? new Date(found.updatedAt).getTime() : 0;
                 const savedTs = Math.max(
@@ -648,7 +651,7 @@ export const App: React.FC = () => {
                   Number(localStorage.getItem('fuhsi_last_profile_save') || 0)
                 );
                 const isRecentlySaved = Date.now() - savedTs < 60000;
-                const preferLocal = isRecentlySaved || prevTime >= foundTime;
+                const preferLocal = (isRecentlySaved || prevTime >= foundTime) && !isUsernameChanged;
 
                 const nextAvatarUrl = preferLocal 
                   ? (prev.avatarUrl !== undefined ? prev.avatarUrl : found.avatarUrl) 
@@ -679,7 +682,7 @@ export const App: React.FC = () => {
 
                 if (
                   prev.id === found.id &&
-                  prev.nickname === (preferLocal ? prev.nickname : (found.nickname || prev.nickname)) &&
+                  prev.nickname === nextNickname &&
                   prev.avatarUrl === nextAvatarUrl &&
                   prev.avatarKey === nextAvatarKey &&
                   prev.bio === nextBio &&
@@ -708,7 +711,7 @@ export const App: React.FC = () => {
                   ? {
                       ...found,
                       ...prev,
-                      nickname: prev.nickname || found.nickname,
+                      nickname: nextNickname,
                       realName: nextRealName,
                       realNameHidden: nextRealName,
                       studentEmail: nextEmail,
@@ -732,7 +735,7 @@ export const App: React.FC = () => {
                   : {
                       ...prev,
                       ...found,
-                      nickname: found.nickname || prev.nickname,
+                      nickname: nextNickname,
                       realName: nextRealName,
                       realNameHidden: nextRealName,
                       studentEmail: nextEmail,
@@ -1017,8 +1020,7 @@ export const App: React.FC = () => {
               const cleanParsedEmail = (parsed.studentEmail || '').toLowerCase().trim();
               const found = mergedUsers.find(
                 (u) => (u.id && parsed.id && u.id === parsed.id) ||
-                       (u.studentEmail && cleanParsedEmail && !cleanParsedEmail.includes('admin@fuhsi.edu.ng') && (u.studentEmail || '').toLowerCase().trim() === cleanParsedEmail) ||
-                       (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanParsedNick)
+                       (isModulaAccount(parsed) && isModulaAccount(u))
               );
               const isDeleted = isUserPermanentlyDeleted(parsed);
               if (
@@ -1050,6 +1052,9 @@ export const App: React.FC = () => {
                 } else {
                   setUserProfile((prev) => {
                     if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
+                    // Requirement 3 & 7 & 8: Central username is authoritative across all devices
+                    const isUsernameChanged = Boolean(found.nickname && found.nickname !== prev.nickname);
+                    const nextNickname = isUsernameChanged ? found.nickname : prev.nickname;
                     const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
                     const foundTime = found.updatedAt ? new Date(found.updatedAt).getTime() : 0;
                     const savedTs = Math.max(
@@ -1057,7 +1062,7 @@ export const App: React.FC = () => {
                       Number(localStorage.getItem('fuhsi_last_profile_save') || 0)
                     );
                     const isRecentlySaved = Date.now() - savedTs < 60000;
-                    const preferLocal = isRecentlySaved || prevTime >= foundTime;
+                    const preferLocal = (isRecentlySaved || prevTime >= foundTime) && !isUsernameChanged;
 
                     const nextAvatarUrl = preferLocal 
                       ? (prev.avatarUrl !== undefined ? prev.avatarUrl : found.avatarUrl) 
@@ -1081,7 +1086,7 @@ export const App: React.FC = () => {
 
                     if (
                       prev.id === found.id &&
-                      prev.nickname === (preferLocal ? prev.nickname : (found.nickname || prev.nickname)) &&
+                      prev.nickname === nextNickname &&
                       prev.avatarUrl === nextAvatarUrl &&
                       prev.avatarKey === nextAvatarKey &&
                       prev.bio === nextBio &&
@@ -1101,7 +1106,7 @@ export const App: React.FC = () => {
                       ? {
                           ...found,
                           ...prev,
-                          nickname: prev.nickname || found.nickname,
+                          nickname: nextNickname,
                           realName: nextRealName,
                           realNameHidden: nextRealName,
                           studentEmail: nextEmail,
@@ -1122,7 +1127,7 @@ export const App: React.FC = () => {
                       : {
                           ...prev,
                           ...found,
-                          nickname: found.nickname || prev.nickname,
+                          nickname: nextNickname,
                           realName: nextRealName,
                           realNameHidden: nextRealName,
                           studentEmail: nextEmail,
@@ -1389,7 +1394,7 @@ export const App: React.FC = () => {
           const list: UserProfile[] = JSON.parse(storedUsers);
           found = list.find(
             (u) => (u.id && parsed.id && u.id === parsed.id) ||
-                   (u.nickname && cleanNick && u.nickname.toLowerCase().replace(/^@/, '') === cleanNick)
+                   (isModulaAccount(parsed) && isModulaAccount(u))
           );
         } catch {}
       }
@@ -1408,6 +1413,7 @@ export const App: React.FC = () => {
         parsed = {
           ...parsed,
           ...found,
+          nickname: found.nickname || parsed.nickname,
           avatarUrl: found.avatarUrl || parsed.avatarUrl,
         };
       }
@@ -1429,6 +1435,28 @@ export const App: React.FC = () => {
       setIsLoggedIn(true);
       setShowAuthModal(false);
       cleanupModulaFirestoreDoc().catch(() => {});
+
+      // Asynchronously fetch current authoritative account from central server by permanent internal ID
+      if (parsed.id && !isModulaAccount(parsed)) {
+        fetch(`/api/users/${encodeURIComponent(parsed.id)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.success && data?.user) {
+              const centralUser = data.user;
+              setUserProfile((cur) => {
+                if (!cur || cur.id !== centralUser.id) return cur;
+                const nextUser = {
+                  ...cur,
+                  ...centralUser,
+                  nickname: centralUser.nickname || cur.nickname,
+                };
+                localStorage.setItem('fuhsi_active_user', JSON.stringify(nextUser));
+                return nextUser;
+              });
+            }
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       console.error(e);
       try { localStorage.removeItem('fuhsi_active_user'); } catch {}
@@ -3477,7 +3505,7 @@ export const App: React.FC = () => {
     // 3. Persist to database (localStorage, Firestore, and server DB)
     try {
       upsertUser(updated);
-      saveUserToFirestore(updated).catch((err) => {
+      saveUserToFirestore(updated, currentNickClean).catch((err) => {
         console.error('Error persisting user to Firestore:', err);
       });
       uploadAvatarToServer(updated.id, updated.nickname, newAvatarUrl || '').catch((err) => {

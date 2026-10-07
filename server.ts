@@ -187,6 +187,111 @@ app.get('/api/db', (req, res) => {
   return res.json({ success: true, db: activeDb });
 });
 
+// Centralized Authentication Endpoint - strictly validates against the current authoritative central record
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    const trimmedUsername = String(username || '').trim();
+    const trimmedPassword = String(password || '').trim();
+
+    if (!trimmedUsername) {
+      return res.status(400).json({ success: false, error: 'Please enter your Username.' });
+    }
+    if (!trimmedPassword) {
+      return res.status(400).json({ success: false, error: 'Please enter your password.' });
+    }
+
+    const cleanUsername = trimmedUsername.toLowerCase().replace(/^@/, '');
+
+    // Executive Admin account handle (@modula) with password (ibraheem)
+    if (cleanUsername === 'modula') {
+      if (trimmedPassword === 'ibraheem') {
+        const modulaAdmin = {
+          id: 'usr_admin_modula',
+          nickname: '@modula',
+          accountType: 'Admin',
+          realName: 'Administrator',
+          matricNumber: '',
+          department: '',
+          level: '',
+          bio: 'Platform Administrator (@modula).',
+          avatarKey: '1',
+          badgeType: 'GOLD',
+          badgeTitle: 'Official Admin',
+          reputationScore: 9999,
+          isVerified: true,
+          isApproved: true,
+          isAdmin: true,
+        };
+        return res.json({ success: true, user: modulaAdmin });
+      } else {
+        return res.status(401).json({ success: false, error: 'Incorrect password. Please try again.' });
+      }
+    }
+
+    // Look up user strictly by their CURRENT authoritative nickname in activeDb
+    let matched = (activeDb.users || []).find((u: any) => {
+      if (!u || !u.nickname) return false;
+      const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
+      return uNick === cleanUsername;
+    });
+
+    // If not found in memory activeDb, try fresh Firestore sync to ensure recent updates are caught
+    if (!matched) {
+      await syncFirestoreToActiveDb().catch(() => {});
+      matched = (activeDb.users || []).find((u: any) => {
+        if (!u || !u.nickname) return false;
+        const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
+        return uNick === cleanUsername;
+      });
+    }
+
+    if (!matched) {
+      return res.status(404).json({ success: false, error: 'Account not found. Please check your login details.' });
+    }
+
+    // Verify password strictly
+    const expectedPassword = matched.savedPassword || matched.password || 'password123';
+    if (trimmedPassword !== expectedPassword) {
+      return res.status(401).json({ success: false, error: 'Incorrect password. Please try again.' });
+    }
+
+    if (matched.isApproved === false && !matched.isAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: 'Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.',
+        isPending: true,
+      });
+    }
+
+    return res.json({ success: true, user: matched });
+  } catch (err: any) {
+    console.error('[Auth API] Login error:', err);
+    return res.status(500).json({ success: false, error: 'Authentication service error' });
+  }
+});
+
+// Retrieve current authoritative user account by internal ID
+app.get('/api/users/:userId', async (req, res) => {
+  try {
+    const rawId = req.params.userId || '';
+    if (!rawId) return res.status(400).json({ success: false, error: 'User ID is required' });
+
+    let matched = (activeDb.users || []).find((u: any) => u && String(u.id) === String(rawId));
+    if (!matched) {
+      await syncFirestoreToActiveDb().catch(() => {});
+      matched = (activeDb.users || []).find((u: any) => u && String(u.id) === String(rawId));
+    }
+
+    if (!matched) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    return res.json({ success: true, user: matched });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: 'User lookup error' });
+  }
+});
+
 // Central Avatar Management Endpoints (Permanent Cloud/Server Storage)
 app.post('/api/avatar/upload', (req, res) => {
   try {
@@ -340,7 +445,8 @@ app.delete('/api/avatar/:userId', (req, res) => {
 
 app.post('/api/db/sync', (req, res) => {
   try {
-    const updates = req.body;
+    const rawBody = req.body || {};
+    const updates = (rawBody.updates && typeof rawBody.updates === 'object') ? rawBody.updates : rawBody;
     if (updates && typeof updates === 'object') {
       let changed = false;
 

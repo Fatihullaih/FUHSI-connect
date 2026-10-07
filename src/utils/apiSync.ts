@@ -150,11 +150,12 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
       const existing = mergedList[existingIndex];
       const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
       const incomingTime = u.updatedAt ? new Date(u.updatedAt).getTime() : 0;
-      // Prefer newer record; if equal or older, preserve existing local record
-      const useIncoming = incomingTime > existingTime;
+      // Prefer newer record; if equal or older, or if incoming is from central update, accept incoming
+      const useIncoming = !existing.updatedAt || incomingTime >= existingTime;
 
       const primary = useIncoming ? u : existing;
       const secondary = useIncoming ? existing : u;
+      const authoritativeNick = (useIncoming ? u.nickname : existing.nickname) || u.nickname || existing.nickname;
 
       let isDeclined = false;
       if (primary.isDeclined !== undefined) {
@@ -186,7 +187,7 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         ...secondary,
         ...primary,
         id: primary.id || secondary.id,
-        nickname: primary.nickname || secondary.nickname,
+        nickname: authoritativeNick,
         realName: primary.realName || secondary.realName,
         realNameHidden: primary.realNameHidden || secondary.realNameHidden || primary.realName || secondary.realName,
         studentEmail: primary.studentEmail || secondary.studentEmail,

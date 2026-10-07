@@ -101,7 +101,7 @@ export async function cleanupModulaFirestoreDoc(): Promise<void> {
 /**
  * Save single user to Firestore
  */
-export async function saveUserToFirestore(user: UserProfile): Promise<void> {
+export async function saveUserToFirestore(user: UserProfile, oldNickname?: string): Promise<void> {
   if (!user || (!user.id && !user.nickname) || isDemoUser(user) || isDemoNickname(user.nickname)) return;
   const isMod = isModulaAccount(user);
   const targetUser = isMod ? sanitizeModulaProfile(user) : user;
@@ -117,6 +117,12 @@ export async function saveUserToFirestore(user: UserProfile): Promise<void> {
     const nickDocId = (targetUser.nickname || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
     if (nickDocId && nickDocId !== docId) {
       await deleteDoc(doc(db, USERS_COL, nickDocId)).catch(() => {});
+    }
+    if (oldNickname) {
+      const oldNickDocId = oldNickname.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      if (oldNickDocId && oldNickDocId !== docId) {
+        await deleteDoc(doc(db, USERS_COL, oldNickDocId)).catch(() => {});
+      }
     }
     if (isMod) {
       await cleanupModulaFirestoreDoc().catch(() => {});
