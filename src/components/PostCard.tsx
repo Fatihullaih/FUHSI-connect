@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Post, Comment, PostCategory, BadgeType, PollOption, UserProfile } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
-import { VerificationModal } from './VerificationModal';
 import { formatRelativeTime } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
@@ -105,7 +104,6 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [editedContent, setEditedContent] = useState(post.content || post.text || '');
   const [showEditLockModal, setShowEditLockModal] = useState(false);
-  const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
@@ -990,7 +988,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 type="button"
                 onClick={() => {
                   setShowEditLockModal(false);
-                  setShowVerificationModal(true);
+                  window.dispatchEvent(new CustomEvent('fuhsi_open_settings_verification'));
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-colors flex items-center justify-center gap-1 cursor-pointer"
               >
@@ -1000,14 +998,6 @@ export const PostCard: React.FC<PostCardProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {showVerificationModal && (
-        <VerificationModal
-          userProfile={userProfile || null}
-          onClose={() => setShowVerificationModal(false)}
-          onSubmitVerification={() => setShowVerificationModal(false)}
-        />
       )}
 
       {showShareModal && (

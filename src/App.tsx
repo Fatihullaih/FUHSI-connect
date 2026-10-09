@@ -1482,7 +1482,7 @@ export const App: React.FC = () => {
   type ModalStackItem =
     | { type: 'postDetail'; post: Post }
     | { type: 'authorProfile'; post: Post }
-    | { type: 'profile' }
+    | { type: 'profile'; initialOpenSettings?: boolean; initialSettingsSubpage?: any }
     | { type: 'createPost' }
     | { type: 'auth' }
     | { type: 'pwa' }
@@ -1539,6 +1539,23 @@ export const App: React.FC = () => {
       window.history.pushState({ type: 'modal', modalType: 'profile', time: Date.now() }, '');
     } catch (e) { console.error(e); }
   }, []);
+
+  const openSettingsVerification = useCallback(() => {
+    setSelectedPost(null);
+    setShowProfileModal(true);
+    setModalStack((prev) => [
+      ...prev.filter((m) => m.type !== 'postDetail'),
+      { type: 'profile', initialOpenSettings: true, initialSettingsSubpage: 'get_verified' },
+    ]);
+    try {
+      window.history.pushState({ type: 'modal', modalType: 'settingsVerification', time: Date.now() }, '');
+    } catch (e) { console.error(e); }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener('fuhsi_open_settings_verification', openSettingsVerification);
+    return () => window.removeEventListener('fuhsi_open_settings_verification', openSettingsVerification);
+  }, [openSettingsVerification]);
 
   const openAuthorProfile = useCallback((post: Post) => {
     const targetNick = (post.authorNickname || (post as any).nickname || '').toLowerCase().replace(/^@/, '');
@@ -4238,6 +4255,8 @@ export const App: React.FC = () => {
                       allFollows={allFollows}
                       allUsers={allUsers}
                       bookmarkedPostIds={myBookmarkedPostIds}
+                      initialOpenSettings={(item as any)?.initialOpenSettings}
+                      initialSettingsSubpage={(item as any)?.initialSettingsSubpage}
                       onSaveProfile={(nickname, department, level, bio, avatarKey, emergencyPhone, avatarUrl, realName, studentEmail) => {
                         return handleSaveUserProfile(nickname, department, level, bio, avatarKey, emergencyPhone, avatarUrl, realName, studentEmail);
                       }}

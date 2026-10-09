@@ -57,7 +57,7 @@ import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { ImageCropModal } from '../components/ImageCropModal';
 
-export type SettingsSubpage = 'main' | 'edit_profile' | 'display_mode' | 'privacy_visibility' | 'help_support' | 'delete_account' | 'logout_confirm';
+export type SettingsSubpage = 'main' | 'edit_profile' | 'display_mode' | 'privacy_visibility' | 'help_support' | 'delete_account' | 'logout_confirm' | 'get_verified';
 
 interface ProfileScreenProps {
   userProfile: UserProfile | null;
@@ -66,6 +66,8 @@ interface ProfileScreenProps {
   allFollows?: FollowRecord[];
   allUsers?: UserProfile[];
   bookmarkedPostIds?: string[];
+  initialOpenSettings?: boolean;
+  initialSettingsSubpage?: SettingsSubpage;
   onSaveProfile: (
     nickname: string,
     department: string,
@@ -122,6 +124,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   allFollows = [],
   allUsers = [],
   bookmarkedPostIds = [],
+  initialOpenSettings,
+  initialSettingsSubpage,
   onSaveProfile,
   onSubmitVerification,
   onOpenAuthModal,
@@ -148,8 +152,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const isMod = isModulaAccount(userProfile);
   const [activeTab, setActiveTab] = useState<'threads' | 'replies' | 'bookmarks'>('threads');
   const [deletingReplyId, setDeletingReplyId] = useState<string | null>(null);
-  const [isEditingSettings, setIsEditingSettings] = useState(false);
-  const [settingsSubpage, setSettingsSubpage] = useState<SettingsSubpage>('main');
+  const [isEditingSettings, setIsEditingSettings] = useState(initialOpenSettings || false);
+  const [settingsSubpage, setSettingsSubpage] = useState<SettingsSubpage>(initialSettingsSubpage || 'main');
   const [supportEmailCopied, setSupportEmailCopied] = useState(false);
   const [showPictureModal, setShowPictureModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
@@ -331,6 +335,24 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       setIsAvatarDirty(false);
     }
   }, [userProfile, settingsSubpage]);
+
+  useEffect(() => {
+    if (initialOpenSettings !== undefined) {
+      setIsEditingSettings(initialOpenSettings);
+    }
+    if (initialSettingsSubpage) {
+      setSettingsSubpage(initialSettingsSubpage);
+    }
+  }, [initialOpenSettings, initialSettingsSubpage]);
+
+  useEffect(() => {
+    const handleOpenVerif = () => {
+      setIsEditingSettings(true);
+      setSettingsSubpage('get_verified');
+    };
+    window.addEventListener('fuhsi_open_settings_verification', handleOpenVerif);
+    return () => window.removeEventListener('fuhsi_open_settings_verification', handleOpenVerif);
+  }, []);
 
   // Handle popstate for back button inside ProfileScreen
   useEffect(() => {
@@ -995,7 +1017,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   {/* 🔐 Get Verified */}
                   <button
                     type="button"
-                    onClick={() => setShowVerificationModal(true)}
+                    onClick={() => setSettingsSubpage('get_verified')}
                     className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-sky-500 dark:hover:border-sky-400 hover:bg-sky-50/40 dark:hover:bg-sky-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                   >
                     <div className="flex items-center gap-3.5">
@@ -1112,6 +1134,23 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   )}
                 </div>
               </>
+            )}
+
+            {settingsSubpage === 'get_verified' && (
+              /* DEDICATED GET VERIFIED SUBPAGE UNDER SETTINGS */
+              <VerificationModal
+                userProfile={userProfile}
+                embedded={true}
+                onBackToSettings={() => setSettingsSubpage('main')}
+                onClose={() => {
+                  handleCancelEdit();
+                  setIsEditingSettings(false);
+                }}
+                onSubmitVerification={(data) => {
+                  if (onSubmitVerification) onSubmitVerification(data);
+                  setSettingsSubpage('main');
+                }}
+              />
             )}
 
             {settingsSubpage === 'help_support' && (

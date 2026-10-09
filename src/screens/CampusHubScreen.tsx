@@ -31,7 +31,6 @@ import {
 } from 'lucide-react';
 import { checkIsUserVerified } from '../utils/verificationUtils';
 import { compressImageFile } from '../utils/imageUtils';
-import { VerificationModal } from '../components/VerificationModal';
 import { 
   generateWhatsAppTradeUrl, 
   saveMarketplaceReport, 
@@ -251,7 +250,6 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
 
   // Verification & Sold Modals
   const [showMarketplaceLockModal, setShowMarketplaceLockModal] = useState(false);
-  const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [soldModalItem, setSoldModalItem] = useState<MarketplaceItem | null>(null);
   const [soldSuccessNotify, setSoldSuccessNotify] = useState(false);
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<MarketplaceItem | null>(null);
@@ -1777,7 +1775,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
               <button
                 onClick={() => {
                   setShowMarketplaceLockModal(false);
-                  setShowVerificationModal(true);
+                  window.dispatchEvent(new CustomEvent('fuhsi_open_settings_verification'));
                 }}
                 className="flex-1 py-2.5 bg-[#0a6627] hover:bg-[#08521f] text-white font-bold text-xs rounded-xl cursor-pointer"
               >
@@ -1786,17 +1784,6 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {/* Verification modal instance */}
-      {showVerificationModal && (
-        <VerificationModal
-          userProfile={userProfile}
-          onClose={() => setShowVerificationModal(false)}
-          onSubmitVerification={() => {
-            setShowVerificationModal(false);
-          }}
-        />
       )}
     </div>
   );

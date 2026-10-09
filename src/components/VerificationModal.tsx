@@ -27,7 +27,7 @@ import { isGuestAccount } from '../utils/userDbUtils';
 interface VerificationModalProps {
   userProfile: UserProfile | null;
   onClose: () => void;
-  onSubmitVerification: (data: {
+  onSubmitVerification?: (data: {
     accountType: 'Student' | 'Executive' | 'Organization' | 'Guest' | string;
     positionTitle: string;
     matricNumber?: string;
@@ -37,12 +37,16 @@ interface VerificationModalProps {
     paymentRef: string;
     amountPaid: number;
   }) => void;
+  embedded?: boolean;
+  onBackToSettings?: () => void;
 }
 
 export const VerificationModal: React.FC<VerificationModalProps> = ({
   userProfile,
   onClose,
   onSubmitVerification,
+  embedded = false,
+  onBackToSettings,
 }) => {
   // Read dynamic fee set by Admin or default to 1500
   const [feeAmount, setFeeAmount] = useState<number>(() => {
@@ -169,51 +173,53 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
       const effAccountType = isGuest ? 'Guest' : accountType;
 
-      onSubmitVerification({
-        accountType: effAccountType,
-        positionTitle: isGuest ? '' : positionTitle.trim(),
-        matricNumber: isGuest ? '' : (userProfile?.matricNumber || 'N/A'),
-        department: isGuest ? '' : (userProfile?.department || 'N/A'),
-        level: isGuest ? '' : (userProfile?.level || 'N/A'),
-        proofDetails: isGuest
-          ? 'Guest Verification Request'
-          : (positionTitle.trim() ? `Position Held: ${positionTitle.trim()}` : 'Verified via subscription gateway'),
-        paymentRef: ref,
-        amountPaid: feeAmount,
-      });
+      if (onSubmitVerification) {
+        onSubmitVerification({
+          accountType: effAccountType,
+          positionTitle: isGuest ? '' : positionTitle.trim(),
+          matricNumber: isGuest ? '' : (userProfile?.matricNumber || 'N/A'),
+          department: isGuest ? '' : (userProfile?.department || 'N/A'),
+          level: isGuest ? '' : (userProfile?.level || 'N/A'),
+          proofDetails: isGuest
+            ? 'Guest Verification Request'
+            : (positionTitle.trim() ? `Position Held: ${positionTitle.trim()}` : 'Verified via subscription gateway'),
+          paymentRef: ref,
+          amountPaid: feeAmount,
+        });
+      }
 
       setIsSubmittedSuccess(true);
     }, 1800);
   };
 
   return (
-    <div className="fixed inset-0 z-50 w-full h-full bg-slate-100 dark:bg-slate-950 flex flex-col overflow-hidden animate-in fade-in duration-150">
-      <div className="w-full h-full max-w-3xl mx-auto bg-white dark:bg-slate-900 flex flex-col shadow-2xl sm:border-x sm:border-slate-200 dark:sm:border-slate-800 overflow-hidden">
+    <div className={embedded ? "flex flex-col h-full overflow-hidden bg-white dark:bg-slate-900" : "fixed inset-0 z-50 w-full h-full bg-slate-100 dark:bg-slate-950 flex flex-col overflow-hidden animate-in fade-in duration-150"}>
+      <div className={embedded ? "flex flex-col h-full overflow-hidden" : "w-full h-full max-w-3xl mx-auto bg-white dark:bg-slate-900 flex flex-col shadow-2xl sm:border-x sm:border-slate-200 dark:sm:border-slate-800 overflow-hidden"}>
         
         {/* Top Bar Navigation */}
-        <div className="bg-teal-800 dark:bg-slate-950 text-white p-4 sm:px-6 flex items-center justify-between border-b border-teal-900/40 dark:border-slate-800 shrink-0 z-10">
+        <div className={embedded ? "p-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0 z-10" : "bg-teal-800 dark:bg-slate-950 text-white p-4 sm:px-6 flex items-center justify-between border-b border-teal-900/40 dark:border-slate-800 shrink-0 z-10"}>
           <div className="flex items-center gap-2.5">
             <button
-              onClick={onClose}
-              className="p-1.5 -ml-1.5 rounded-xl bg-teal-900/60 hover:bg-teal-900 text-teal-100 hover:text-white dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
-              title="Return to previous page"
+              onClick={embedded ? (onBackToSettings || onClose) : onClose}
+              className={embedded ? "p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer" : "p-1.5 -ml-1.5 rounded-xl bg-teal-900/60 hover:bg-teal-900 text-teal-100 hover:text-white dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"}
+              title={embedded ? "Return to Settings" : "Return to previous page"}
             >
               <ArrowLeft size={18} />
-              <span>Back</span>
+              <span>{embedded ? "Settings" : "Back"}</span>
             </button>
-            <div className="h-4 w-px bg-teal-700/60 dark:bg-slate-800 mx-1 hidden sm:block" />
+            <div className={embedded ? "h-4 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden sm:block" : "h-4 w-px bg-teal-700/60 dark:bg-slate-800 mx-1 hidden sm:block"} />
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300">
+              <div className={embedded ? "w-7 h-7 rounded-lg bg-sky-50 dark:bg-sky-900/40 text-sky-600 dark:text-sky-300 flex items-center justify-center text-sm" : "w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300"}>
                 <ShieldCheck className="w-4 h-4" />
               </div>
-              <h2 className="font-black text-sm sm:text-base text-white tracking-tight">
+              <h2 className={embedded ? "font-black text-slate-900 dark:text-slate-100 text-sm sm:text-base" : "font-black text-sm sm:text-base text-white tracking-tight"}>
                 Get Verified
               </h2>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-full bg-teal-900/60 hover:bg-teal-900 text-teal-200 hover:text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+            className={embedded ? "p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer" : "p-2 rounded-full bg-teal-900/60 hover:bg-teal-900 text-teal-200 hover:text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors cursor-pointer"}
             title="Close modal"
           >
             <X size={18} />
@@ -429,10 +435,10 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             <div className="pt-2 flex justify-end">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
                 className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
               >
-                Close Window
+                {embedded ? 'Back to Settings' : 'Close Window'}
               </button>
             </div>
           )}

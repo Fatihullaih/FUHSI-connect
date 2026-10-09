@@ -3,7 +3,6 @@ import { X, ArrowLeft, MessageSquare, Heart, Bookmark, Send, CornerDownRight, Ma
 import { Post, Comment, UserProfile, PollOption } from '../types';
 import { AvatarIcon } from './AvatarIcon';
 import { VerificationBadge } from './VerificationBadge';
-import { VerificationModal } from './VerificationModal';
 import { formatRelativeTime, formatExactDateTime, getTimestampMs } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { compressImageFile } from '../utils/imageUtils';
@@ -68,7 +67,6 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [editedContent, setEditedContent] = useState(post?.content || (post as any)?.text || '');
   const [showEditLockModal, setShowEditLockModal] = useState(false);
-  const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
 
   useEffect(() => {
@@ -1013,7 +1011,8 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 type="button"
                 onClick={() => {
                   setShowEditLockModal(false);
-                  setShowVerificationModal(true);
+                  onClose();
+                  window.dispatchEvent(new CustomEvent('fuhsi_open_settings_verification'));
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-colors flex items-center justify-center gap-1 cursor-pointer"
               >
@@ -1023,14 +1022,6 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {showVerificationModal && (
-        <VerificationModal
-          userProfile={userProfile}
-          onClose={() => setShowVerificationModal(false)}
-          onSubmitVerification={() => setShowVerificationModal(false)}
-        />
       )}
 
       {showShareModal && (
