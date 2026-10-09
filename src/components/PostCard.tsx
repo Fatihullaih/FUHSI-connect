@@ -972,29 +972,13 @@ export const PostCard: React.FC<PostCardProps> = ({
               <Lock size={24} />
             </div>
             <div>
-              <h4 className="font-extrabold text-slate-900 text-base">Edit Thread — Verified Feature</h4>
+              <h4 className="font-extrabold text-slate-900 text-base">Edit Thread</h4>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Editing published threads and custom posts is exclusive to Verified accounts on FUHSI Connect to maintain content integrity and community trust.
+                Only verified accounts can edit published threads.
               </p>
             </div>
 
-            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-left text-xs space-y-1.5 text-slate-800 font-medium">
-              <div className="flex items-center gap-1.5 text-emerald-700 font-bold">
-                <ShieldCheck size={16} />
-                <span>Get Verified to unlock:</span>
-              </div>
-              <ul className="space-y-1 text-[11px] text-slate-700 font-medium">
-                <li className="flex items-center gap-1.5">✓ Live editing of your published threads</li>
-                <li className="flex items-center gap-1.5">✓ Verified checkmark across FUHSI Connect</li>
-                {!isGuestAccount(userProfile) ? (
-                  <li className="flex items-center gap-1.5">✓ Marketplace seller access & priority support</li>
-                ) : (
-                  <li className="flex items-center gap-1.5">✓ Higher trust & platform credibility</li>
-                )}
-              </ul>
-            </div>
-
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setShowEditLockModal(false)}
