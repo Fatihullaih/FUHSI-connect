@@ -69,7 +69,6 @@ interface CampusHubScreenProps {
 const CATEGORY_OPTIONS = [
   { id: 'All', label: 'All', icon: '📦' },
   { id: 'Textbooks', label: 'Textbooks', icon: '📚' },
-  { id: 'Rooms & Housing', label: 'Rooms & Housing', icon: '🏠' },
   { id: 'Electronics', label: 'Electronics', icon: '💻' },
   { id: 'Phones', label: 'Phones', icon: '📱' },
   { id: 'Fashion', label: 'Fashion', icon: '👕' },
@@ -77,6 +76,7 @@ const CATEGORY_OPTIONS = [
   { id: 'Food & Snacks', label: 'Food & Snacks', icon: '🍲' },
   { id: 'Services', label: 'Services', icon: '🛠️' },
   { id: 'Other', label: 'Other', icon: '🏷️' },
+  { id: 'Rooms & Housing', label: 'Room & Housing', icon: '🏠' },
 ];
 
 // Room / Housing Types
@@ -84,21 +84,13 @@ const HOUSING_ROOM_TYPES = [
   'Single Room',
   'Self Contain',
   'Roommate (Needed)',
-  'Shared Bedspace',
-  '2-Bedroom Flat',
-  'Hostel Bedspace',
-  'Mini Flat / Studio',
-  'Other Accommodation',
+  'Room & Parlor Self Contain',
 ];
 
 const ROOMMATE_CURRENT_ROOM_TYPES = [
   'Single Room',
   'Self Contain',
-  'Shared Bedspace',
-  '2-Bedroom Flat',
-  'Hostel Bedspace',
-  'Mini Flat / Studio',
-  'Other Accommodation',
+  'Room & Parlor Self Contain',
 ];
 
 // Rent Durations
@@ -135,7 +127,7 @@ export const validateNigerianWhatsApp = (phone: string): { isValid: boolean; err
   return { isValid: true, cleanPhone: standard11 };
 };
 
-// Safe Meetup Locations around FUHSI
+// Meet up Spots around FUHSI
 const MEETUP_LOCATIONS = [
   'FUHSI School Main Gate',
   'School Market',
@@ -143,9 +135,8 @@ const MEETUP_LOCATIONS = [
   'Owuoluwa Junction',
   'Just-Love Kitchen',
   'College High School Junction',
-  'School Hostel (Male/Female)',
-  'Ayeka Main Road',
-  'Okitipupa Town Center'
+  'Sambag',
+  'Sharp-Corner'
 ];
 
 export const formatPriceShort = (price: number): string => {
@@ -326,7 +317,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
       
       let matchesCat = selectedCategory === 'All';
       if (!matchesCat) {
-        if (selectedCategory === 'Rooms & Housing') {
+        if (selectedCategory === 'Rooms & Housing' || selectedCategory === 'Room & Housing') {
           matchesCat = catLower.includes('housing') || catLower.includes('room') || catLower.includes('hostel') || Boolean(item.isHousing);
         } else if (selectedCategory === 'Textbooks') {
           matchesCat = catLower.includes('book') || catLower.includes('textbook') || catLower.includes('study');
@@ -1460,7 +1451,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Campus Meetup Spot</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Meet up Spot</label>
                       <select
                         value={meetupPoint}
                         onChange={(e) => setMeetupPoint(e.target.value)}
