@@ -938,7 +938,7 @@ export function setAllNotificationIdsRead(nickname: string, notifIds: string[]):
  */
 export function isChatMessageNotification(notif: CampusNotification | any): boolean {
   if (!notif) return false;
-  if (notif.type === 'DIRECT_MESSAGE' || notif.type === 'ADMIN_TRADE_DESK') return true;
+  if (notif.type === 'DIRECT_MESSAGE') return true;
   if (typeof notif.id === 'string' && notif.id.startsWith('notif_dm_')) return true;
   if (notif.actionType === 'OPEN_TRADE_CHAT' && notif.conversationId && !notif.itemId && !notif.postId) return true;
   const title = typeof notif.title === 'string' ? notif.title.toLowerCase() : '';

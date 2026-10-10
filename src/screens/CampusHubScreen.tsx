@@ -27,7 +27,10 @@ import {
   Check,
   AlertTriangle,
   PhoneCall,
-  Sparkles
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
+  Maximize2
 } from 'lucide-react';
 import { checkIsUserVerified } from '../utils/verificationUtils';
 import { compressImageFile } from '../utils/imageUtils';
@@ -204,6 +207,82 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
   // Item Details Preview Modal State
   const [detailsModalItem, setDetailsModalItem] = useState<MarketplaceItem | null>(null);
   const [activePhotoIdx, setActivePhotoIdx] = useState<number>(0);
+
+  // Listing Image Preview & Touch Swipe Navigation State
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [previewImageIdx, setPreviewImageIdx] = useState(0);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [touchStartY, setTouchStartY] = useState<number | null>(null);
+
+  // Sync image index and reset preview modal when item changes
+  useEffect(() => {
+    setActivePhotoIdx(0);
+    setPreviewImageIdx(0);
+    setPreviewModalOpen(false);
+  }, [detailsModalItem?.id]);
+
+  // Listing-specific images in exact upload order
+  const currentItemImages: string[] = useMemo(() => {
+    if (!detailsModalItem) return [];
+    if (Array.isArray(detailsModalItem.imageUrls) && detailsModalItem.imageUrls.length > 0) {
+      return detailsModalItem.imageUrls.filter(Boolean);
+    }
+    return [];
+  }, [detailsModalItem]);
+
+  const handleNextPreviewImage = () => {
+    if (currentItemImages.length <= 1) return;
+    setPreviewImageIdx((prev) => (prev + 1) % currentItemImages.length);
+  };
+
+  const handlePrevPreviewImage = () => {
+    if (currentItemImages.length <= 1) return;
+    setPreviewImageIdx((prev) => (prev - 1 + currentItemImages.length) % currentItemImages.length);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      setTouchStartX(e.touches[0].clientX);
+      setTouchStartY(e.touches[0].clientY);
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX === null || touchStartY === null) return;
+    const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
+    const deltaX = touchStartX - touchEndX;
+    const deltaY = touchStartY - touchEndY;
+
+    // Recognize horizontal swipe gesture
+    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 40) {
+      if (deltaX > 0) {
+        // Swipe left -> Next picture
+        handleNextPreviewImage();
+      } else {
+        // Swipe right -> Previous picture
+        handlePrevPreviewImage();
+      }
+    }
+    setTouchStartX(null);
+    setTouchStartY(null);
+  };
+
+  // Keyboard navigation for image preview
+  useEffect(() => {
+    if (!previewModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight') {
+        handleNextPreviewImage();
+      } else if (e.key === 'ArrowLeft') {
+        handlePrevPreviewImage();
+      } else if (e.key === 'Escape') {
+        setPreviewModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewModalOpen, currentItemImages.length]);
 
   // Sell / Post Listing Modal State
   const [showSellModal, setShowSellModal] = useState(false);
@@ -1067,7 +1146,18 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
 
               {/* Large Photo Preview (Picture Only, No Video) */}
-              <div className="relative rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 w-full h-64 sm:h-72">
+              <div 
+                onClick={() => {
+                  if (currentItemImages.length > 0) {
+                    setPreviewImageIdx(activePhotoIdx);
+                    setPreviewModalOpen(true);
+                  }
+                }}
+                className={`relative rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 w-full h-64 sm:h-72 ${
+                  currentItemImages.length > 0 ? 'cursor-pointer group' : ''
+                }`}
+                title={currentItemImages.length > 0 ? "Tap to view larger picture preview" : undefined}
+              >
                 <img
                   src={
                     detailsModalItem.imageUrls?.[activePhotoIdx] ||
@@ -1075,10 +1165,21 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                     'https://images.unsplash.com/photo-1584438784894-089d6a62b8fa?w=600'
                   }
                   alt={detailsModalItem.title}
-                  className={`w-full h-full object-contain bg-slate-900/5 ${
+                  className={`w-full h-full object-contain bg-slate-900/5 transition-transform duration-200 group-hover:scale-[1.01] ${
                     isSold ? 'grayscale-[20%]' : ''
                   }`}
                 />
+
+                {/* Enlarge / Tap Preview Badge */}
+                {currentItemImages.length > 0 && !isSold && (
+                  <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full bg-slate-900/75 hover:bg-slate-900 text-white text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-xs shadow-md transition-all">
+                    <Maximize2 size={11} />
+                    <span>Tap picture to enlarge</span>
+                    {currentItemImages.length > 1 && (
+                      <span className="text-slate-300 font-semibold">• {activePhotoIdx + 1} of {currentItemImages.length}</span>
+                    )}
+                  </div>
+                )}
 
                 {isSold && (
                   <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] flex flex-col items-center justify-center p-3 text-center">
@@ -1098,12 +1199,17 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                   {detailsModalItem.imageUrls.map((url, idx) => (
                     <button
                       key={idx}
-                      onClick={() => setActivePhotoIdx(idx)}
+                      onClick={() => {
+                        setActivePhotoIdx(idx);
+                        setPreviewImageIdx(idx);
+                        setPreviewModalOpen(true);
+                      }}
                       className={`w-12 h-12 rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${
                         activePhotoIdx === idx
                           ? 'border-[#0a6627] ring-2 ring-emerald-400 scale-105'
                           : 'border-slate-200 opacity-60 hover:opacity-100'
                       }`}
+                      title={`Photo ${idx + 1} of ${detailsModalItem.imageUrls.length} (Tap to enlarge)`}
                     >
                       <img src={url} alt="thumbnail" className="w-full h-full object-cover" />
                     </button>
@@ -1273,6 +1379,125 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
               </div>
               </div>
             </div>
+
+            {/* 🖼️ HIGH-RES IMAGE PREVIEW WITH SWIPE NAVIGATION MODAL */}
+            {previewModalOpen && currentItemImages.length > 0 && (
+              <div 
+                className="fixed inset-0 z-70 bg-slate-950/85 backdrop-blur-md flex flex-col justify-between items-center p-3 sm:p-5 animate-in fade-in select-none"
+                onClick={() => {
+                  setActivePhotoIdx(previewImageIdx);
+                  setPreviewModalOpen(false);
+                }}
+              >
+                {/* Top Bar: Title, Counter, and Close Button */}
+                <div 
+                  className="w-full max-w-4xl flex items-center justify-between gap-3 pt-1 pb-2 z-10"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="px-3 py-1 rounded-full bg-white/10 text-white font-extrabold text-xs tracking-wide border border-white/15">
+                      {previewImageIdx + 1} of {currentItemImages.length}
+                    </span>
+                    <span className="text-white/80 font-bold text-xs truncate hidden sm:inline max-w-xs">
+                      {detailsModalItem.title}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-white/50 hidden md:inline">
+                      {currentItemImages.length > 1 ? 'Swipe left/right or use arrow keys to navigate' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivePhotoIdx(previewImageIdx);
+                        setPreviewModalOpen(false);
+                      }}
+                      className="p-2 rounded-full bg-white/10 hover:bg-white/25 text-white transition-all cursor-pointer shadow-md"
+                      aria-label="Close image preview"
+                      title="Close preview (Esc)"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Main Prominent Image Display with Touch Swipe Gesture Listeners */}
+                <div 
+                  className="relative flex-1 w-full max-w-4xl flex items-center justify-center p-2 sm:p-4 my-auto overflow-hidden touch-pan-y"
+                  onClick={(e) => e.stopPropagation()}
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                >
+                  {/* Previous Picture Button */}
+                  {currentItemImages.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={handlePrevPreviewImage}
+                      className="absolute left-1 sm:left-4 z-10 p-2.5 sm:p-3 rounded-full bg-slate-900/70 hover:bg-slate-900 text-white border border-white/20 backdrop-blur-xs transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-xl"
+                      aria-label="Previous picture"
+                      title="Previous picture"
+                    >
+                      <ChevronLeft size={22} />
+                    </button>
+                  )}
+
+                  {/* Selected High-Res Image Display */}
+                  <img
+                    src={currentItemImages[previewImageIdx]}
+                    alt={`Picture ${previewImageIdx + 1} of ${detailsModalItem.title}`}
+                    className="max-h-[72vh] sm:max-h-[76vh] max-w-full w-auto h-auto object-contain rounded-2xl shadow-2xl transition-all duration-200"
+                    draggable={false}
+                  />
+
+                  {/* Next Picture Button */}
+                  {currentItemImages.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={handleNextPreviewImage}
+                      className="absolute right-1 sm:right-4 z-10 p-2.5 sm:p-3 rounded-full bg-slate-900/70 hover:bg-slate-900 text-white border border-white/20 backdrop-blur-xs transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-xl"
+                      aria-label="Next picture"
+                      title="Next picture"
+                    >
+                      <ChevronRight size={22} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Bottom Bar: Thumbnails / Swipe Indicator */}
+                <div 
+                  className="w-full max-w-xl flex flex-col items-center gap-2 pb-1 z-10"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {currentItemImages.length > 1 ? (
+                    <div className="flex items-center gap-2 overflow-x-auto max-w-full px-2 py-1">
+                      {currentItemImages.map((imgUrl, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setPreviewImageIdx(i)}
+                          className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl overflow-hidden border-2 transition-all cursor-pointer shrink-0 ${
+                            previewImageIdx === i
+                              ? 'border-emerald-400 ring-2 ring-emerald-400/50 scale-105 opacity-100'
+                              : 'border-white/20 opacity-50 hover:opacity-90'
+                          }`}
+                        >
+                          <img src={imgUrl} alt={`Thumb ${i + 1}`} className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-white/60 font-medium">
+                      1 picture available for this listing
+                    </div>
+                  )}
+                  
+                  <div className="flex items-center gap-2 text-white/50 text-[11px] sm:hidden">
+                    <span>← Swipe left / right to navigate pictures →</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}

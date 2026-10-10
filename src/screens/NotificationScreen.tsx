@@ -174,8 +174,9 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
       return;
     }
 
-    // 3. Admin task notifications navigate directly to the relevant Admin Console desk!
-    if (userProfile?.isAdmin) {
+    // 3. For official platform notifications, always open detail popup so user can read complete message
+    const isOfficialNotice = isOfficial(n);
+    if (!isOfficialNotice && userProfile?.isAdmin) {
       const adminTarget = getAdminDeskForNotification(n);
       if (adminTarget) {
         if (onNavigateToAdminDesk) {
@@ -204,24 +205,30 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
       typeUpper === 'OFFICIAL' ||
       typeUpper === 'VERIFICATION' ||
       typeUpper === 'CONVERSION' ||
-      typeUpper === 'ADMIN_TRADE_DESK'
+      typeUpper === 'ADMIN_TRADE_DESK' ||
+      typeUpper === 'MARKETPLACE_OFFICIAL' ||
+      typeUpper === 'MARKETPLACE'
     );
   };
 
   const getCleanTitle = (n: CampusNotification) => {
     let t = n.title || 'Notification';
+    t = t.replace(/^\[CAMPUS DESK NOTICE:\s*(.*?)\]/i, '📢 $1');
+    t = t.replace(/\[CAMPUS DESK NOTICE.*?\]/gi, '');
     if (t.toLowerCase().includes('@modula') || t.toLowerCase().includes('message from admin')) {
       return 'Official Platform Update';
     }
-    return t;
+    return t.trim() || 'Official Platform Update';
   };
 
   const getCleanMessage = (n: CampusNotification) => {
     let m = n.message || '';
+    m = m.replace(/^\[CAMPUS DESK NOTICE:.*?\]\s*/gi, '');
     m = m.replace(/@modula\s+sent you a message/gi, 'Official update');
     m = m.replace(/Message from Admin/gi, 'Official Platform Update');
     m = m.replace(/—\s*FUHSI Campus Council & Secretariat/gi, '— FUHSI Connect Administration');
-    return m;
+    m = m.replace(/@FUHSI Campus Secretariat/gi, 'FUHSI Connect');
+    return m.trim();
   };
 
   const filtered = allNotifications.filter((n) => {
@@ -241,7 +248,9 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
       case 'CONVERSION':
         return <ShieldCheck size={size} className="text-emerald-700" />;
       case 'ADMIN':
+      case 'OFFICIAL':
       case 'ADMIN_TRADE_DESK':
+      case 'MARKETPLACE_OFFICIAL':
         return <Megaphone size={size} className="text-amber-700" />;
       case 'LIKE':
         return <Heart size={size} className="text-rose-600" />;
@@ -265,7 +274,9 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
       case 'CONVERSION':
         return 'bg-emerald-100 border-emerald-200';
       case 'ADMIN':
+      case 'OFFICIAL':
       case 'ADMIN_TRADE_DESK':
+      case 'MARKETPLACE_OFFICIAL':
         return 'bg-amber-100 border-amber-200';
       case 'LIKE':
         return 'bg-rose-100 border-rose-200';

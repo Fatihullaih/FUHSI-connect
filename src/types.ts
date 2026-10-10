@@ -483,7 +483,7 @@ export interface CampusEvent {
 
 export interface CampusNotification {
   id: string;
-  type: 'VERIFICATION' | 'LIKE' | 'COMMENT' | 'ADMIN' | 'MARKET' | 'TARGETED_DEPT' | 'TARGETED_FACULTY' | 'DIRECT_MESSAGE' | 'ADMIN_TRADE_DESK' | 'FOLLOW';
+  type: 'VERIFICATION' | 'LIKE' | 'COMMENT' | 'ADMIN' | 'OFFICIAL' | 'MARKET' | 'TARGETED_DEPT' | 'TARGETED_FACULTY' | 'DIRECT_MESSAGE' | 'ADMIN_TRADE_DESK' | 'FOLLOW' | string;
   title: string;
   message: string;
   timestamp: string;

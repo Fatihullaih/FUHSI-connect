@@ -1346,12 +1346,36 @@ export function updateUserBadgeAndVerification(
   const users = getStoredUsers();
   let updatedUser: UserProfile | undefined = undefined;
 
+  // Check whether user was already verified before this update
+  let wasAlreadyVerified = false;
   const targetIdx = users.findIndex((u) => {
     const uNick = (u.nickname || '').trim().toLowerCase().replace(/^@/, '');
     const uId = (u.id || '').trim().toLowerCase();
     const uEmail = (u.studentEmail || '').trim().toLowerCase();
     return uNick === cleanTarget || uId === cleanTarget || uEmail === cleanTarget;
   });
+
+  if (targetIdx !== -1) {
+    const u = users[targetIdx];
+    if (u.isVerified || u.verificationStatus === 'approved') {
+      wasAlreadyVerified = true;
+    }
+  }
+
+  // Also check existing verification requests database
+  try {
+    const vStr = localStorage.getItem('fuhsi_verifications_db');
+    if (vStr) {
+      const vList: VerificationRequest[] = JSON.parse(vStr);
+      const prevReq = vList.find((r) => {
+        const rNick = (r.applicantNickname || '').trim().toLowerCase().replace(/^@/, '');
+        return rNick === cleanTarget || (r.id || '').toLowerCase() === cleanTarget;
+      });
+      if (prevReq && prevReq.status === 'APPROVED') {
+        wasAlreadyVerified = true;
+      }
+    }
+  } catch {}
 
   if (targetIdx !== -1) {
     const u = users[targetIdx];
@@ -1535,27 +1559,25 @@ export function updateUserBadgeAndVerification(
   } catch (e) {}
 
   // 6. Deliver instant in-app notification to the target user
-  try {
-    const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-    const actionTitle = isVerified
-      ? (cleanTitle ? `🎉 Badge Assigned: ${cleanTitle}` : `🎉 Verification Badge Updated (${effectiveBadgeType})`)
-      : 'Account Verification Revoked';
-    const actionMsg = isVerified
-      ? `Congratulations! Platform Admin has verified your credentials and assigned you the ${effectiveBadgeType} badge${cleanTitle ? ` with the official title "${cleanTitle}"` : ''}. Your badge is now visible throughout FUHSI Connect!`
-      : `Your verification badge has been revoked by administration.`;
-    const badgeNotif = {
-      id: `badge_upd_${Date.now()}`,
-      type: 'VERIFICATION',
-      title: actionTitle,
-      message: actionMsg,
-      timestamp: 'Just now',
-      isRead: false,
-    };
-    let existingNotifs: any[] = [];
-    const storedNotifs = localStorage.getItem(notifKey);
-    if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-    localStorage.setItem(notifKey, JSON.stringify([badgeNotif, ...existingNotifs]));
-  } catch (e) {}
+  if (isVerified) {
+    sendVerificationNotification(cleanTarget, effectiveBadgeType, wasAlreadyVerified);
+  } else {
+    try {
+      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+      const badgeNotif = {
+        id: `badge_rev_${Date.now()}`,
+        type: 'VERIFICATION',
+        title: 'Account Verification Revoked',
+        message: 'Your verification badge has been removed.',
+        timestamp: 'Just now',
+        isRead: false,
+      };
+      let existingNotifs: any[] = [];
+      const storedNotifs = localStorage.getItem(notifKey);
+      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
+      localStorage.setItem(notifKey, JSON.stringify([badgeNotif, ...existingNotifs]));
+    } catch (e) {}
+  }
 
   // 7. Dispatch custom event for real-time reactivity across active views
   if (typeof window !== 'undefined') {
@@ -1573,4 +1595,65 @@ export function updateUserBadgeAndVerification(
   }
 
   return { success: true, user: updatedUser };
+}
+
+/**
+ * Sends official verification notifications conforming strictly to platform rules:
+ * - First-time approval: '🎉 Account Verified!'
+ * - Existing verification updated: '🎉 Verification Updated!'
+ * - Never mentions Admin or @modula.
+ * - Deduplicates so rapid sequential calls (e.g. from both UI & state sync) send only one notification.
+ */
+export function sendVerificationNotification(
+  targetNickname: string,
+  badgeType: BadgeType | string = 'BLUE',
+  wasAlreadyVerified: boolean = false
+): void {
+  if (!targetNickname) return;
+  const cleanTarget = targetNickname.trim().toLowerCase().replace(/^@/, '');
+  const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+  const assignedColor = (badgeType || 'BLUE').toString().toUpperCase();
+
+  try {
+    const storedNotifs = localStorage.getItem(notifKey);
+    let existingNotifs: any[] = storedNotifs ? JSON.parse(storedNotifs) : [];
+    
+    // Deduplication check: prevent duplicate verification notification within 10 seconds
+    const now = Date.now();
+    const isRecentDuplicate = existingNotifs.some((n: any) => 
+      n.type === 'VERIFICATION' &&
+      n._actionTimestamp &&
+      (now - n._actionTimestamp < 10000)
+    );
+    if (isRecentDuplicate) {
+      return;
+    }
+
+    const title = wasAlreadyVerified ? '🎉 Verification Updated!' : '🎉 Account Verified!';
+    const message = wasAlreadyVerified
+      ? `Congratulations! Your verification details have been updated. Your profile now displays your updated verification badge (${assignedColor}) across the platform.`
+      : `Congratulations! Your verification has been approved, and you have been awarded the ${assignedColor} badge. Your badge is now visible across the platform.`;
+
+    const verifNotif = {
+      id: `verif_notif_${now}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'VERIFICATION',
+      title,
+      message,
+      timestamp: 'Just now',
+      isRead: false,
+      _actionTimestamp: now,
+    };
+
+    localStorage.setItem(notifKey, JSON.stringify([verifNotif, ...existingNotifs]));
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('fuhsi_notification_received', {
+          detail: { targetNickname: cleanTarget, notif: verifNotif },
+        })
+      );
+    }
+  } catch (e) {
+    console.error('Error sending verification notification:', e);
+  }
 }

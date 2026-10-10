@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { MarketplaceItem, UserProfile, MarketplaceReport, DirectMessage } from '../types';
+import { MarketplaceItem, UserProfile, MarketplaceReport, CampusNotification } from '../types';
 import { 
   getStoredMarketplaceReports, 
   updateMarketplaceReportStatus 
 } from '../utils/marketplaceUtils';
-import { sendDirectMessage } from '../utils/messagingUtils';
+import { sendUserNotification } from '../utils/messagingUtils';
 import { blockUser } from '../utils/blockUtils';
 import { 
   ShieldCheck, 
@@ -164,17 +164,27 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
     e.preventDefault();
     if (!msgRecipient.trim() || !msgContent.trim()) return;
 
-    const dm: DirectMessage = {
-      id: `dm_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      conversationId: `conv_council_${msgRecipient.trim().toLowerCase().replace(/^@/, '')}`,
-      senderNickname: 'FUHSI Campus Secretariat',
-      receiverNickname: msgRecipient.trim(),
-      text: `[CAMPUS DESK NOTICE: ${msgSubject.trim() || 'Marketplace Inquiry'}]\n\n${msgContent.trim()}`,
-      timestamp: new Date().toISOString(),
-    };
-    sendDirectMessage(dm);
+    const cleanNick = msgRecipient.trim().toLowerCase().replace(/^@/, '');
+    
+    // Construct clean, professional heading
+    let heading = (msgSubject.trim() || 'Marketplace Listing Update');
+    heading = heading.replace(/^\[.*?\]\s*/, '').trim();
+    if (!heading.startsWith('📢')) {
+      heading = `📢 ${heading}`;
+    }
 
-    setMsgToast(`Official inquiry sent to @${msgRecipient.replace(/^@/, '')}`);
+    const officialNotif: CampusNotification = {
+      id: `mkt_official_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'OFFICIAL',
+      title: heading,
+      message: msgContent.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false,
+    };
+
+    sendUserNotification(cleanNick, officialNotif);
+
+    setMsgToast(`Official marketplace update sent to @${cleanNick}`);
     setMsgRecipient('');
     setMsgSubject('');
     setMsgContent('');
@@ -367,13 +377,13 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
                       <button
                         onClick={() => {
                           setMsgRecipient(report.sellerNickname);
-                          setMsgSubject(`Inquiry regarding report on "${report.itemTitle}"`);
+                          setMsgSubject('Marketplace Listing Update');
                           setActiveSubTab('MESSAGE');
                         }}
                         className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
                       >
                         <Send size={13} />
-                        <span>Question Seller</span>
+                        <span>Send Official Update</span>
                       </button>
 
                       <button
@@ -456,11 +466,11 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
                   <button
                     onClick={() => {
                       setMsgRecipient(item.sellerNickname);
-                      setMsgSubject(`Regarding listing "${item.title}"`);
+                      setMsgSubject('Marketplace Listing Update');
                       setActiveSubTab('MESSAGE');
                     }}
                     className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
-                    title="Send Message to Seller"
+                    title="Send Official Marketplace Update"
                   >
                     <MessageSquare size={13} />
                   </button>
@@ -546,16 +556,16 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
           <div>
             <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-1.5">
               <MessageSquare className="w-4 h-4 text-blue-600" />
-              <span>Issue Campus Secretariat Inquiry to Student</span>
+              <span>Issue Official Marketplace Update to Seller</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Dispatches an official notification to the student's in-app inbox.
+              Delivers an official platform update under the user's Notifications. Will not create a private Chat.
             </p>
           </div>
 
           <form onSubmit={handleSendMessage} className="space-y-3">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Student Nickname</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Seller / Student Nickname</label>
               <input
                 type="text"
                 value={msgRecipient}
@@ -567,12 +577,12 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Subject / Inquiry Title</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Subject / Notification Heading</label>
               <input
                 type="text"
                 value={msgSubject}
                 onChange={(e) => setMsgSubject(e.target.value)}
-                placeholder="e.g. Marketplace Listing Clarification / Trade Inquiry"
+                placeholder="e.g. Marketplace Listing Update"
                 className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 font-medium"
               />
             </div>
@@ -582,7 +592,7 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
               <textarea
                 value={msgContent}
                 onChange={(e) => setMsgContent(e.target.value)}
-                placeholder="Type the official inquiry or instructions here..."
+                placeholder='e.g. Please review the price of your listing, "Phone", and consider reducing it.'
                 rows={4}
                 className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 font-medium"
                 required
@@ -594,7 +604,7 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
               className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Send size={13} />
-              <span>Send Official Inquiry</span>
+              <span>Send Official Marketplace Update</span>
             </button>
           </form>
         </div>

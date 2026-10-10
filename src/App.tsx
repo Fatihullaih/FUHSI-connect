@@ -12,7 +12,7 @@ import {
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
 import { useAdminPendingCounts } from './utils/adminAlertUtils';
-import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate } from './utils/userDbUtils';
+import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate, sendVerificationNotification } from './utils/userDbUtils';
 import {
   fetchServerDb,
   pushServerDbSync,
@@ -2918,6 +2918,37 @@ export const App: React.FC = () => {
     const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
     const nowIso = new Date().toISOString();
 
+    // Determine if the user was already verified prior to this approval action
+    let wasAlreadyVerified = false;
+    if (existingReq && existingReq.status === 'APPROVED') {
+      wasAlreadyVerified = true;
+    }
+    if (
+      userProfile &&
+      (userProfile.nickname.toLowerCase().replace(/^@/, '') === cleanTarget ||
+        userProfile.id === cleanTarget ||
+        userProfile.id === targetApplicantNick)
+    ) {
+      if (userProfile.isVerified || userProfile.verificationStatus === 'approved') {
+        wasAlreadyVerified = true;
+      }
+    }
+    try {
+      const storedUsers = localStorage.getItem('fuhsi_users_db');
+      if (storedUsers) {
+        const usersList: UserProfile[] = JSON.parse(storedUsers);
+        const existingU = usersList.find(
+          (u) =>
+            (u.nickname || '').toLowerCase().replace(/^@/, '') === cleanTarget ||
+            u.id === cleanTarget ||
+            u.id === targetApplicantNick
+        );
+        if (existingU && (existingU.isVerified || existingU.verificationStatus === 'approved')) {
+          wasAlreadyVerified = true;
+        }
+      }
+    } catch (e) {}
+
     // 1. Update verification requests list
     setVerificationRequests((prev) => {
       let matched = false;
@@ -3091,24 +3122,8 @@ export const App: React.FC = () => {
       );
     }
 
-    // 6. Send in-app notification
-    try {
-      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-      const verifNotif = {
-        id: `verif_appr_${Date.now()}`,
-        type: 'VERIFICATION',
-        title: '🎉 Account Verified!',
-        message: `Congratulations! Your verification details have been updated. Your profile now displays your verified checkmark badge (${assignedTitle || badgeType}) across FUHSI Connect.`,
-        timestamp: 'Just now',
-        isRead: false,
-      };
-      let existingNotifs = [];
-      const storedNotifs = localStorage.getItem(notifKey);
-      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-      localStorage.setItem(notifKey, JSON.stringify([verifNotif, ...existingNotifs]));
-    } catch (e) {
-      console.error(e);
-    }
+    // 6. Send official in-app verification notification (Account Verified vs Verification Updated)
+    sendVerificationNotification(cleanTarget, badgeType, wasAlreadyVerified);
   };
 
   // Handler for Admin cancelling or revoking verification badge & title totally
