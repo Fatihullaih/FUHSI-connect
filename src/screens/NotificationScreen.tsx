@@ -215,6 +215,8 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     let t = n.title || 'Notification';
     t = t.replace(/^\[CAMPUS DESK NOTICE:\s*(.*?)\]/i, '📢 $1');
     t = t.replace(/\[CAMPUS DESK NOTICE.*?\]/gi, '');
+    t = t.replace(/@FUHSI Campus Secretariat/gi, '');
+    t = t.replace(/FUHSI Campus Secretariat/gi, '');
     if (t.toLowerCase().includes('@modula') || t.toLowerCase().includes('message from admin')) {
       return 'Official Platform Update';
     }
@@ -226,8 +228,9 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     m = m.replace(/^\[CAMPUS DESK NOTICE:.*?\]\s*/gi, '');
     m = m.replace(/@modula\s+sent you a message/gi, 'Official update');
     m = m.replace(/Message from Admin/gi, 'Official Platform Update');
-    m = m.replace(/—\s*FUHSI Campus Council & Secretariat/gi, '— FUHSI Connect Administration');
-    m = m.replace(/@FUHSI Campus Secretariat/gi, 'FUHSI Connect');
+    m = m.replace(/—\s*FUHSI Campus Council & Secretariat/gi, '');
+    m = m.replace(/@FUHSI Campus Secretariat/gi, '');
+    m = m.replace(/FUHSI Campus Secretariat/gi, '');
     return m.trim();
   };
 

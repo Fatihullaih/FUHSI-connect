@@ -8,7 +8,7 @@ import { ImagePreviewModal } from './ImagePreviewModal';
 import { compressImageFile } from '../utils/imageUtils';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
 import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
-import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
+import { isItemLikedByUser, getEffectiveLikesCount, isItemBookmarkedByUser } from '../utils/reactionUtils';
 import { ShareRepostModal } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
 import { LinkifiedText } from './LinkifiedText';
@@ -865,14 +865,20 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 </button>
               </div>
 
-              <button
-                onClick={() => onToggleBookmark(post)}
-                className={`p-1.5 rounded-xl transition-colors ${
-                  post.isBookmarkedByMe ? 'text-amber-600 bg-amber-50' : 'text-slate-400 hover:text-slate-600'
-                }`}
-              >
-                <Bookmark className={`w-4 h-4 ${post.isBookmarkedByMe ? 'fill-amber-500 text-amber-500' : ''}`} />
-              </button>
+              {(() => {
+                const isPostBookmarked = isItemBookmarkedByUser(post, userProfile);
+                return (
+                  <button
+                    onClick={() => onToggleBookmark(post)}
+                    className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
+                      isPostBookmarked ? 'text-amber-600 bg-amber-50' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                    title={isPostBookmarked ? 'Remove Bookmark' : 'Save Post'}
+                  >
+                    <Bookmark className={`w-4 h-4 ${isPostBookmarked ? 'fill-amber-500 text-amber-500' : ''}`} />
+                  </button>
+                );
+              })()}
             </div>
           </div>
         );

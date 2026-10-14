@@ -83,3 +83,83 @@ export function toggleUserLike(
     return { nextLikedBy: list, isLiked: true };
   }
 }
+
+/**
+ * Checks if a specific user account has bookmarked a post.
+ * Strictly verifies against the active user's identifier so bookmarking
+ * by one user never bookmarks for other users.
+ */
+export function isItemBookmarkedByUser(
+  item: { id?: string; bookmarkedBy?: string[]; isBookmarkedByMe?: boolean } | null | undefined,
+  user: UserProfile | null | undefined,
+  userBookmarksList?: string[]
+): boolean {
+  if (!item || !user) return false;
+
+  const normUserNick = normalizeUserKey(user.nickname);
+  const userId = normalizeUserKey(user.id);
+  const userKey = normUserNick || userId;
+
+  if (!userKey) return false;
+
+  // 1. Check passed userBookmarksList if provided
+  if (Array.isArray(userBookmarksList) && item.id) {
+    if (userBookmarksList.includes(item.id)) return true;
+  }
+
+  // 2. Check local storage fuhsi_user_bookmarks_db for this specific user
+  if (item.id) {
+    try {
+      const stored = localStorage.getItem('fuhsi_user_bookmarks_db');
+      if (stored) {
+        const map = JSON.parse(stored);
+        const myIds: string[] = map[userKey] || (normUserNick ? map[normUserNick] : []) || [];
+        if (myIds.includes(item.id)) return true;
+      }
+    } catch {}
+  }
+
+  // 3. Check post's bookmarkedBy array (per-user array synced from Firestore)
+  if (Array.isArray(item.bookmarkedBy)) {
+    return item.bookmarkedBy.some((k) => {
+      if (!k) return false;
+      const norm = normalizeUserKey(k);
+      return (normUserNick && norm === normUserNick) || (userId && norm === userId);
+    });
+  }
+
+  return false;
+}
+
+/**
+ * Pure function to toggle a user's bookmark in a bookmarkedBy array.
+ * Returns the new array of user keys and whether the user is now bookmarked.
+ */
+export function toggleUserBookmark(
+  currentBookmarkedBy: string[] | undefined,
+  user: UserProfile
+): { nextBookmarkedBy: string[]; isBookmarked: boolean } {
+  const normUserNick = normalizeUserKey(user.nickname);
+  const userId = normalizeUserKey(user.id);
+  const userKey = normUserNick || userId;
+
+  if (!userKey) {
+    return { nextBookmarkedBy: currentBookmarkedBy || [], isBookmarked: false };
+  }
+
+  const list = Array.isArray(currentBookmarkedBy) ? [...currentBookmarkedBy] : [];
+  const existingIndex = list.findIndex((k) => {
+    if (!k) return false;
+    const norm = normalizeUserKey(k);
+    return (normUserNick && norm === normUserNick) || (userId && norm === userId);
+  });
+
+  if (existingIndex >= 0) {
+    list.splice(existingIndex, 1);
+    return { nextBookmarkedBy: list, isBookmarked: false };
+  } else {
+    list.push(userKey);
+    return { nextBookmarkedBy: list, isBookmarked: true };
+  }
+}
+

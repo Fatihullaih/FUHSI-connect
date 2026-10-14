@@ -128,6 +128,7 @@ export interface Post {
   quotedPostId?: string;
   quotedPost?: Post;
   bookmarks?: number;
+  bookmarkedBy?: string[];
   isLikedByMe?: boolean;
   isBookmarkedByMe?: boolean;
   isBookmarked?: boolean;

@@ -47,6 +47,7 @@ import {
 } from 'lucide-react';
 import { ThemeMode, getStoredTheme, setStoredTheme } from '../utils/themeUtils';
 import { formatJoinDate } from '../utils/userDbUtils';
+import { isItemBookmarkedByUser } from '../utils/reactionUtils';
 import { AvatarIcon } from '../components/AvatarIcon';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { PostCard } from '../components/PostCard';
@@ -445,10 +446,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const bookmarkedPosts = (allPosts || [])
     .filter((p) => {
       if (!p) return false;
-      if (bookmarkedPostIds && bookmarkedPostIds.length > 0) {
-        return bookmarkedPostIds.includes(p.id);
-      }
-      return Boolean(p.isBookmarkedByMe);
+      return isItemBookmarkedByUser(p, userProfile, bookmarkedPostIds);
     })
     .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
 

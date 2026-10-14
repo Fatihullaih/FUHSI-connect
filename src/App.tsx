@@ -58,7 +58,7 @@ import { initTheme, getStoredTheme, setStoredTheme, ThemeMode } from './utils/th
 import { getUserBadgeInfo, normalizeBadgeColor } from './utils/verificationUtils';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, BadgeType, PollOption, DirectMessage, FollowRecord } from './types';
 import { getStoredFollows, saveStoredFollows, toggleFollowState, recordFollowNotification } from './utils/followUtils';
-import { toggleUserLike, isItemLikedByUser, getEffectiveLikesCount } from './utils/reactionUtils';
+import { toggleUserLike, isItemLikedByUser, getEffectiveLikesCount, isItemBookmarkedByUser, toggleUserBookmark, normalizeUserKey } from './utils/reactionUtils';
 import {
   isDemoUser,
   isDemoNickname,
@@ -476,9 +476,29 @@ export const App: React.FC = () => {
   // Real Following & Followers State (Persisted & Synced across all devices)
   const [allFollows, setAllFollows] = useState<FollowRecord[]>(() => getStoredFollows());
 
-  // Active user bookmark IDs key
-  const activeUserKey = (userProfile?.nickname || '').toLowerCase().replace(/^@/, '');
-  const myBookmarkedPostIds = userBookmarksMap[activeUserKey] || [];
+  // Active user bookmark IDs key and bookmarked posts list
+  const activeUserKey = normalizeUserKey(userProfile?.nickname) || normalizeUserKey(userProfile?.id);
+  const myBookmarkedPostIds = useMemo(() => {
+    if (!activeUserKey) return [];
+    const directList = userBookmarksMap[activeUserKey] || [];
+    // Also include posts that have activeUserKey in post.bookmarkedBy
+    const fromPosts = posts
+      .filter((p) => Array.isArray(p.bookmarkedBy) && p.bookmarkedBy.some((k) => normalizeUserKey(k) === activeUserKey))
+      .map((p) => p.id);
+    return Array.from(new Set([...directList, ...fromPosts]));
+  }, [userBookmarksMap, activeUserKey, posts]);
+
+  // Posts mapped with active user's personal bookmark state
+  const postsWithUserBookmarkState = useMemo(() => {
+    return posts.map((p) => {
+      const isBookmarked = isItemBookmarkedByUser(p, userProfile, myBookmarkedPostIds);
+      return {
+        ...p,
+        isBookmarkedByMe: isBookmarked,
+        isBookmarked: isBookmarked,
+      };
+    });
+  }, [posts, userProfile, myBookmarkedPostIds]);
 
   // Unread notifications and chat messages counter tracker
   const [notifTrigger, setNotifTrigger] = useState(0);
@@ -1478,6 +1498,17 @@ export const App: React.FC = () => {
   const [selectedAuthorPost, setSelectedAuthorPost] = useState<Post | null>(null);
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
 
+  // Selected post mapped with active user's personal bookmark state
+  const activeSelectedPost = useMemo(() => {
+    if (!selectedPost) return null;
+    const isBookmarked = isItemBookmarkedByUser(selectedPost, userProfile, myBookmarkedPostIds);
+    return {
+      ...selectedPost,
+      isBookmarkedByMe: isBookmarked,
+      isBookmarked: isBookmarked,
+    };
+  }, [selectedPost, userProfile, myBookmarkedPostIds]);
+
   // Stack-based Navigation & Modal History State Support
   type ModalStackItem =
     | { type: 'postDetail'; post: Post }
@@ -1886,35 +1917,67 @@ export const App: React.FC = () => {
   };
 
   const handleBookmarkClick = (post: Post) => {
-    const userKey = (userProfile?.nickname || '').toLowerCase().replace(/^@/, '');
-    const currentList = userBookmarksMap[userKey] || [];
-    const isBookmarked = currentList.includes(post.id);
+    if (!userProfile || isGuestAccount(userProfile)) {
+      setShowAuthModal(true);
+      return;
+    }
 
-    const updatedList = isBookmarked
-      ? currentList.filter((id) => id !== post.id)
-      : [...currentList, post.id];
+    const normUserNick = normalizeUserKey(userProfile.nickname);
+    const userId = normalizeUserKey(userProfile.id);
+    const userKey = normUserNick || userId;
 
-    const updatedMap = {
+    if (!userKey) return;
+
+    // 1. Toggle user's key in bookmarkedBy array on the post
+    const { nextBookmarkedBy, isBookmarked: nextIsBookmarked } = toggleUserBookmark(
+      post.bookmarkedBy,
+      userProfile
+    );
+
+    // 2. Update local userBookmarksMap for active user
+    const currentList = userBookmarksMap[userKey] || (normUserNick ? userBookmarksMap[normUserNick] : []) || [];
+    const updatedList = nextIsBookmarked
+      ? (currentList.includes(post.id) ? currentList : [...currentList, post.id])
+      : currentList.filter((id) => id !== post.id);
+
+    const updatedMap: Record<string, string[]> = {
       ...userBookmarksMap,
       [userKey]: updatedList,
     };
+    if (normUserNick && normUserNick !== userKey) {
+      updatedMap[normUserNick] = updatedList;
+    }
 
     setUserBookmarksMap(updatedMap);
+    try {
+      localStorage.setItem('fuhsi_user_bookmarks_db', JSON.stringify(updatedMap));
+    } catch {}
+
+    // 3. Update post object in state without global bookmark flags
+    const updatedPost: Post = {
+      ...post,
+      bookmarkedBy: nextBookmarkedBy,
+      bookmarks: nextBookmarkedBy.length,
+    };
+    delete updatedPost.isBookmarkedByMe;
+    delete updatedPost.isBookmarked;
 
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === post.id) {
-          const nextState = !isBookmarked;
-          const updated = { ...p, isBookmarkedByMe: nextState, isBookmarked: nextState };
-          if (selectedPost && selectedPost.id === post.id) {
-            setSelectedPost(updated);
-          }
-          savePostToFirestore(updated).catch((err) => console.error(err));
-          return updated;
+          return updatedPost;
         }
         return p;
       })
     );
+
+    if (selectedPost && selectedPost.id === post.id) {
+      setSelectedPost(updatedPost);
+    }
+
+    // 4. Save to Firestore (savePostToFirestore strips isBookmarked/isBookmarkedByMe
+    // and preserves bookmarkedBy and bookmarks count)
+    savePostToFirestore(updatedPost).catch((err) => console.error(err));
   };
 
   const handleRepost = useCallback((targetPost: Post) => {
@@ -3919,7 +3982,7 @@ export const App: React.FC = () => {
       <main className="flex-1 pb-20">
         {navIndex === 0 && (
           <FeedScreen
-            posts={posts}
+            posts={postsWithUserBookmarkState}
             allComments={comments}
             userProfile={userProfile}
             allFollows={allFollows}
@@ -3940,7 +4003,7 @@ export const App: React.FC = () => {
             onQuote={handleQuotePost}
             onSelectPost={openPostDetail}
             onOpenPostById={(postId) => {
-              const p = posts.find((x) => x.id === postId);
+              const p = postsWithUserBookmarkState.find((x) => x.id === postId);
               if (p) openPostDetail(p);
               else window.dispatchEvent(new CustomEvent('fuhsi_open_post_modal', { detail: { postId } }));
             }}
@@ -3962,7 +4025,7 @@ export const App: React.FC = () => {
         {navIndex === 1 && (
           <SearchScreen
             userProfile={userProfile}
-            posts={posts}
+            posts={postsWithUserBookmarkState}
             marketplaceItems={marketplaceItems}
             allComments={comments}
             currentUserNickname={userProfile?.nickname}
@@ -4005,7 +4068,7 @@ export const App: React.FC = () => {
         {navIndex === 3 && (
           <NotificationScreen
             userProfile={userProfile}
-            allPosts={posts}
+            allPosts={postsWithUserBookmarkState}
             onSelectPost={openPostDetail}
             onOpenTradeChat={(_convId) => {
               if (!isGuestAccount(userProfile)) {
@@ -4204,7 +4267,7 @@ export const App: React.FC = () => {
                 authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (item.post.authorNickname || '').toLowerCase().replace(/^@/, '')))}
                 currentUserNickname={userProfile?.nickname || ''}
                 userProfile={userProfile}
-                allPosts={posts}
+                allPosts={postsWithUserBookmarkState}
                 allComments={comments}
                 allFollows={allFollows}
                 allUsers={allUsers}
@@ -4265,7 +4328,7 @@ export const App: React.FC = () => {
                   <div className="flex-1 overflow-y-auto p-3 sm:p-6">
                     <ProfileScreen
                       userProfile={userProfile}
-                      allPosts={posts}
+                      allPosts={postsWithUserBookmarkState}
                       allComments={comments}
                       allFollows={allFollows}
                       allUsers={allUsers}
@@ -4421,7 +4484,7 @@ export const App: React.FC = () => {
                 <div className="flex-1 overflow-y-auto p-3 sm:p-6">
                   <ProfileScreen
                     userProfile={userProfile}
-                    allPosts={posts}
+                    allPosts={postsWithUserBookmarkState}
                     allComments={comments}
                     allFollows={allFollows}
                     allUsers={allUsers}
@@ -4468,7 +4531,7 @@ export const App: React.FC = () => {
               authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || '').toLowerCase().replace(/^@/, '')))}
               currentUserNickname={userProfile?.nickname || ''}
               userProfile={userProfile}
-              allPosts={posts}
+              allPosts={postsWithUserBookmarkState}
               allComments={comments}
               allFollows={allFollows}
               allUsers={allUsers}
@@ -4529,7 +4592,7 @@ export const App: React.FC = () => {
           {/* Post Details Modal */}
           {selectedPost && (
             <PostDetailModal
-              post={selectedPost}
+              post={activeSelectedPost || selectedPost}
               comments={(comments || []).filter((c) => c && c.postId === selectedPost.id)}
               userProfile={userProfile}
               zIndex={85}

@@ -424,6 +424,9 @@ export function subscribePosts(onUpdate: (posts: Post[]) => void) {
     snapshot.forEach((docSnap) => {
       const p = docSnap.data() as Post;
       if (!isDemoPost(p) && !isPostDeletedLocally(p.id)) {
+        // Strip any legacy global bookmark booleans from previous sessions
+        delete p.isBookmarked;
+        delete p.isBookmarkedByMe;
         list.push(p);
       }
     });
@@ -445,6 +448,8 @@ export async function getPostFromFirestore(postId: string): Promise<Post | null>
     if (snap.exists()) {
       const p = snap.data() as Post;
       if (!isDemoPost(p) && !isPostDeletedLocally(p.id)) {
+        delete p.isBookmarked;
+        delete p.isBookmarkedByMe;
         return p;
       }
     }
@@ -460,7 +465,13 @@ export async function getPostFromFirestore(postId: string): Promise<Post | null>
 export async function savePostToFirestore(post: Post): Promise<void> {
   if (!post || !post.id || isDemoPost(post) || isPostDeletedLocally(post.id)) return;
   try {
-    await setDoc(doc(db, POSTS_COL, post.id), sanitizeForFirestore(post), { merge: true });
+    const cleanPost: any = sanitizeForFirestore(post);
+    // CRITICAL: isBookmarked and isBookmarkedByMe are strictly personal per-user flags.
+    // They must never be persisted to Firestore on the shared Post document, otherwise
+    // one user bookmarking a thread will bookmark it for all users across the platform!
+    delete cleanPost.isBookmarkedByMe;
+    delete cleanPost.isBookmarked;
+    await setDoc(doc(db, POSTS_COL, post.id), cleanPost, { merge: true });
   } catch (err) {
     console.error('Error saving post to Firestore:', err);
   }

@@ -6,7 +6,7 @@ import { formatRelativeTime } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
 import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
-import { isItemLikedByUser, getEffectiveLikesCount } from '../utils/reactionUtils';
+import { isItemLikedByUser, getEffectiveLikesCount, isItemBookmarkedByUser } from '../utils/reactionUtils';
 import { ShareRepostModal, getDedicatedPostUrl } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
 import { LinkifiedText } from './LinkifiedText';
@@ -152,7 +152,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   const isVerifiedUser = authorBadgeInfo.isVerified;
   const likesCount = getEffectiveLikesCount(post);
   const isLiked = isItemLikedByUser(post, userProfile);
-  const isBookmarked = post.isBookmarkedByMe !== undefined ? Boolean(post.isBookmarkedByMe) : Boolean(post.isBookmarked);
+  const isBookmarked = isItemBookmarkedByUser(post, userProfile);
   const commentsCount = useMemo(() => {
     if (Array.isArray(allComments)) {
       return allComments.filter((c) => c && c.postId === post.id && !c.parentId).length;

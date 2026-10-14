@@ -363,7 +363,13 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
             ? primary.repostsCount
             : (secondary.repostsCount ?? primary.shareCount ?? secondary.shareCount ?? 0));
 
-      const bookmarks = Math.max(existing.bookmarks || 0, p.bookmarks || 0);
+      // Handle bookmarkedBy list (per-user bookmark records)
+      let mergedBookmarkedBy: string[] = [];
+      const exBookmarked = Array.isArray(existing.bookmarkedBy) ? existing.bookmarkedBy : [];
+      const pBookmarked = Array.isArray(p.bookmarkedBy) ? p.bookmarkedBy : [];
+      mergedBookmarkedBy = Array.from(new Set([...exBookmarked, ...pBookmarked]));
+
+      const bookmarks = mergedBookmarkedBy.length > 0 ? mergedBookmarkedBy.length : Math.max(existing.bookmarks || 0, p.bookmarks || 0);
       const commentsCount = Math.max(existing.commentsCount || 0, p.commentsCount || 0);
 
       const existingRecords = Array.isArray(existing.repostRecords) ? existing.repostRecords : [];
@@ -387,6 +393,7 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
         repostRecords: mergedRepostRecords,
         repostsCount,
         shareCount: repostsCount,
+        bookmarkedBy: mergedBookmarkedBy,
         bookmarks,
         commentsCount,
       });
