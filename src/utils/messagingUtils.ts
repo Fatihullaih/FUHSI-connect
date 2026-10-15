@@ -958,8 +958,14 @@ export function getUserNotifications(nickname: string): CampusNotification[] {
     if (stored) {
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed)) {
-        // Strictly filter out ordinary chat messages
-        const validNotifs = parsed.filter((n) => !isChatMessageNotification(n));
+        // Strictly filter out ordinary chat messages and deprecated redundant verification removal notices
+        const validNotifs = parsed.filter((n) => {
+          if (isChatMessageNotification(n)) return false;
+          if (n.title === 'Verification Update' && (n.message || '').includes('The verification badge has been removed')) {
+            return false;
+          }
+          return true;
+        });
         // If stale chat notifications were purged, clean up localStorage
         if (validNotifs.length !== parsed.length) {
           try {

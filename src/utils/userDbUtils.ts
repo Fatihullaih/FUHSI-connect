@@ -1562,21 +1562,7 @@ export function updateUserBadgeAndVerification(
   if (isVerified) {
     sendVerificationNotification(cleanTarget, effectiveBadgeType, wasAlreadyVerified);
   } else {
-    try {
-      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-      const badgeNotif = {
-        id: `badge_rev_${Date.now()}`,
-        type: 'VERIFICATION',
-        title: 'Account Verification Revoked',
-        message: 'Your verification badge has been removed.',
-        timestamp: 'Just now',
-        isRead: false,
-      };
-      let existingNotifs: any[] = [];
-      const storedNotifs = localStorage.getItem(notifKey);
-      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-      localStorage.setItem(notifKey, JSON.stringify([badgeNotif, ...existingNotifs]));
-    } catch (e) {}
+    sendVerificationRevokedNotification(cleanTarget);
   }
 
   // 7. Dispatch custom event for real-time reactivity across active views
@@ -1644,7 +1630,9 @@ export function sendVerificationNotification(
       _actionTimestamp: now,
     };
 
-    localStorage.setItem(notifKey, JSON.stringify([verifNotif, ...existingNotifs]));
+    const updatedNotifs = [verifNotif, ...existingNotifs];
+    localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
+    pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
@@ -1655,5 +1643,67 @@ export function sendVerificationNotification(
     }
   } catch (e) {
     console.error('Error sending verification notification:', e);
+  }
+}
+
+/**
+ * Helper to dispatch in-app notification when an admin removes or revokes a user's verification badge.
+ * Delivers exactly one simple notification:
+ * Title: 'Account Verification Revoked'
+ * Message: 'Your verification badge has been removed.'
+ * Deduplicates within 15 seconds to prevent multiple notifications entering at the same time.
+ */
+export function sendVerificationRevokedNotification(targetNickname: string): void {
+  if (!targetNickname) return;
+  const cleanTarget = targetNickname.trim().toLowerCase().replace(/^@/, '');
+  const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+
+  try {
+    const storedNotifs = localStorage.getItem(notifKey);
+    let existingNotifs: any[] = storedNotifs ? JSON.parse(storedNotifs) : [];
+
+    const now = Date.now();
+    // Deduplication check: prevent duplicate revocation notification within 15 seconds
+    const isRecentDuplicate = existingNotifs.some((n: any) =>
+      n.title === 'Account Verification Revoked' &&
+      n._actionTimestamp &&
+      (now - n._actionTimestamp < 15000)
+    );
+    if (isRecentDuplicate) {
+      return;
+    }
+
+    // Filter out any deprecated wordy "Verification Update" notifications
+    existingNotifs = existingNotifs.filter(
+      (n: any) =>
+        !(
+          n.title === 'Verification Update' &&
+          (n.message || '').includes('The verification badge has been removed')
+        )
+    );
+
+    const badgeNotif = {
+      id: `badge_rev_${now}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'VERIFICATION',
+      title: 'Account Verification Revoked',
+      message: 'Your verification badge has been removed.',
+      timestamp: 'Just now',
+      isRead: false,
+      _actionTimestamp: now,
+    };
+
+    const updatedNotifs = [badgeNotif, ...existingNotifs];
+    localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
+    pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('fuhsi_notification_received', {
+          detail: { targetNickname: cleanTarget, notif: badgeNotif },
+        })
+      );
+    }
+  } catch (e) {
+    console.error('Error sending verification revocation notification:', e);
   }
 }

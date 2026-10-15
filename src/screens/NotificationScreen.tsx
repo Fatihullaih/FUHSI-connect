@@ -11,7 +11,8 @@ import {
   UserPlus, 
   X, 
   Clock,
-  Shield
+  Shield,
+  ShieldAlert
 } from 'lucide-react';
 import { 
   normalizeNickname, 
@@ -99,6 +100,7 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     const notifs = getUserNotifications(userProfile.nickname);
     return notifs.filter((n) => {
       if (isChatMessageNotification(n)) return false;
+      if (n.title === 'Verification Update' && (n.message || '').includes('The verification badge has been removed')) return false;
       const str = `${n.type || ''} ${n.actionType || ''} ${n.title || ''} ${n.message || ''}`.toLowerCase();
       if (str.includes('help desk') || str.includes('helpdesk')) return false;
       return true;
@@ -246,6 +248,10 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     if (isFollowerNotification(n)) {
       return <UserPlus size={size} className="text-teal-700" />;
     }
+    const isRevoked = (n.title || '').toLowerCase().includes('revoked');
+    if (isRevoked) {
+      return <ShieldAlert size={size} className="text-amber-700" />;
+    }
     switch (n.type as string) {
       case 'VERIFICATION':
       case 'CONVERSION':
@@ -271,6 +277,10 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
   const renderIconBg = (n: CampusNotification) => {
     if (isFollowerNotification(n)) {
       return 'bg-teal-100 border-teal-200';
+    }
+    const isRevoked = (n.title || '').toLowerCase().includes('revoked');
+    if (isRevoked) {
+      return 'bg-amber-100 border-amber-200';
     }
     switch (n.type as string) {
       case 'VERIFICATION':

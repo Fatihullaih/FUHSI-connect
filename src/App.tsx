@@ -12,7 +12,7 @@ import {
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
 import { useAdminPendingCounts } from './utils/adminAlertUtils';
-import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate, sendVerificationNotification } from './utils/userDbUtils';
+import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate, sendVerificationNotification, sendVerificationRevokedNotification } from './utils/userDbUtils';
 import {
   fetchServerDb,
   pushServerDbSync,
@@ -56,7 +56,7 @@ import {
 } from './lib/firestoreSync';
 import { initTheme, getStoredTheme, setStoredTheme, ThemeMode } from './utils/themeUtils';
 import { getUserBadgeInfo, normalizeBadgeColor } from './utils/verificationUtils';
-import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, BadgeType, PollOption, DirectMessage, FollowRecord } from './types';
+import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, BadgeType, PollOption, DirectMessage, FollowRecord, CampusNotification } from './types';
 import { getStoredFollows, saveStoredFollows, toggleFollowState, recordFollowNotification } from './utils/followUtils';
 import { toggleUserLike, isItemLikedByUser, getEffectiveLikesCount, isItemBookmarkedByUser, toggleUserBookmark, normalizeUserKey } from './utils/reactionUtils';
 import {
@@ -86,7 +86,7 @@ import { VerificationBadge } from './components/VerificationBadge';
 import { AvatarIcon } from './components/AvatarIcon';
 import { DynamicFeedIcon, LeaderboardIcon, StorefrontIcon } from './components/NavIcons';
 import { Smartphone, Search, Bell, Trophy, LogIn, LogOut, User, Shield, X, ArrowLeft, Sparkles, CheckCircle2, Users, Sun, Moon, MessageCircle } from 'lucide-react';
-import { getUserNotifications, getReadNotificationIds, getUserConversations, getDistinctUnreadSendersCount } from './utils/messagingUtils';
+import { getUserNotifications, getReadNotificationIds, getUserConversations, getDistinctUnreadSendersCount, sendUserNotification } from './utils/messagingUtils';
 import { updateActiveUserPresence } from './utils/presenceUtils';
 import { isUserMatchingAudience } from './utils/audienceUtils';
 
@@ -2870,6 +2870,134 @@ export const App: React.FC = () => {
     );
   };
 
+  const handleUpdateMarketplaceItem = async (updatedItem: MarketplaceItem) => {
+    if (!updatedItem || !updatedItem.id) return;
+    const nowIso = new Date().toISOString();
+    const itemToSave: MarketplaceItem = {
+      ...updatedItem,
+      updatedAt: nowIso,
+      isEdited: true,
+      // If user adjusted the item, resolve any prior admin query
+      isQueried: false,
+    };
+
+    setMarketplaceItems((prev) => {
+      const next = prev.map((item) => (item.id === itemToSave.id ? itemToSave : item));
+      try {
+        localStorage.setItem('fuhsi_marketplace_approved_db', JSON.stringify(next));
+        localStorage.setItem('fuhsi_marketplace_db', JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+
+    saveMarketplaceApprovedToFirestore(itemToSave).catch((err) =>
+      console.error('Error saving updated marketplace item to Firestore:', err)
+    );
+
+    try {
+      pushServerDbSync({ marketplaceItems: [itemToSave] } as any);
+    } catch (e) {
+      console.error('Error syncing updated marketplace item to server:', e);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fuhsi_marketplace_updated'));
+    }
+  };
+
+  const handleIncrementItemView = (itemId: string) => {
+    if (!itemId) return;
+
+    // Session debounce so rapid repeated clicks in short succession don't spam,
+    // while ensuring genuine views consistently register and increment
+    try {
+      const sessionKey = `fuhsi_viewed_mkt_${itemId}`;
+      const lastView = sessionStorage.getItem(sessionKey);
+      const now = Date.now();
+      if (lastView && now - Number(lastView) < 45000) {
+        return;
+      }
+      sessionStorage.setItem(sessionKey, String(now));
+    } catch (e) {}
+
+    setMarketplaceItems((prev) => {
+      let targetItem: MarketplaceItem | null = null;
+      const next = prev.map((item) => {
+        if (item.id === itemId) {
+          const currentCount = typeof item.viewCount === 'number' && !isNaN(item.viewCount) ? item.viewCount : 0;
+          targetItem = {
+            ...item,
+            viewCount: currentCount + 1,
+            updatedAt: new Date().toISOString(),
+          };
+          return targetItem;
+        }
+        return item;
+      });
+
+      if (targetItem) {
+        try {
+          localStorage.setItem('fuhsi_marketplace_approved_db', JSON.stringify(next));
+          localStorage.setItem('fuhsi_marketplace_db', JSON.stringify(next));
+        } catch (e) {}
+        saveMarketplaceApprovedToFirestore(targetItem).catch(console.error);
+        try {
+          pushServerDbSync({ marketplaceItems: [targetItem] } as any);
+        } catch (e) {}
+      }
+      return next;
+    });
+  };
+
+  const handleAdminQueryMarketplaceItem = async (itemId: string, queryMessage: string) => {
+    if (!itemId) return;
+    const item = marketplaceItems.find((i) => i.id === itemId) || pendingMarketplaceItems.find((i) => i.id === itemId);
+    if (!item) return;
+
+    const updatedItem: MarketplaceItem = {
+      ...item,
+      isQueried: true,
+      adminQueryMessage: queryMessage.trim(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setMarketplaceItems((prev) => {
+      const next = prev.map((i) => (i.id === itemId ? updatedItem : i));
+      try {
+        localStorage.setItem('fuhsi_marketplace_approved_db', JSON.stringify(next));
+        localStorage.setItem('fuhsi_marketplace_db', JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+
+    saveMarketplaceApprovedToFirestore(updatedItem).catch(console.error);
+    try {
+      pushServerDbSync({ marketplaceItems: [updatedItem] } as any);
+    } catch (e) {}
+
+    // Deliver official notification to seller
+    try {
+      const targetNick = (item.sellerNickname || '').trim().toLowerCase().replace(/^@/, '');
+      if (targetNick) {
+        const notif: CampusNotification = {
+          id: `mkt_query_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          type: 'OFFICIAL',
+          title: `📢 Marketplace Listing Query: ${item.title}`,
+          message: `Campus Administration reviewed your listed item "${item.title}". Query note: "${queryMessage.trim()}". Please open Hub & Fund > My Listings to adjust your listing details (price, location, or description).`,
+          timestamp: new Date().toISOString(),
+          isRead: false,
+        };
+        sendUserNotification(targetNick, notif);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fuhsi_marketplace_updated'));
+    }
+  };
+
   // Dedicated Centralized Verification Application Handler with Real-time Firestore & Central Server Sync
   const handleSubmitVerification = async (data?: {
     accountType?: 'Student' | 'Executive' | 'Organization' | 'Guest' | string;
@@ -3342,26 +3470,8 @@ export const App: React.FC = () => {
       );
     }
 
-    // 7. Send official platform update notification
-    try {
-      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-      const revNotif = {
-        id: `official_update_rev_${Date.now()}`,
-        type: 'ADMIN',
-        title: 'Verification Update',
-        message: 'Your verification status has been reviewed and updated by Campus Administration. The verification badge has been removed from your account.',
-        timestamp: new Date().toISOString(),
-        isRead: false,
-      };
-      let existingNotifs = [];
-      const storedNotifs = localStorage.getItem(notifKey);
-      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-      const updatedNotifs = [revNotif, ...existingNotifs];
-      localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
-      pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
-    } catch (e) {
-      console.error(e);
-    }
+    // 7. Deliver single, simple verification revocation notification to user
+    sendVerificationRevokedNotification(cleanTarget);
 
     // 7. Dispatch events across window for immediate real-time update
     if (typeof window !== 'undefined') {
@@ -4051,6 +4161,8 @@ export const App: React.FC = () => {
             approvedMarketplaceItems={marketplaceItems}
             pendingMarketplaceItems={pendingMarketplaceItems}
             onSubmitMarketplaceItem={handleSubmitMarketplaceItem}
+            onUpdateMarketplaceItem={handleUpdateMarketplaceItem}
+            onIncrementItemView={handleIncrementItemView}
             onRecordDmBuyIntent={handleRecordDmBuyIntent}
             onMarkAsSold={handleMarkAsSold}
             onDeleteMarketplaceItem={handleDeleteMarketplaceItem}
@@ -4146,6 +4258,7 @@ export const App: React.FC = () => {
               onAdminApproveMarketplaceItem={handleAdminApproveMarketplaceItem}
               onAdminRejectMarketplaceItem={handleAdminRejectMarketplaceItem}
               onDeleteMarketplaceItem={handleDeleteMarketplaceItem}
+              onQueryMarketplaceItem={handleAdminQueryMarketplaceItem}
               onResolveReport={(repId: string) => setReports((prev) => prev.filter((r) => r.id !== repId))}
               onApproveVerification={handleApproveVerification}
               onRejectVerification={handleDeclineVerification}

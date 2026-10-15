@@ -37,6 +37,7 @@ interface ModerationScreenProps {
   onAdminRejectMarketplaceItem?: (id: string, note: string) => void;
   onDeleteMarketplaceItem?: (id: string) => void;
   onSendPriceAdvisory?: (id: string, suggestedPrice: number, message: string) => void;
+  onQueryMarketplaceItem?: (id: string, queryMessage: string) => void;
 }
 
 export const ModerationScreen: React.FC<ModerationScreenProps> = ({
@@ -63,6 +64,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   onAdminRejectMarketplaceItem = () => {},
   onDeleteMarketplaceItem,
   onSendPriceAdvisory = () => {},
+  onQueryMarketplaceItem,
 }) => {
   // Authorization Security Guard
   if (!userProfile?.isAdmin) {
@@ -1229,6 +1231,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
         onAdminApproveMarketplaceItem={onAdminApproveMarketplaceItem}
         onAdminRejectMarketplaceItem={onAdminRejectMarketplaceItem}
         onDeleteMarketplaceItem={onDeleteMarketplaceItem}
+        onQueryMarketplaceItem={onQueryMarketplaceItem}
       />
 
       {/* CHAT MODERATION CASES & REPORTED CONVERSATIONS DESK */}

@@ -186,6 +186,9 @@ export interface MarketplaceItem {
   propertyLocation?: string;
   rentDuration?: string;
   roomType?: string;
+  isQueried?: boolean;
+  adminQueryMessage?: string;
+  isEdited?: boolean;
 }
 
 export interface MarketplaceReport {

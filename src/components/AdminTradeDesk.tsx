@@ -22,7 +22,9 @@ import {
   Home, 
   Check, 
   MessageSquare,
-  Sparkles
+  Sparkles,
+  HelpCircle,
+  Edit3
 } from 'lucide-react';
 
 interface AdminTradeDeskProps {
@@ -32,6 +34,7 @@ interface AdminTradeDeskProps {
   onAdminApproveMarketplaceItem?: (id: string, approvedPrice: number, note: string) => void;
   onAdminRejectMarketplaceItem?: (id: string, note: string) => void;
   onDeleteMarketplaceItem?: (id: string) => void;
+  onQueryMarketplaceItem?: (id: string, queryMessage: string) => void;
 }
 
 export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
@@ -41,6 +44,7 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
   onAdminApproveMarketplaceItem,
   onAdminRejectMarketplaceItem,
   onDeleteMarketplaceItem,
+  onQueryMarketplaceItem,
 }) => {
   // Guard Check
   if (!userProfile?.isAdmin) {
@@ -79,6 +83,11 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
     category?: string;
     reportId?: string;
   } | null>(null);
+
+  // Query Listing Modal State
+  const [queryingItem, setQueryingItem] = useState<MarketplaceItem | null>(null);
+  const [queryInput, setQueryInput] = useState('');
+  const [queryPreset, setQueryPreset] = useState<string>('');
 
   // Sync reports
   useEffect(() => {
@@ -189,6 +198,37 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
     setMsgSubject('');
     setMsgContent('');
     setTimeout(() => setMsgToast(null), 4000);
+  };
+
+  const handleOpenQueryModal = (item: MarketplaceItem) => {
+    setQueryingItem(item);
+    setQueryPreset('');
+    setQueryInput(`Please review and adjust your listed item "${item.title}". You can adjust the price, location, or description in Hub & Fund > My Listings.`);
+  };
+
+  const handleConfirmSendQuery = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!queryingItem || !queryInput.trim()) return;
+
+    if (onQueryMarketplaceItem) {
+      onQueryMarketplaceItem(queryingItem.id, queryInput.trim());
+    } else {
+      const cleanNick = (queryingItem.sellerNickname || '').trim().toLowerCase().replace(/^@/, '');
+      const notif: CampusNotification = {
+        id: `mkt_query_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'OFFICIAL',
+        title: `📢 Marketplace Listing Query: ${queryingItem.title}`,
+        message: `Campus Administration reviewed your item "${queryingItem.title}". Query: "${queryInput.trim()}". Please open Hub & Fund > My Listings to adjust your listing details (price, location, or description).`,
+        timestamp: new Date().toISOString(),
+        isRead: false,
+      };
+      sendUserNotification(cleanNick, notif);
+    }
+
+    setMsgToast(`✓ Official query dispatched to @${queryingItem.sellerNickname} regarding "${queryingItem.title}"`);
+    setTimeout(() => setMsgToast(null), 4000);
+    setQueryingItem(null);
+    setQueryInput('');
   };
 
   return (
@@ -453,8 +493,13 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
                     <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm line-clamp-1">
                       {item.title}
                     </h4>
-                    <p className="text-[11px] text-slate-600 font-medium">
-                      ₦{item.askingPrice.toLocaleString()} • {item.category} • Seller: <strong>@{item.sellerNickname}</strong>
+                    <p className="text-[11px] text-slate-600 font-medium flex items-center gap-1 flex-wrap">
+                      <span>₦{item.askingPrice.toLocaleString()} • {item.category} • Seller: <strong>@{item.sellerNickname}</strong></span>
+                      {item.isQueried && (
+                        <span className="text-[10px] bg-amber-100 text-amber-900 border border-amber-300 font-extrabold px-1.5 py-0.5 rounded-md">
+                          ⚠️ Under Query
+                        </span>
+                      )}
                     </p>
                     <p className="text-[10px] text-slate-400">
                       WhatsApp: {item.sellerPhone || 'Not set'} • Location: {item.meetupPoint || item.propertyLocation || 'Campus'}
@@ -463,6 +508,15 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleOpenQueryModal(item)}
+                    className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-xl font-bold text-xs transition-colors cursor-pointer flex items-center gap-1 border border-amber-200"
+                    title="Send official query / request seller to adjust listing"
+                  >
+                    <HelpCircle size={13} className="text-amber-600" />
+                    <span>Query</span>
+                  </button>
+
                   <button
                     onClick={() => {
                       setMsgRecipient(item.sellerNickname);
@@ -665,6 +719,102 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
                 <span>Confirm Deletion</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADMIN QUERY MARKETPLACE LISTING */}
+      {queryingItem && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl border border-amber-100 space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3 text-amber-700">
+              <div className="w-10 h-10 rounded-2xl bg-amber-100 flex items-center justify-center shrink-0">
+                <HelpCircle className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-base">Query Item & Request Adjustment</h3>
+                <p className="text-xs text-amber-700 font-bold">Admin notice to seller to adjust listing</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+              <div className="text-xs text-slate-500 font-medium">Target Listing:</div>
+              <div className="font-extrabold text-slate-900 text-sm">{queryingItem.title}</div>
+              <div className="flex items-center gap-3 text-xs text-slate-600 flex-wrap">
+                <span className="font-bold text-emerald-700">₦{queryingItem.askingPrice.toLocaleString()}</span>
+                <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold">
+                  {queryingItem.category}
+                </span>
+                <span className="text-slate-500">
+                  Seller: <strong className="text-slate-800">@{queryingItem.sellerNickname?.replace(/^@/, '')}</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                Quick Query Presets
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: 'Adjust Price', text: `Please review and adjust your asking price for "${queryingItem.title}". The current price exceeds campus trade benchmark.` },
+                  { label: 'Clarify Location', text: `Please adjust your meetup location for "${queryingItem.title}" to a recognized on-campus spot (e.g. Main Gate, Market, Sambag).` },
+                  { label: 'Improve Description', text: `Please expand your description for "${queryingItem.title}" to specify exact item condition, specifications, and accessories included.` },
+                  { label: 'Clearer Photos', text: `Please adjust your listing for "${queryingItem.title}" by replacing photos with clear, authentic pictures of the actual item.` },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setQueryPreset(preset.label);
+                      setQueryInput(preset.text);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer border ${
+                      queryPreset === preset.label
+                        ? 'bg-amber-100 text-amber-900 border-amber-300'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmSendQuery} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Query Message / Adjustment Instructions:
+                </label>
+                <textarea
+                  value={queryInput}
+                  onChange={(e) => setQueryInput(e.target.value)}
+                  rows={3}
+                  className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 font-medium"
+                  placeholder="Explain what the seller should adjust..."
+                  required
+                />
+              </div>
+
+              <div className="flex items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setQueryingItem(null)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!queryInput.trim()}
+                  className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-extrabold text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Send size={14} />
+                  <span>Send Query to Seller</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -30,7 +30,8 @@ import {
   Sparkles,
   ChevronLeft,
   ChevronRight,
-  Maximize2
+  Maximize2,
+  Edit3
 } from 'lucide-react';
 import { checkIsUserVerified } from '../utils/verificationUtils';
 import { compressImageFile } from '../utils/imageUtils';
@@ -60,6 +61,8 @@ interface CampusHubScreenProps {
     rentDuration?: string;
     roomType?: string;
   }) => void;
+  onUpdateMarketplaceItem?: (item: MarketplaceItem) => void;
+  onIncrementItemView?: (itemId: string) => void;
   onRecordDmBuyIntent?: (itemId: string) => void;
   onMarkAsSold: (itemId: string, ratingStars: number, ratingTag: string) => void;
   onDeleteMarketplaceItem?: (itemId: string) => void;
@@ -190,6 +193,8 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
   approvedMarketplaceItems = [],
   pendingMarketplaceItems = [],
   onSubmitMarketplaceItem,
+  onUpdateMarketplaceItem,
+  onIncrementItemView,
   onRecordDmBuyIntent,
   onMarkAsSold,
   onDeleteMarketplaceItem,
@@ -324,6 +329,24 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
   const [soldSuccessNotify, setSoldSuccessNotify] = useState(false);
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<MarketplaceItem | null>(null);
 
+  // Adjust / Edit Listing Modal State
+  const [editingItem, setEditingItem] = useState<MarketplaceItem | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editCategory, setEditCategory] = useState('Textbooks');
+  const [editPrice, setEditPrice] = useState<number | ''>('');
+  const [editCondition, setEditCondition] = useState('Fairly Used');
+  const [editMeetup, setEditMeetup] = useState('FUHSI School Main Gate');
+  const [editPhone, setEditPhone] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editPhotos, setEditPhotos] = useState<string[]>([]);
+  const [editIsHousing, setEditIsHousing] = useState(false);
+  const [editPropertyLocation, setEditPropertyLocation] = useState('');
+  const [editRentDuration, setEditRentDuration] = useState('Per Annual');
+  const [editRoomType, setEditRoomType] = useState('Single Room');
+  const [editRoommateRoomType, setEditRoommateRoomType] = useState('Single Room');
+  const [editError, setEditError] = useState('');
+  const [editSuccessToast, setEditSuccessToast] = useState(false);
+
   const isVerifiedUser = checkIsUserVerified(userProfile?.nickname, userProfile);
 
   // Listen for block updates
@@ -350,6 +373,10 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
         setShowSellModal(false);
         return;
       }
+      if (editingItem) {
+        setEditingItem(null);
+        return;
+      }
       if (soldModalItem) {
         setSoldModalItem(null);
         return;
@@ -358,7 +385,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [detailsModalItem, reportingItem, showSellModal, soldModalItem]);
+  }, [detailsModalItem, reportingItem, showSellModal, soldModalItem, editingItem]);
 
   // Is category housing?
   const isHousingCategory = 
@@ -534,6 +561,163 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
       setDescription('');
       setUploadedPhotos([]);
       setFormError('');
+    }, 1200);
+  };
+
+  /**
+   * Active View Counter & Preview Opener
+   * Increments real view count and opens details modal
+   */
+  const handleOpenItemDetails = (item: MarketplaceItem) => {
+    // 1. Notify parent / database to increment persistent view count
+    if (onIncrementItemView) {
+      onIncrementItemView(item.id);
+    }
+
+    // 2. Track in session storage to dynamically reflect live increment without spam
+    let nextCount = typeof item.viewCount === 'number' && !isNaN(item.viewCount) ? item.viewCount : 0;
+    try {
+      const sessionKey = `fuhsi_viewed_mkt_${item.id}`;
+      const last = sessionStorage.getItem(sessionKey);
+      const now = Date.now();
+      if (!last || now - Number(last) >= 45000) {
+        nextCount += 1;
+      }
+    } catch (e) {
+      nextCount += 1;
+    }
+
+    setDetailsModalItem({ ...item, viewCount: nextCount });
+    setActivePhotoIdx(0);
+  };
+
+  /**
+   * Open Edit / Adjust Listing Modal
+   * Pre-populates all existing item attributes for easy adjustment
+   */
+  const handleOpenEditModal = (item: MarketplaceItem) => {
+    setEditingItem(item);
+    setEditTitle(item.title || '');
+    setEditCategory(item.category || 'Other');
+    setEditPrice(item.askingPrice ?? '');
+    setEditCondition(item.conditionTag || 'Fairly Used');
+    setEditMeetup(item.meetupPoint || 'FUHSI School Main Gate');
+    setEditPhone(item.sellerPhone || userProfile?.emergencyHomePhone || (userProfile as any)?.phone || '');
+    setEditDescription(item.description || '');
+    setEditPhotos(Array.isArray(item.imageUrls) ? [...item.imageUrls] : []);
+    
+    const isHouse = Boolean(item.isHousing) || item.category === 'Rooms & Housing' || item.category?.toLowerCase().includes('housing');
+    setEditIsHousing(isHouse);
+    setEditPropertyLocation(item.propertyLocation || item.meetupPoint || '');
+    setEditRentDuration(item.rentDuration || 'Per Annual');
+    setEditRoomType(item.roomType || 'Single Room');
+    setEditRoommateRoomType('Single Room');
+    setEditError('');
+  };
+
+  const handleEditPhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    const imageFiles = files.filter(f => f.type.startsWith('image/'));
+    if (imageFiles.length < files.length) {
+      setEditError('Please select valid picture formats (JPG, PNG, WEBP).');
+    }
+    const remainingSlots = 6 - editPhotos.length;
+    if (remainingSlots <= 0) return;
+
+    const filesToProcess = imageFiles.slice(0, remainingSlots);
+    for (const file of filesToProcess) {
+      try {
+        const compressed = await compressImageFile(file, 900, 900, 0.78);
+        setEditPhotos((prev) => [...prev, compressed]);
+      } catch (err) {
+        console.error('Photo compression error:', err);
+      }
+    }
+    e.target.value = '';
+  };
+
+  const handleRemoveEditPhoto = (index: number) => {
+    setEditPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingItem) return;
+    setEditError('');
+
+    if (!editTitle.trim()) {
+      setEditError('Please enter a descriptive title.');
+      return;
+    }
+    const priceVal = typeof editPrice === 'number' ? editPrice : Number(editPrice);
+    if (!editPrice || isNaN(priceVal) || priceVal <= 0) {
+      setEditError('Please enter a valid price (in ₦).');
+      return;
+    }
+    const phoneCheck = validateNigerianWhatsApp(editPhone);
+    if (!phoneCheck.isValid) {
+      setEditError(phoneCheck.error || 'Please enter a valid 11-digit WhatsApp number.');
+      return;
+    }
+    if (editIsHousing) {
+      if (!editPropertyLocation.trim()) {
+        setEditError('Property location is required.');
+        return;
+      }
+      if (!editDescription.trim()) {
+        setEditError('Property description & amenities are required.');
+        return;
+      }
+    } else {
+      if (!editDescription.trim()) {
+        setEditError('Item description is required.');
+        return;
+      }
+    }
+    if (editPhotos.length < 1) {
+      setEditError('Please retain or upload at least 1 clear photo.');
+      return;
+    }
+
+    const resolvedRoomType = editIsHousing
+      ? (editRoomType === 'Roommate (Needed)' ? `Roommate Needed (${editRoommateRoomType})` : editRoomType)
+      : undefined;
+
+    const updated: MarketplaceItem = {
+      ...editingItem,
+      title: editTitle.trim(),
+      category: editCategory,
+      askingPrice: priceVal,
+      adminApprovedPrice: priceVal,
+      conditionTag: editIsHousing ? (resolvedRoomType || 'Accommodation') : editCondition,
+      description: editDescription.trim(),
+      sellerPhone: phoneCheck.cleanPhone || editPhone.trim(),
+      meetupPoint: editIsHousing ? editPropertyLocation.trim() : editMeetup,
+      imageUrls: editPhotos,
+      isHousing: editIsHousing,
+      propertyLocation: editIsHousing ? editPropertyLocation.trim() : undefined,
+      rentDuration: editIsHousing ? editRentDuration : undefined,
+      roomType: resolvedRoomType,
+      isQueried: false,
+      adminQueryMessage: undefined,
+      isEdited: true,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (onUpdateMarketplaceItem) {
+      onUpdateMarketplaceItem(updated);
+    }
+
+    // Update details modal if currently viewing this item
+    if (detailsModalItem && detailsModalItem.id === updated.id) {
+      setDetailsModalItem(updated);
+    }
+
+    setEditSuccessToast(true);
+    setTimeout(() => {
+      setEditSuccessToast(false);
+      setEditingItem(null);
     }, 1200);
   };
 
@@ -768,8 +952,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                   <div
                     key={item.id}
                     onClick={() => {
-                      setDetailsModalItem(item);
-                      setActivePhotoIdx(0);
+                      handleOpenItemDetails(item);
                     }}
                     className={`bg-white rounded-2xl border p-3 sm:p-4 shadow-xs hover:shadow-md transition-all flex items-start gap-3 sm:gap-4 cursor-pointer group relative ${
                       isSold 
@@ -830,6 +1013,11 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                                   <span>{soldInfo.soldBadgeText}</span>
                                 </span>
                               )}
+                              {item.isEdited && (
+                                <span className="inline-block text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                  Adjusted
+                                </span>
+                              )}
                             </div>
                           </div>
 
@@ -847,7 +1035,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                           </div>
                         </div>
 
-                        {/* Author Nickname & Location */}
+                        {/* Author Nickname & Location & Views Count */}
                         <div className="flex items-center gap-2 text-[11px] text-slate-600 font-medium mt-1.5 flex-wrap">
                           <button
                             type="button"
@@ -873,23 +1061,55 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                             <MapPin className="w-3 h-3 text-rose-500 shrink-0" />
                             <span>{locationText}</span>
                           </span>
+                          <span className="text-slate-300">•</span>
+                          <span className="flex items-center gap-1 text-slate-500 font-semibold" title="Total Views">
+                            <Eye className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span>{item.viewCount || 0}</span>
+                          </span>
                         </div>
 
                         {/* Description snippet */}
                         <p className="text-[11px] sm:text-xs text-slate-600 mt-1 line-clamp-1">
                           {item.description || `${item.conditionTag} • ${item.category}`}
                         </p>
+
+                        {/* Admin Query Alert Banner if item has pending query */}
+                        {item.isQueried && item.adminQueryMessage && (
+                          <div
+                            onClick={(e) => {
+                              if (isOwner) {
+                                e.stopPropagation();
+                                handleOpenEditModal(item);
+                              }
+                            }}
+                            className={`mt-2 p-2.5 rounded-xl border flex items-start gap-2 text-xs transition-colors ${
+                              isOwner
+                                ? 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100 cursor-pointer'
+                                : 'bg-amber-50/70 border-amber-200 text-amber-800'
+                            }`}
+                          >
+                            <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                            <div className="flex-1">
+                              <span className="font-extrabold block text-amber-950">⚠️ Admin Query / Notice:</span>
+                              <p className="text-[11px] leading-snug">{item.adminQueryMessage}</p>
+                              {isOwner && (
+                                <span className="inline-flex items-center gap-1 font-bold text-blue-700 text-[11px] mt-1 underline">
+                                  <Edit3 size={11} /> Tap to adjust price, location, or description →
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Action buttons (View Details & Direct WhatsApp / Mark Sold) */}
+                      {/* Action buttons (View Details & Direct WhatsApp / Mark Sold / Adjust) */}
                       <div
                         className="flex items-center gap-2 mt-2.5 pt-1 flex-wrap"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
                           onClick={() => {
-                            setDetailsModalItem(item);
-                            setActivePhotoIdx(0);
+                            handleOpenItemDetails(item);
                           }}
                           className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition-colors cursor-pointer"
                         >
@@ -909,6 +1129,14 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                               </button>
                             ) : (
                               <div className="flex items-center gap-1.5">
+                                <button
+                                  onClick={() => handleOpenEditModal(item)}
+                                  className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-colors flex items-center gap-1 cursor-pointer"
+                                  title="Adjust price, location, or description"
+                                >
+                                  <Edit3 size={12} />
+                                  <span>Adjust</span>
+                                </button>
                                 <button
                                   onClick={() => setSoldModalItem(item)}
                                   className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl border border-rose-200 transition-colors cursor-pointer"
@@ -932,13 +1160,23 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                               <span>{soldInfo.soldBadgeText}</span>
                             </div>
                             {isOwner && (
-                              <button
-                                onClick={() => setDeleteConfirmItem(item)}
-                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                title="Delete Listing Permanently"
-                              >
-                                <Trash2 size={14} />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleOpenEditModal(item)}
+                                  className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] rounded-lg border border-blue-200 transition-colors flex items-center gap-1 cursor-pointer"
+                                  title="Adjust Listing"
+                                >
+                                  <Edit3 size={11} />
+                                  <span>Adjust</span>
+                                </button>
+                                <button
+                                  onClick={() => setDeleteConfirmItem(item)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Delete Listing Permanently"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
                             )}
                           </div>
                         )}
@@ -1030,41 +1268,91 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                 {myItems.map((item) => {
                   const soldInfo = getSoldStatusInfo(item);
                   return (
-                    <div key={item.id} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 flex-wrap">
-                      <div className="flex items-center gap-3 min-w-0">
-                        {item.imageUrls?.[0] && (
-                          <img src={item.imageUrls[0]} alt={item.title} className="w-14 h-14 rounded-xl object-cover border border-slate-300 shrink-0" />
-                        )}
-                        <div className="min-w-0">
-                          <h4 className="font-extrabold text-slate-900 text-sm line-clamp-1">{item.title}</h4>
-                          <p className="text-xs text-slate-600 font-semibold">
-                            ₦{item.askingPrice.toLocaleString()} • {item.category}
-                          </p>
-                          <span className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-md mt-1 ${
-                            soldInfo.isSold ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-900'
-                          }`}>
-                            {soldInfo.isSold ? `✓ ${soldInfo.soldBadgeText}` : '● LIVE & ACTIVE'}
-                          </span>
+                    <div key={item.id} className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div
+                          onClick={() => handleOpenItemDetails(item)}
+                          className="flex items-center gap-3 min-w-0 cursor-pointer group flex-1"
+                          title="Tap to preview listing"
+                        >
+                          {item.imageUrls?.[0] ? (
+                            <img src={item.imageUrls[0]} alt={item.title} className="w-14 h-14 rounded-xl object-cover border border-slate-300 shrink-0 group-hover:scale-105 transition-transform" />
+                          ) : (
+                            <div className="w-14 h-14 rounded-xl bg-slate-200 flex items-center justify-center text-lg shrink-0">
+                              📦
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <h4 className="font-extrabold text-slate-900 text-sm line-clamp-1 group-hover:text-emerald-700 transition-colors">{item.title}</h4>
+                            <p className="text-xs text-slate-600 font-semibold flex items-center gap-1.5 flex-wrap">
+                              <span>₦{item.askingPrice.toLocaleString()} • {item.category}</span>
+                              <span className="text-slate-300">•</span>
+                              <span className="flex items-center gap-1 text-[11px] text-slate-500 font-semibold" title="Total Views">
+                                <Eye size={12} className="text-slate-400" />
+                                <span>{item.viewCount || 0} views</span>
+                              </span>
+                            </p>
+                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                              <span className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                                soldInfo.isSold ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-900'
+                              }`}>
+                                {soldInfo.isSold ? `✓ ${soldInfo.soldBadgeText}` : '● LIVE & ACTIVE'}
+                              </span>
+                              {item.isEdited && (
+                                <span className="inline-block text-[9px] font-bold text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                                  Adjusted
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => handleOpenEditModal(item)}
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                            title="Adjust price, location, description, or pictures"
+                          >
+                            <Edit3 size={13} />
+                            <span>Adjust</span>
+                          </button>
+
+                          {!soldInfo.isSold && (
+                            <button
+                              onClick={() => setSoldModalItem(item)}
+                              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs shadow-xs cursor-pointer transition-colors"
+                            >
+                              Mark Sold
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => setDeleteConfirmItem(item)}
+                            className="px-2.5 py-1.5 bg-slate-200 hover:bg-rose-100 hover:text-rose-700 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+                            title="Delete Listing"
+                          >
+                            <Trash2 size={13} />
+                          </button>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        {!soldInfo.isSold && (
-                          <button
-                            onClick={() => setSoldModalItem(item)}
-                            className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs shadow-xs cursor-pointer"
-                          >
-                            Mark Sold
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setDeleteConfirmItem(item)}
-                          className="px-2.5 py-1.5 bg-slate-200 hover:bg-rose-100 hover:text-rose-700 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
-                          title="Delete Listing"
+                      {/* Admin Query Notice Banner if queried */}
+                      {item.isQueried && item.adminQueryMessage && (
+                        <div
+                          onClick={() => handleOpenEditModal(item)}
+                          className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2 cursor-pointer hover:bg-amber-100 transition-colors"
+                          title="Tap to adjust listing details now"
                         >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
+                          <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                          <div className="flex-1">
+                            <span className="font-extrabold block text-amber-950">⚠️ Admin Query / Notice Received:</span>
+                            <p className="text-[11px] leading-snug">{item.adminQueryMessage}</p>
+                            <span className="inline-flex items-center gap-1 font-bold text-blue-700 text-[11px] mt-1 underline">
+                              <Edit3 size={11} /> Tap here to adjust price, location, or description →
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1284,11 +1572,22 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                   </span>
                 </span>
 
-                <span className="flex items-center gap-1 text-slate-500 ml-auto">
+                <span className="flex items-center gap-1 text-slate-500 ml-auto font-semibold" title="Total Views">
                   <Eye className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span>{detailsModalItem.viewCount || 28}</span>
+                  <span>{detailsModalItem.viewCount || 0} views</span>
                 </span>
               </div>
+
+              {/* Admin Query Notice if queried */}
+              {detailsModalItem.isQueried && detailsModalItem.adminQueryMessage && (
+                <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl text-amber-900 text-xs space-y-1">
+                  <span className="font-extrabold flex items-center gap-1.5 text-amber-950">
+                    <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+                    <span>Admin Query / Required Adjustment:</span>
+                  </span>
+                  <p className="text-[11px] leading-relaxed">{detailsModalItem.adminQueryMessage}</p>
+                </div>
+              )}
 
               {/* Description Section */}
               <div className="space-y-1 pt-1 text-xs">
@@ -1339,21 +1638,35 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                         </div>
                       </div>
                     ) : (
-                      <div className="flex gap-2">
+                      <div className="space-y-2">
                         <button
-                          onClick={() => setSoldModalItem(detailsModalItem)}
-                          className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs sm:text-sm rounded-xl transition-colors shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+                          onClick={() => {
+                            const target = detailsModalItem;
+                            setDetailsModalItem(null);
+                            handleOpenEditModal(target);
+                          }}
+                          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
                         >
-                          <CheckCircle2 size={16} />
-                          <span>Mark as Sold</span>
+                          <Edit3 size={15} />
+                          <span>Adjust Price, Location, or Description</span>
                         </button>
-                        <button
-                          onClick={() => setDeleteConfirmItem(detailsModalItem)}
-                          className="px-4 py-3 bg-slate-100 hover:bg-rose-100 text-slate-700 hover:text-rose-700 font-bold text-xs rounded-xl transition-colors cursor-pointer"
-                          title="Delete Listing"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setSoldModalItem(detailsModalItem)}
+                            className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <CheckCircle2 size={15} />
+                            <span>Mark as Sold</span>
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirmItem(detailsModalItem)}
+                            className="px-4 py-2.5 bg-slate-100 hover:bg-rose-100 text-slate-700 hover:text-rose-700 font-bold text-xs rounded-xl transition-colors cursor-pointer"
+                            title="Delete Listing"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
                     )}
                   </>
@@ -1366,13 +1679,26 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                       <span>✓ Item Sold ({soldInfo.soldBadgeText})</span>
                     </button>
                     {isOwner && (
-                      <button
-                        onClick={() => setDeleteConfirmItem(detailsModalItem)}
-                        className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 border border-rose-200"
-                      >
-                        <Trash2 size={15} />
-                        <span>Delete Listing Permanently</span>
-                      </button>
+                      <div className="space-y-2">
+                        <button
+                          onClick={() => {
+                            const target = detailsModalItem;
+                            setDetailsModalItem(null);
+                            handleOpenEditModal(target);
+                          }}
+                          className="w-full py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-extrabold text-xs rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <Edit3 size={14} />
+                          <span>Adjust Listing Details</span>
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirmItem(detailsModalItem)}
+                          className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 border border-rose-200"
+                        >
+                          <Trash2 size={15} />
+                          <span>Delete Listing Permanently</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1997,6 +2323,315 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
               >
                 Apply
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 12. MODAL: ADJUST / EDIT LISTING DETAILS */}
+      {editingItem && (
+        <div className="fixed inset-0 z-50 w-full h-full bg-slate-100 flex flex-col overflow-hidden animate-in fade-in duration-150">
+          <div className="w-full h-full max-w-3xl mx-auto bg-white flex flex-col shadow-2xl sm:border-x sm:border-slate-200 overflow-hidden">
+            {/* Header */}
+            <div className="p-4 sm:px-6 border-b border-slate-100 flex justify-between items-center bg-white shrink-0 z-10">
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingItem(null)}
+                  className="p-1.5 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
+                  title="Cancel and close"
+                >
+                  <ArrowLeft size={18} />
+                  <span>Back</span>
+                </button>
+                <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base flex items-center gap-1.5">
+                    <Edit3 size={15} className="text-blue-600" />
+                    <span>Adjust Listing Details</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    Update price, campus location, description, or pictures
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setEditingItem(null)} 
+                className="p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+              {/* If item was queried by admin, show banner informing seller */}
+              {editingItem.isQueried && editingItem.adminQueryMessage && (
+                <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl text-amber-900 text-xs space-y-1 shadow-xs">
+                  <div className="flex items-center gap-2 font-black text-amber-950">
+                    <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+                    <span>Admin Query / Requested Change:</span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-amber-900 font-medium pl-6">
+                    {editingItem.adminQueryMessage}
+                  </p>
+                  <p className="text-[10px] text-amber-700 pl-6 italic">
+                    Saving your adjustments will automatically mark this query as resolved.
+                  </p>
+                </div>
+              )}
+
+              {editSuccessToast ? (
+                <div className="p-8 bg-emerald-50 text-emerald-900 rounded-2xl text-center space-y-2 border border-emerald-200 animate-in zoom-in-95">
+                  <CheckCircle2 size={36} className="text-emerald-600 mx-auto" />
+                  <h4 className="font-extrabold text-base">Listing Adjusted Successfully!</h4>
+                  <p className="text-xs text-emerald-700">
+                    Your updated details, price, and location are now live on the campus marketplace.
+                  </p>
+                </div>
+              ) : (
+                <form onSubmit={handleSaveEditSubmit} className="space-y-4">
+                  {editError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>{editError}</span>
+                    </div>
+                  )}
+
+                  {/* Title */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {editIsHousing ? 'Property / Room Title' : 'Item / Product Title'} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      placeholder="e.g. TECNO Spark 8 (64GB) / Macleod Clinical Examination"
+                      className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                      required
+                    />
+                  </div>
+
+                  {/* Category & Price */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Category</label>
+                      <select
+                        value={editCategory}
+                        onChange={(e) => {
+                          const newCat = e.target.value;
+                          setEditCategory(newCat);
+                          const isHouse = newCat === 'Rooms & Housing' || newCat.toLowerCase().includes('housing') || newCat.toLowerCase().includes('room');
+                          setEditIsHousing(isHouse);
+                        }}
+                        className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        {CATEGORY_OPTIONS.filter((c) => c.id !== 'All').map((c) => (
+                          <option key={c.id} value={c.id}>{c.icon} {c.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        {editIsHousing ? 'Rent Amount (₦)' : 'Adjust Asking Price (₦)'} <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={editPrice}
+                        onChange={(e) => setEditPrice(e.target.value === '' ? '' : Number(e.target.value))}
+                        placeholder="e.g. 15000"
+                        className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {/* Housing Specific Inputs if Housing */}
+                  {editIsHousing ? (
+                    <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-2xl space-y-3">
+                      <p className="text-[11px] font-extrabold text-blue-900 flex items-center gap-1.5">
+                        <Home size={13} className="text-blue-700" />
+                        <span>Accommodation & Room Details</span>
+                      </p>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">Room / Property Type</label>
+                          <select
+                            value={editRoomType}
+                            onChange={(e) => setEditRoomType(e.target.value)}
+                            className="w-full text-xs rounded-xl border border-slate-200 p-2 text-slate-800 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            {HOUSING_ROOM_TYPES.map((t) => (
+                              <option key={t} value={t}>{t}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">Rent Duration</label>
+                          <select
+                            value={editRentDuration}
+                            onChange={(e) => setEditRentDuration(e.target.value)}
+                            className="w-full text-xs rounded-xl border border-slate-200 p-2 text-slate-800 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            {RENT_DURATIONS.map((d) => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Property Location <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={editPropertyLocation}
+                          onChange={(e) => setEditPropertyLocation(e.target.value)}
+                          placeholder="e.g. Owuoluwa Junction, Ayeka"
+                          className="w-full text-xs rounded-xl border border-slate-200 p-2 text-slate-800 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          required
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Condition Tag</label>
+                        <select
+                          value={editCondition}
+                          onChange={(e) => setEditCondition(e.target.value)}
+                          className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="New">Brand New</option>
+                          <option value="Newly used">Newly Used</option>
+                          <option value="Fairly Used">Fairly Used</option>
+                          <option value="Refurbished / Working">Refurbished / Working</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Campus Meetup Spot</label>
+                        <select
+                          value={editMeetup}
+                          onChange={(e) => setEditMeetup(e.target.value)}
+                          className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          {MEETUP_LOCATIONS.map((loc) => (
+                            <option key={loc} value={loc}>{loc}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* WhatsApp Number */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      WhatsApp Contact Number <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <MessageCircle className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-emerald-600" />
+                      <input
+                        type="tel"
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                        placeholder="08012345678"
+                        maxLength={11}
+                        className="w-full text-xs rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Buyers tap WhatsApp to initiate direct trades with this number.
+                    </p>
+                  </div>
+
+                  {/* Description */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {editIsHousing ? 'Property Features & Description' : 'Item Description & Details'} <span className="text-rose-500">*</span>
+                    </label>
+                    <textarea
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      rows={3}
+                      placeholder={editIsHousing ? "Mention water supply, running light, fence/gate, quiet environment..." : "State item condition, edition, battery health, accessories included..."}
+                      className="w-full text-xs rounded-xl border border-slate-200 p-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                      required
+                    />
+                  </div>
+
+                  {/* Pictures Upload Section */}
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <div className="flex justify-between items-center">
+                      <label className="block text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
+                        <Camera size={15} className="text-blue-600" />
+                        <span>Listing Pictures ({editPhotos.length}/6)</span>
+                      </label>
+                      <span className="text-[10px] font-bold text-slate-400">
+                        Tap photo ✕ to remove or add new
+                      </span>
+                    </div>
+
+                    {editPhotos.length < 6 && (
+                      <label className="flex items-center justify-center gap-2 p-3 bg-blue-50 border-2 border-dashed border-blue-300 rounded-xl cursor-pointer hover:bg-blue-100 transition-colors">
+                        <Upload size={16} className="text-blue-700" />
+                        <span className="text-xs font-bold text-blue-800">
+                          Add Pictures from Device
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={handleEditPhotosUpload}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+
+                    {editPhotos.length > 0 && (
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-1">
+                        {editPhotos.map((photo, idx) => (
+                          <div key={idx} className="relative rounded-xl overflow-hidden border border-slate-200 aspect-square group">
+                            <img src={photo} alt={`Item ${idx + 1}`} className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveEditPhoto(idx)}
+                              className="absolute top-1 right-1 w-5 h-5 bg-rose-600 text-white rounded-full flex items-center justify-center text-xs font-bold hover:bg-rose-700 cursor-pointer shadow-xs"
+                              title="Remove photo"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2.5 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem(null)}
+                      className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs sm:text-sm transition-colors cursor-pointer shadow-md active:scale-95 flex items-center justify-center gap-1.5"
+                    >
+                      <Check size={16} />
+                      <span>Save Adjustments</span>
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           </div>
         </div>
