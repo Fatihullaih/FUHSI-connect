@@ -1677,7 +1677,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                                 if (window.confirm(`Are you sure you want to revoke verification and remove the active badge for ${req.applicantNickname}?`)) {
                                   updateUserBadgeAndVerification(req.applicantNickname, 'NONE', '', false);
                                   onRevokeVerification(req.id);
-                                  onUpdateVerificationRequestStatus(req.id, 'REVOKED');
                                   refreshUsersList();
                                   setApprovalToast(`Verification badge revoked for ${req.applicantNickname}.`);
                                   setTimeout(() => setApprovalToast(null), 4000);
@@ -2587,7 +2586,6 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                             const nick = req.applicantNickname;
                             updateUserBadgeAndVerification(nick, 'NONE', '', false);
                             onRevokeVerification(req.id);
-                            onUpdateVerificationRequestStatus(req.id, 'REVOKED');
                             setSelectedReqForView((prev) => prev ? { ...prev, status: 'REVOKED', assignedBadgeType: 'NONE', assignedBadgeTitle: '' } : null);
                             refreshUsersList();
                             setApprovalToast(`Verification revoked and badge removed for ${nick}.`);

@@ -217,8 +217,8 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
       const notif: CampusNotification = {
         id: `mkt_query_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         type: 'OFFICIAL',
-        title: `📢 Marketplace Listing Query: ${queryingItem.title}`,
-        message: `Campus Administration reviewed your item "${queryingItem.title}". Query: "${queryInput.trim()}". Please open Hub & Fund > My Listings to adjust your listing details (price, location, or description).`,
+        title: 'Listing Notice',
+        message: `Regarding your item "${queryingItem.title}": ${queryInput.trim()}. Please adjust your listing details.`,
         timestamp: new Date().toISOString(),
         isRead: false,
       };
@@ -497,7 +497,12 @@ export const AdminTradeDesk: React.FC<AdminTradeDeskProps> = ({
                       <span>₦{item.askingPrice.toLocaleString()} • {item.category} • Seller: <strong>@{item.sellerNickname}</strong></span>
                       {item.isQueried && (
                         <span className="text-[10px] bg-amber-100 text-amber-900 border border-amber-300 font-extrabold px-1.5 py-0.5 rounded-md">
-                          ⚠️ Under Query
+                          ⚠️ Queried
+                        </span>
+                      )}
+                      {!item.isQueried && item.queryResolved && (
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold px-1.5 py-0.5 rounded-md">
+                          ✓ Resolved
                         </span>
                       )}
                     </p>

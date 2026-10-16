@@ -189,6 +189,7 @@ export interface MarketplaceItem {
   isQueried?: boolean;
   adminQueryMessage?: string;
   isEdited?: boolean;
+  queryResolved?: boolean;
 }
 
 export interface MarketplaceReport {

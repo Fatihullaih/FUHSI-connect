@@ -1646,41 +1646,60 @@ export function sendVerificationNotification(
   }
 }
 
+// In-memory debounce lock to guarantee no double notifications can ever enter simultaneously
+const lastRevokedTimestamps: Record<string, number> = {};
+
 /**
  * Helper to dispatch in-app notification when an admin removes or revokes a user's verification badge.
  * Delivers exactly one simple notification:
  * Title: 'Account Verification Revoked'
  * Message: 'Your verification badge has been removed.'
- * Deduplicates within 15 seconds to prevent multiple notifications entering at the same time.
+ * Deduplicates strictly so 2 notifications never enter at the same time.
  */
 export function sendVerificationRevokedNotification(targetNickname: string): void {
   if (!targetNickname) return;
   const cleanTarget = targetNickname.trim().toLowerCase().replace(/^@/, '');
   const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
+  const now = Date.now();
+
+  // 1. In-memory debounce: if a revocation notification was sent within 30 seconds, block completely
+  if (lastRevokedTimestamps[cleanTarget] && now - lastRevokedTimestamps[cleanTarget] < 30000) {
+    return;
+  }
+  lastRevokedTimestamps[cleanTarget] = now;
 
   try {
     const storedNotifs = localStorage.getItem(notifKey);
     let existingNotifs: any[] = storedNotifs ? JSON.parse(storedNotifs) : [];
 
-    const now = Date.now();
-    // Deduplication check: prevent duplicate revocation notification within 15 seconds
+    // 2. Filter out any unwanted verbose "Verification Update" notifications from history
+    existingNotifs = existingNotifs.filter((n: any) => {
+      if (!n) return false;
+      const title = String(n.title || '').toLowerCase();
+      const msg = String(n.message || '').toLowerCase();
+      if (title === 'verification update' || title.includes('verification update')) {
+        return false;
+      }
+      if (
+        msg.includes('verification status has been reviewed') ||
+        msg.includes('has been reviewed and updated') ||
+        msg.includes('the verification badge has been removed from your account')
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    // 3. Storage deduplication: prevent duplicate revocation notification within 30 seconds
     const isRecentDuplicate = existingNotifs.some((n: any) =>
       n.title === 'Account Verification Revoked' &&
-      n._actionTimestamp &&
-      (now - n._actionTimestamp < 15000)
+      (n._actionTimestamp ? now - n._actionTimestamp < 30000 : n.timestamp === 'Just now')
     );
     if (isRecentDuplicate) {
+      // Save purged list even if we don't append a new one
+      localStorage.setItem(notifKey, JSON.stringify(existingNotifs));
       return;
     }
-
-    // Filter out any deprecated wordy "Verification Update" notifications
-    existingNotifs = existingNotifs.filter(
-      (n: any) =>
-        !(
-          n.title === 'Verification Update' &&
-          (n.message || '').includes('The verification badge has been removed')
-        )
-    );
 
     const badgeNotif = {
       id: `badge_rev_${now}_${Math.random().toString(36).substring(2, 6)}`,
@@ -1707,3 +1726,4 @@ export function sendVerificationRevokedNotification(targetNickname: string): voi
     console.error('Error sending verification revocation notification:', e);
   }
 }
+

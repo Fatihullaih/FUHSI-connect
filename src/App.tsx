@@ -2873,12 +2873,15 @@ export const App: React.FC = () => {
   const handleUpdateMarketplaceItem = async (updatedItem: MarketplaceItem) => {
     if (!updatedItem || !updatedItem.id) return;
     const nowIso = new Date().toISOString();
+    const hadQuery = updatedItem.isQueried || !!updatedItem.adminQueryMessage;
     const itemToSave: MarketplaceItem = {
       ...updatedItem,
       updatedAt: nowIso,
       isEdited: true,
-      // If user adjusted the item, resolve any prior admin query
+      // If user adjusted the item after being queried, resolve query
       isQueried: false,
+      adminQueryMessage: undefined,
+      queryResolved: hadQuery ? true : (updatedItem.queryResolved ?? false),
     };
 
     setMarketplaceItems((prev) => {
@@ -2957,6 +2960,7 @@ export const App: React.FC = () => {
     const updatedItem: MarketplaceItem = {
       ...item,
       isQueried: true,
+      queryResolved: false,
       adminQueryMessage: queryMessage.trim(),
       updatedAt: new Date().toISOString(),
     };
@@ -2975,15 +2979,15 @@ export const App: React.FC = () => {
       pushServerDbSync({ marketplaceItems: [updatedItem] } as any);
     } catch (e) {}
 
-    // Deliver official notification to seller
+    // Deliver simple notification directly to seller (no Chat, no Campus Administration branding)
     try {
       const targetNick = (item.sellerNickname || '').trim().toLowerCase().replace(/^@/, '');
       if (targetNick) {
         const notif: CampusNotification = {
           id: `mkt_query_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           type: 'OFFICIAL',
-          title: `📢 Marketplace Listing Query: ${item.title}`,
-          message: `Campus Administration reviewed your listed item "${item.title}". Query note: "${queryMessage.trim()}". Please open Hub & Fund > My Listings to adjust your listing details (price, location, or description).`,
+          title: 'Listing Notice',
+          message: `Regarding your item "${item.title}": ${queryMessage.trim()}. Please adjust your listing details.`,
           timestamp: new Date().toISOString(),
           isRead: false,
         };

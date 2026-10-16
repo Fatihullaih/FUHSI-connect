@@ -961,7 +961,16 @@ export function getUserNotifications(nickname: string): CampusNotification[] {
         // Strictly filter out ordinary chat messages and deprecated redundant verification removal notices
         const validNotifs = parsed.filter((n) => {
           if (isChatMessageNotification(n)) return false;
-          if (n.title === 'Verification Update' && (n.message || '').includes('The verification badge has been removed')) {
+          const t = String(n?.title || '').toLowerCase();
+          const m = String(n?.message || '').toLowerCase();
+          if (t === 'verification update' || t.includes('verification update')) {
+            return false;
+          }
+          if (
+            m.includes('verification status has been reviewed') ||
+            m.includes('has been reviewed and updated') ||
+            m.includes('the verification badge has been removed from your account')
+          ) {
             return false;
           }
           return true;

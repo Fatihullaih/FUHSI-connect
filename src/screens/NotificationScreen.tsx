@@ -99,17 +99,39 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
     if (!userProfile?.nickname) return [];
     const notifs = getUserNotifications(userProfile.nickname);
     return notifs.filter((n) => {
+      if (!n) return false;
       if (isChatMessageNotification(n)) return false;
-      if (n.title === 'Verification Update' && (n.message || '').includes('The verification badge has been removed')) return false;
+      const t = String(n.title || '').toLowerCase();
+      const m = String(n.message || '').toLowerCase();
+      if (t === 'verification update' || t.includes('verification update')) return false;
+      if (
+        m.includes('verification status has been reviewed') ||
+        m.includes('has been reviewed and updated') ||
+        m.includes('the verification badge has been removed from your account')
+      ) {
+        return false;
+      }
       const str = `${n.type || ''} ${n.actionType || ''} ${n.title || ''} ${n.message || ''}`.toLowerCase();
       if (str.includes('help desk') || str.includes('helpdesk')) return false;
       return true;
     });
   }, [userProfile?.nickname, refreshTrigger]);
 
-  // Combine notifications and annotate with live read/unread status
+  // Combine notifications and annotate with live read/unread status (with deduplication)
   const allNotifications: CampusNotification[] = useMemo(() => {
-    return customUserNotifications.map((n) => {
+    const seen = new Set<string>();
+    const deduplicated: CampusNotification[] = [];
+
+    for (const n of customUserNotifications) {
+      // Deduplicate key by title and message to prevent double notification cards
+      const key = `${String(n.title).trim()}__${String(n.message).trim()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduplicated.push(n);
+      }
+    }
+
+    return deduplicated.map((n) => {
       const isMarkedReadInState = readNotifIds[n.id];
       const effectiveIsRead = isMarkedReadInState !== undefined ? isMarkedReadInState : Boolean(n.isRead);
       return {

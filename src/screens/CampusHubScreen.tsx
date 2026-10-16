@@ -684,6 +684,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
       ? (editRoomType === 'Roommate (Needed)' ? `Roommate Needed (${editRoommateRoomType})` : editRoomType)
       : undefined;
 
+    const hadQuery = editingItem.isQueried || !!editingItem.adminQueryMessage;
     const updated: MarketplaceItem = {
       ...editingItem,
       title: editTitle.trim(),
@@ -702,6 +703,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
       isQueried: false,
       adminQueryMessage: undefined,
       isEdited: true,
+      queryResolved: hadQuery ? true : (editingItem.queryResolved ?? false),
       updatedAt: new Date().toISOString(),
     };
 
@@ -1082,22 +1084,21 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                                 handleOpenEditModal(item);
                               }
                             }}
-                            className={`mt-2 p-2.5 rounded-xl border flex items-start gap-2 text-xs transition-colors ${
+                            className={`mt-1.5 px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-1.5 text-[11px] transition-colors ${
                               isOwner
-                                ? 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100 cursor-pointer'
-                                : 'bg-amber-50/70 border-amber-200 text-amber-800'
+                                ? 'bg-amber-50/90 border-amber-300 text-amber-900 hover:bg-amber-100 cursor-pointer'
+                                : 'bg-amber-50/60 border-amber-200 text-amber-800'
                             }`}
                           >
-                            <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
-                            <div className="flex-1">
-                              <span className="font-extrabold block text-amber-950">⚠️ Admin Query / Notice:</span>
-                              <p className="text-[11px] leading-snug">{item.adminQueryMessage}</p>
-                              {isOwner && (
-                                <span className="inline-flex items-center gap-1 font-bold text-blue-700 text-[11px] mt-1 underline">
-                                  <Edit3 size={11} /> Tap to adjust price, location, or description →
-                                </span>
-                              )}
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <AlertTriangle size={12} className="text-amber-600 shrink-0" />
+                              <span className="truncate font-medium"><strong className="font-bold text-amber-950">Notice:</strong> {item.adminQueryMessage}</span>
                             </div>
+                            {isOwner && (
+                              <span className="shrink-0 font-bold text-blue-700 text-[10px] hover:underline flex items-center gap-0.5">
+                                Adjust
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1289,18 +1290,18 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                               <span className="text-slate-300">•</span>
                               <span className="flex items-center gap-1 text-[11px] text-slate-500 font-semibold" title="Total Views">
                                 <Eye size={12} className="text-slate-400" />
-                                <span>{item.viewCount || 0} views</span>
+                                <span>{item.viewCount || 0}</span>
                               </span>
                             </p>
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                              <span className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
-                                soldInfo.isSold ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-900'
-                              }`}>
-                                {soldInfo.isSold ? `✓ ${soldInfo.soldBadgeText}` : '● LIVE & ACTIVE'}
-                              </span>
+                              {soldInfo.isSold && (
+                                <span className="inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-rose-100 text-rose-800">
+                                  ✓ {soldInfo.soldBadgeText}
+                                </span>
+                              )}
                               {item.isEdited && (
-                                <span className="inline-block text-[9px] font-bold text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                                  Adjusted
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  (edited)
                                 </span>
                               )}
                             </div>
@@ -1340,17 +1341,16 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                       {item.isQueried && item.adminQueryMessage && (
                         <div
                           onClick={() => handleOpenEditModal(item)}
-                          className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2 cursor-pointer hover:bg-amber-100 transition-colors"
-                          title="Tap to adjust listing details now"
+                          className="px-2.5 py-1.5 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 text-[11px] flex items-center justify-between gap-1.5 cursor-pointer hover:bg-amber-100 transition-colors"
+                          title="Tap to adjust listing"
                         >
-                          <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
-                          <div className="flex-1">
-                            <span className="font-extrabold block text-amber-950">⚠️ Admin Query / Notice Received:</span>
-                            <p className="text-[11px] leading-snug">{item.adminQueryMessage}</p>
-                            <span className="inline-flex items-center gap-1 font-bold text-blue-700 text-[11px] mt-1 underline">
-                              <Edit3 size={11} /> Tap here to adjust price, location, or description →
-                            </span>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <AlertTriangle size={12} className="text-amber-600 shrink-0" />
+                            <span className="truncate font-medium"><strong className="font-bold text-amber-950">Notice:</strong> {item.adminQueryMessage}</span>
                           </div>
+                          <span className="shrink-0 font-bold text-blue-700 text-[10px] underline">
+                            Tap to adjust
+                          </span>
                         </div>
                       )}
                     </div>
@@ -1574,18 +1574,33 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
 
                 <span className="flex items-center gap-1 text-slate-500 ml-auto font-semibold" title="Total Views">
                   <Eye className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span>{detailsModalItem.viewCount || 0} views</span>
+                  <span>{detailsModalItem.viewCount || 0}</span>
                 </span>
               </div>
 
               {/* Admin Query Notice if queried */}
               {detailsModalItem.isQueried && detailsModalItem.adminQueryMessage && (
-                <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl text-amber-900 text-xs space-y-1">
-                  <span className="font-extrabold flex items-center gap-1.5 text-amber-950">
-                    <AlertTriangle size={15} className="text-amber-600 shrink-0" />
-                    <span>Admin Query / Required Adjustment:</span>
-                  </span>
-                  <p className="text-[11px] leading-relaxed">{detailsModalItem.adminQueryMessage}</p>
+                <div
+                  onClick={() => {
+                    if (isOwner) {
+                      const target = detailsModalItem;
+                      setDetailsModalItem(null);
+                      handleOpenEditModal(target);
+                    }
+                  }}
+                  className={`px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] flex items-center justify-between gap-2 ${
+                    isOwner ? 'cursor-pointer hover:bg-amber-100 transition-colors' : ''
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <AlertTriangle size={13} className="text-amber-600 shrink-0" />
+                    <span className="font-medium text-amber-950"><strong className="font-bold">Notice:</strong> {detailsModalItem.adminQueryMessage}</span>
+                  </div>
+                  {isOwner && (
+                    <span className="shrink-0 font-bold text-blue-700 text-[10px] underline">
+                      Adjust now
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -2366,19 +2381,11 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-              {/* If item was queried by admin, show banner informing seller */}
+              {/* If item was queried by admin, show compact banner informing seller */}
               {editingItem.isQueried && editingItem.adminQueryMessage && (
-                <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl text-amber-900 text-xs space-y-1 shadow-xs">
-                  <div className="flex items-center gap-2 font-black text-amber-950">
-                    <AlertTriangle size={15} className="text-amber-600 shrink-0" />
-                    <span>Admin Query / Requested Change:</span>
-                  </div>
-                  <p className="text-xs leading-relaxed text-amber-900 font-medium pl-6">
-                    {editingItem.adminQueryMessage}
-                  </p>
-                  <p className="text-[10px] text-amber-700 pl-6 italic">
-                    Saving your adjustments will automatically mark this query as resolved.
-                  </p>
+                <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] flex items-center gap-2">
+                  <AlertTriangle size={13} className="text-amber-600 shrink-0" />
+                  <span className="font-medium text-amber-950"><strong className="font-bold">Notice:</strong> {editingItem.adminQueryMessage}</span>
                 </div>
               )}
 
