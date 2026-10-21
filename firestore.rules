@@ -87,6 +87,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Permanent Deleted Users Tombstones
+    match /deleted_users/{delId} {
+      allow read, write: if true;
+    }
+
     // Global document fallback to prevent unhandled listener exceptions
     match /{document=**} {
       allow read, write: if true;

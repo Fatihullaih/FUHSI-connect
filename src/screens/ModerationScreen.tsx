@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeType, CampusNotification } from '../types';
-import { getStoredUsers, saveStoredUsers, isGuestAccount, isModulaAccount, markUserPermanentlyDeleted, purgeAccountPermanently, updateUserBadgeAndVerification } from '../utils/userDbUtils';
+import { getStoredUsers, saveStoredUsers, isGuestAccount, isModulaAccount, markUserPermanentlyDeleted, purgeAccountPermanently, purgeAccountPermanentlyAsync, updateUserBadgeAndVerification } from '../utils/userDbUtils';
 import { pushServerDbSync, fetchServerDb, mergeUsers } from '../utils/apiSync';
 import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
-import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User } from 'lucide-react';
+import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User, Loader2 } from 'lucide-react';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { FUHSI_DEPARTMENTS } from '../components/AuthModal';
@@ -173,6 +173,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [selectedStudentForView, setSelectedStudentForView] = useState<UserProfile | null>(null);
+  const [deletingUserIdentifier, setDeletingUserIdentifier] = useState<string | null>(null);
 
   // Dedicated Student Badge & Title Reassigner State
   const [studentBadgeColor, setStudentBadgeColor] = useState<BadgeType>('BLUE');
@@ -601,7 +602,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
     setTimeout(() => setApprovalToast(null), 4000);
   };
 
-  const handleDeleteUserAccount = (userId: string, nick: string) => {
+  const handleDeleteUserAccount = async (userId: string, nick: string) => {
     try {
       const storedList = getStoredUsers();
       const userToDelete = storedList.find((u) => (userId && u.id === userId) || (nick && u.nickname?.toLowerCase() === nick.toLowerCase()));
@@ -612,15 +613,17 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       }
 
       const confirmed = window.confirm(
-        `Are you sure you want to permanently delete ${nick || 'this account'}?\n\nThis will completely erase the account and all associated posts, comments, threads, marketplace listings, chat records, and ranking points from the entire platform. The account cannot be recovered.`
+        `Are you sure you want to permanently delete ${nick || 'this account'}?\n\nThis will completely erase the account and all associated posts, comments, threads, marketplace listings, chat records, and ranking points from the entire platform and across all devices. The account cannot be recovered.`
       );
       if (!confirmed) return;
 
+      const targetIdentifier = userId || nick;
+      setDeletingUserIdentifier(targetIdentifier);
       const email = userToDelete?.studentEmail;
       const matric = userToDelete?.matricNumber;
 
-      // Complete cascade permanent account deletion
-      purgeAccountPermanently({
+      // Complete cascade permanent account deletion (awaited across local, Firestore cloud DB, and server)
+      await purgeAccountPermanentlyAsync({
         userId,
         nickname: nick,
         studentEmail: email,
@@ -640,10 +643,13 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
         setSelectedStudentForView(null);
       }
 
-      setApprovalToast(`🗑️ Account for ${nick || userId} and all associated records have been permanently deleted.`);
+      setApprovalToast(`🗑️ Account for ${nick || userId} has been permanently deleted everywhere across all devices.`);
       setTimeout(() => setApprovalToast(null), 4000);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert('Failed to delete account: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setDeletingUserIdentifier(null);
     }
   };
 
@@ -1172,11 +1178,16 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
 
                         <button
                           type="button"
+                          disabled={deletingUserIdentifier === user.id || deletingUserIdentifier === user.nickname}
                           onClick={() => handleDeleteUserAccount(user.id, user.nickname)}
-                          className="p-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors cursor-pointer"
+                          className="p-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50"
                           title="Permanently erase this account"
                         >
-                          <Trash2 size={13} />
+                          {deletingUserIdentifier === user.id || deletingUserIdentifier === user.nickname ? (
+                            <Loader2 size={13} className="animate-spin text-rose-700" />
+                          ) : (
+                            <Trash2 size={13} />
+                          )}
                         </button>
                       </div>
                     </div>
@@ -2321,14 +2332,18 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
 
                   <button
                     type="button"
+                    disabled={deletingUserIdentifier === student.id || deletingUserIdentifier === student.nickname}
                     onClick={() => {
-                      setSelectedStudentForView(null);
                       handleDeleteUserAccount(student.id, student.nickname);
                     }}
-                    className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs cursor-pointer"
+                    className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs cursor-pointer disabled:opacity-50 flex items-center gap-1"
                     title="Permanently erase account"
                   >
-                    <Trash2 size={14} />
+                    {deletingUserIdentifier === student.id || deletingUserIdentifier === student.nickname ? (
+                      <Loader2 size={14} className="animate-spin text-rose-700" />
+                    ) : (
+                      <Trash2 size={14} />
+                    )}
                   </button>
 
                   <button

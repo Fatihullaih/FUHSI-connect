@@ -115,11 +115,18 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
       const deleted: any[] = JSON.parse(raw);
       if (!Array.isArray(deleted) || deleted.length === 0) return false;
       const uId = u.id ? String(u.id).trim() : '';
-      // Primary: Match by permanent internal account ID
-      if (uId && deleted.some((d) => d.id && String(d.id).trim() === uId)) {
-        return true;
-      }
-      return false;
+      const uNick = u.nickname ? String(u.nickname).trim().toLowerCase().replace(/^@/, '') : '';
+      const uEmail = u.studentEmail ? String(u.studentEmail).trim().toLowerCase() : '';
+      if (uId === 'usr_admin_modula' || uNick === 'modula') return false;
+
+      return deleted.some((d) => {
+        if (uId && d.id && String(d.id).trim() === uId) return true;
+        if (uNick && d.nickname && String(d.nickname).trim().toLowerCase().replace(/^@/, '') === uNick) return true;
+        if (uEmail && d.studentEmail && String(d.studentEmail).trim().toLowerCase() === uEmail) return true;
+        const uMatric = u.matricNumber ? String(u.matricNumber).trim().toUpperCase() : '';
+        if (uMatric && d.matricNumber && String(d.matricNumber).trim().toUpperCase() === uMatric) return true;
+        return false;
+      });
     } catch {
       return false;
     }

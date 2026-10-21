@@ -217,6 +217,18 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "name", "createdBy", "adminNicknames", "memberNicknames"]
+    },
+    "deleted_users": {
+      "title": "deleted_users",
+      "description": "Permanent tombstones for deleted user accounts to prevent resurrection across devices",
+      "properties": {
+        "userId": { "type": "string" },
+        "nickname": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "matricNumber": { "type": "string" },
+        "deletedAt": { "type": "string" }
+      },
+      "required": ["deletedAt"]
     }
   }
 }

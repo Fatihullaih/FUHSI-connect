@@ -161,22 +161,55 @@ async function syncFirestoreToActiveDb() {
     if (!fs.existsSync(configPath)) return;
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const { initializeApp, getApps } = await import('firebase/app');
-    const { getFirestore, collection, getDocs } = await import('firebase/firestore');
+    const { getFirestore, collection, getDocs, deleteDoc, doc } = await import('firebase/firestore');
     const app = !getApps().length ? initializeApp(config) : getApps()[0];
     const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
+
+    // 1. Fetch tombstones from deleted_users in Firestore
+    const delSnap = await getDocs(collection(firestoreDb, 'deleted_users')).catch(() => ({ forEach: () => {} }));
+    const fsDeletedIds = new Set<string>((activeDb.deletedUserIds || []).map(String));
+    const fsDeletedNicks = new Set<string>((activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, '')));
+    delSnap.forEach((d: any) => {
+      const data = d.data();
+      if (data) {
+        if (data.userId) fsDeletedIds.add(String(data.userId));
+        if (d.id && d.id.startsWith('usr_')) fsDeletedIds.add(String(d.id));
+        if (data.nickname) fsDeletedNicks.add(String(data.nickname).toLowerCase().replace(/^@/, ''));
+      }
+    });
+
+    activeDb.deletedUserIds = Array.from(fsDeletedIds);
+    activeDb.deletedUserNicknames = Array.from(fsDeletedNicks);
+
+    // 2. Fetch users and filter against tombstones
     const snap = await getDocs(collection(firestoreDb, 'users'));
     const firestoreUsers: any[] = [];
     snap.forEach((d) => {
       const data = d.data();
       if (data && (data.nickname || data.studentEmail)) {
-        firestoreUsers.push({ ...data, id: data.id || d.id });
+        const uId = String(data.id || d.id);
+        const uNick = String(data.nickname || '').toLowerCase().replace(/^@/, '');
+        if (fsDeletedIds.has(uId) || fsDeletedNicks.has(uNick)) {
+          // Stale user in Firestore! Clean it up permanently
+          deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
+        } else {
+          firestoreUsers.push({ ...data, id: uId });
+        }
       }
     });
+
+    // Filter server DB against tombstones as well
+    activeDb.users = (activeDb.users || []).filter((u: any) => {
+      const uId = String(u.id || '');
+      const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
+      return !fsDeletedIds.has(uId) && !fsDeletedNicks.has(uNick);
+    });
+
     if (firestoreUsers.length > 0) {
       activeDb.users = mergeUsers(activeDb.users, firestoreUsers);
-      persistServerDb();
-      console.log(`[Firestore Sync] Synced ${firestoreUsers.length} users into server DB.`);
     }
+    persistServerDb();
+    console.log(`[Firestore Sync] Synced ${activeDb.users.length} active users into server DB (filtered ${fsDeletedIds.size} deleted tombstones).`);
   } catch (err: any) {
     console.warn('[Firestore Sync] Non-critical Firestore sync notice:', err?.message || err);
   }
@@ -569,6 +602,173 @@ app.delete('/api/avatar/:userId', (req, res) => {
     }
 
     return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Dedicated Permanent Account Deletion Endpoint - guarantees cross-device permanent eradication
+app.post('/api/user/delete', async (req, res) => {
+  try {
+    const { userId, nickname, studentEmail, matricNumber } = req.body || {};
+    const rawId = userId ? String(userId).trim() : '';
+    const cleanNick = nickname ? String(nickname).trim().toLowerCase().replace(/^@/, '') : '';
+    const cleanEmail = studentEmail ? String(studentEmail).trim().toLowerCase() : '';
+    const cleanMatric = matricNumber ? String(matricNumber).trim().toUpperCase() : '';
+
+    if (rawId === 'usr_admin_modula' || cleanNick === 'modula') {
+      return res.status(400).json({ success: false, error: 'Platform administrator (@modula) cannot be deleted.' });
+    }
+
+    if (!rawId && !cleanNick && !cleanEmail) {
+      return res.status(400).json({ success: false, error: 'User identifier required for deletion.' });
+    }
+
+    // 1. Add to server-side deleted tombstones
+    const deletedIds = new Set((activeDb.deletedUserIds || []).map(String));
+    const deletedNicks = new Set((activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, '')));
+    if (rawId) deletedIds.add(rawId);
+    if (cleanNick) deletedNicks.add(cleanNick);
+    activeDb.deletedUserIds = Array.from(deletedIds);
+    activeDb.deletedUserNicknames = Array.from(deletedNicks);
+
+    // 2. Cascade delete from activeDb users
+    activeDb.users = (activeDb.users || []).filter((u: any) => {
+      const uId = String(u.id || '');
+      const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
+      const uEmail = String(u.studentEmail || '').toLowerCase();
+      if (rawId && uId === rawId) return false;
+      if (cleanNick && uNick === cleanNick) return false;
+      if (cleanEmail && uEmail === cleanEmail) return false;
+      return true;
+    });
+
+    // Cascade delete posts, comments, marketplace, dms, etc.
+    const deletedPostIdsSet = new Set<string>();
+    activeDb.posts = (activeDb.posts || []).filter((p: any) => {
+      const pNick = String(p.authorNickname || '').toLowerCase().replace(/^@/, '');
+      const pId = String(p.authorId || '');
+      if ((rawId && pId === rawId) || (cleanNick && pNick === cleanNick)) {
+        deletedPostIdsSet.add(String(p.id));
+        return false;
+      }
+      return true;
+    });
+    activeDb.posts = (activeDb.posts || []).filter((p: any) => {
+      if (p.repostedPostId && deletedPostIdsSet.has(String(p.repostedPostId))) return false;
+      return true;
+    });
+    activeDb.comments = (activeDb.comments || []).filter((c: any) => {
+      const cNick = String(c.authorNickname || '').toLowerCase().replace(/^@/, '');
+      const cId = String(c.authorId || '');
+      if ((rawId && cId === rawId) || (cleanNick && cNick === cleanNick) || (c.postId && deletedPostIdsSet.has(String(c.postId)))) {
+        return false;
+      }
+      return true;
+    });
+    activeDb.marketplaceItems = (activeDb.marketplaceItems || []).filter((m: any) => {
+      const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
+      const mId = String(m.sellerId || '');
+      return !((rawId && mId === rawId) || (cleanNick && mNick === cleanNick));
+    });
+    activeDb.pendingMarketplaceItems = (activeDb.pendingMarketplaceItems || []).filter((m: any) => {
+      const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
+      const mId = String(m.sellerId || '');
+      return !((rawId && mId === rawId) || (cleanNick && mNick === cleanNick));
+    });
+    activeDb.directMessages = (activeDb.directMessages || []).filter((d: any) => {
+      const sNick = String(d.senderNickname || '').toLowerCase().replace(/^@/, '');
+      const rNick = String(d.receiverNickname || '').toLowerCase().replace(/^@/, '');
+      return !(cleanNick && (sNick === cleanNick || rNick === cleanNick));
+    });
+    activeDb.chatConversations = (activeDb.chatConversations || []).filter((c: any) => {
+      const oNick = String(c.otherUserNickname || '').toLowerCase().replace(/^@/, '');
+      return !(cleanNick && oNick === cleanNick);
+    });
+    activeDb.verificationRequests = (activeDb.verificationRequests || []).filter((v: any) => {
+      const vNick = String(v.applicantNickname || '').toLowerCase().replace(/^@/, '');
+      return !(cleanNick && vNick === cleanNick);
+    });
+    activeDb.follows = (activeDb.follows || []).filter((f: any) => {
+      const f1 = String(f.followerNickname || '').toLowerCase().replace(/^@/, '');
+      const f2 = String(f.followingNickname || '').toLowerCase().replace(/^@/, '');
+      return !(cleanNick && (f1 === cleanNick || f2 === cleanNick));
+    });
+
+    persistServerDb();
+
+    // 3. Delete from Firestore asynchronously server-side (guaranteed cloud cleanup)
+    try {
+      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const { initializeApp, getApps } = await import('firebase/app');
+        const { getFirestore, collection, getDocs, deleteDoc, doc, setDoc } = await import('firebase/firestore');
+        const app = !getApps().length ? initializeApp(config) : getApps()[0];
+        const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
+
+        const tombstoneData = {
+          userId: rawId || null,
+          nickname: cleanNick || null,
+          studentEmail: cleanEmail || null,
+          matricNumber: cleanMatric || null,
+          deletedAt: new Date().toISOString(),
+        };
+
+        // Write tombstone to Firestore
+        if (rawId) {
+          await setDoc(doc(firestoreDb, 'deleted_users', rawId), tombstoneData).catch(() => {});
+          await deleteDoc(doc(firestoreDb, 'users', rawId)).catch(() => {});
+        }
+        if (cleanNick) {
+          await setDoc(doc(firestoreDb, 'deleted_users', cleanNick), tombstoneData).catch(() => {});
+          const nickDocId = cleanNick.replace(/[^a-z0-9_]/g, '');
+          if (nickDocId) {
+            await deleteDoc(doc(firestoreDb, 'users', nickDocId)).catch(() => {});
+          }
+        }
+
+        // Query Firestore users to remove any remaining document matching this account
+        const userDocsSnap = await getDocs(collection(firestoreDb, 'users')).catch(() => ({ forEach: () => {} }));
+        userDocsSnap.forEach((d: any) => {
+          const u = d.data();
+          const dId = String(u.id || d.id);
+          const dNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
+          const dEmail = String(u.studentEmail || '').toLowerCase();
+          if ((rawId && dId === rawId) || (cleanNick && dNick === cleanNick) || (cleanEmail && dEmail === cleanEmail)) {
+            deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
+          }
+        });
+      }
+    } catch (fsErr) {
+      console.warn('[Server Account Deletion] Non-critical Firestore purge error:', fsErr);
+    }
+
+    return res.json({ success: true, deletedUserId: rawId, deletedNickname: cleanNick });
+  } catch (err: any) {
+    console.error('[Server Account Deletion] Error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/users/:userId', async (req, res) => {
+  req.body = { ...req.body, userId: req.params.userId };
+  const { userId, nickname, studentEmail, matricNumber } = req.body || {};
+  const rawId = userId ? String(userId).trim() : '';
+  const cleanNick = nickname ? String(nickname).trim().toLowerCase().replace(/^@/, '') : '';
+
+  if (rawId === 'usr_admin_modula' || cleanNick === 'modula') {
+    return res.status(400).json({ success: false, error: 'Platform administrator (@modula) cannot be deleted.' });
+  }
+
+  // Delegate to deletion logic
+  try {
+    const deletedIds = new Set((activeDb.deletedUserIds || []).map(String));
+    if (rawId) deletedIds.add(rawId);
+    activeDb.deletedUserIds = Array.from(deletedIds);
+    activeDb.users = (activeDb.users || []).filter((u: any) => String(u.id || '') !== rawId);
+    persistServerDb();
+    return res.json({ success: true, deletedUserId: rawId });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }

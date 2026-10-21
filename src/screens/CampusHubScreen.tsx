@@ -42,6 +42,7 @@ import {
 } from '../utils/marketplaceUtils';
 import { blockUser, getBlockedUsers, isUserBlocked } from '../utils/blockUtils';
 import { isGuestAccount } from '../utils/userDbUtils';
+import { useBackHandler, NAV_PRIORITY, navigateBack, pushNavState } from '../utils/navigationStack';
 
 interface CampusHubScreenProps {
   userProfile: UserProfile | null;
@@ -358,34 +359,51 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
     return () => window.removeEventListener('fuhsi_blocks_updated', handleBlockUpdate);
   }, [userProfile?.nickname]);
 
-  // Popstate listener for back button navigation
-  useEffect(() => {
-    const handlePopState = () => {
-      if (detailsModalItem) {
-        setDetailsModalItem(null);
-        return;
-      }
-      if (reportingItem) {
-        setReportingItem(null);
-        return;
-      }
-      if (showSellModal) {
-        setShowSellModal(false);
-        return;
-      }
-      if (editingItem) {
-        setEditingItem(null);
-        return;
-      }
-      if (soldModalItem) {
-        setSoldModalItem(null);
-        return;
-      }
-    };
+  // Hierarchical back handlers for CampusHubScreen
+  // 1. Image Preview Zoom (Priority 50)
+  useBackHandler('hub_preview_modal', NAV_PRIORITY.SUBMODAL, previewModalOpen, () => {
+    setPreviewModalOpen(false);
+  });
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [detailsModalItem, reportingItem, showSellModal, soldModalItem, editingItem]);
+  // 2. Adjust / Edit Listing Modal (Priority 50)
+  useBackHandler('hub_editing_item', NAV_PRIORITY.SUBMODAL, Boolean(editingItem), () => {
+    setEditingItem(null);
+  });
+
+  // 3. Delete Confirm (Priority 50)
+  useBackHandler('hub_delete_confirm', NAV_PRIORITY.SUBMODAL, Boolean(deleteConfirmItem), () => {
+    setDeleteConfirmItem(null);
+  });
+
+  // 4. Details Modal (Priority 40)
+  useBackHandler('hub_details_modal', NAV_PRIORITY.SUBPAGE, Boolean(detailsModalItem), () => {
+    setDetailsModalItem(null);
+  });
+
+  // 5. Post / Sell Modal (Priority 40)
+  useBackHandler('hub_sell_modal', NAV_PRIORITY.SUBPAGE, showSellModal, () => {
+    setShowSellModal(false);
+  });
+
+  // 6. Report Listing Modal (Priority 40)
+  useBackHandler('hub_reporting_item', NAV_PRIORITY.SUBPAGE, Boolean(reportingItem), () => {
+    setReportingItem(null);
+  });
+
+  // 7. Sold Modal (Priority 40)
+  useBackHandler('hub_sold_modal', NAV_PRIORITY.SUBPAGE, Boolean(soldModalItem), () => {
+    setSoldModalItem(null);
+  });
+
+  // 8. Lock / Verification Modal (Priority 40)
+  useBackHandler('hub_lock_modal', NAV_PRIORITY.SUBPAGE, showMarketplaceLockModal, () => {
+    setShowMarketplaceLockModal(false);
+  });
+
+  // 9. My Listings View (Priority 25) -> Switches back to All Listings
+  useBackHandler('hub_my_listings', NAV_PRIORITY.SECTION_VIEW, activeView === 'my_listings', () => {
+    setActiveView('listings');
+  });
 
   // Is category housing?
   const isHousingCategory = 
@@ -555,7 +573,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
     setSellSuccessMsg(true);
     setTimeout(() => {
       setSellSuccessMsg(false);
-      setShowSellModal(false);
+      navigateBack();
       setTitle('');
       setAskingPrice('');
       setDescription('');
@@ -589,6 +607,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
 
     setDetailsModalItem({ ...item, viewCount: nextCount });
     setActivePhotoIdx(0);
+    pushNavState({ type: 'hub_item_details', itemId: item.id });
   };
 
   /**
@@ -613,6 +632,12 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
     setEditRoomType(item.roomType || 'Single Room');
     setEditRoommateRoomType('Single Room');
     setEditError('');
+    pushNavState({ type: 'hub_edit_modal', itemId: item.id });
+  };
+
+  const handleOpenSellModal = () => {
+    setShowSellModal(true);
+    pushNavState({ type: 'hub_sell_modal' });
   };
 
   const handleEditPhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -719,7 +744,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
     setEditSuccessToast(true);
     setTimeout(() => {
       setEditSuccessToast(false);
-      setEditingItem(null);
+      navigateBack();
     }, 1200);
   };
 
@@ -853,7 +878,14 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
 
           <div className="flex items-center gap-1.5 shrink-0">
             <button
-              onClick={() => setActiveView(activeView === 'listings' ? 'my_listings' : 'listings')}
+              onClick={() => {
+                if (activeView === 'listings') {
+                  setActiveView('my_listings');
+                  pushNavState({ type: 'hub_my_listings' });
+                } else {
+                  setActiveView('listings');
+                }
+              }}
               className={`px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border cursor-pointer ${
                 activeView === 'my_listings'
                   ? 'bg-white text-[#0a6627] border-white shadow-sm'
@@ -1204,7 +1236,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                     <button
                       onClick={() => {
                         if (isVerifiedUser) {
-                          setShowSellModal(true);
+                          handleOpenSellModal();
                         } else {
                           setShowMarketplaceLockModal(true);
                         }
@@ -1253,7 +1285,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                   <button
                     onClick={() => {
                       if (isVerifiedUser) {
-                        setShowSellModal(true);
+                        handleOpenSellModal();
                       } else {
                         setShowMarketplaceLockModal(true);
                       }
@@ -1367,7 +1399,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
         <button
           onClick={() => {
             if (isVerifiedUser) {
-              setShowSellModal(true);
+              handleOpenSellModal();
             } else {
               setShowMarketplaceLockModal(true);
             }
@@ -1397,7 +1429,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
               <div className="p-4 sm:px-6 border-b border-slate-100 flex items-center justify-between bg-white shrink-0 z-10">
                 <div className="flex items-center gap-2.5">
                   <button
-                    onClick={() => setDetailsModalItem(null)}
+                    onClick={navigateBack}
                     className="p-1.5 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                     title="Return to previous page"
                   >
@@ -1423,7 +1455,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                 </div>
 
                 <button
-                  onClick={() => setDetailsModalItem(null)}
+                  onClick={navigateBack}
                   className="p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
                   title="Close"
                 >
@@ -1850,7 +1882,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
             <div className="p-4 sm:px-6 border-b border-slate-100 flex justify-between items-center bg-white shrink-0 z-10">
               <div className="flex items-center gap-2.5">
                 <button
-                  onClick={() => setShowSellModal(false)}
+                  onClick={navigateBack}
                   className="p-1.5 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                   title="Return to previous page"
                 >
@@ -1866,7 +1898,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                 </div>
               </div>
               <button 
-                onClick={() => setShowSellModal(false)} 
+                onClick={navigateBack} 
                 className="p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
                 title="Close"
               >
@@ -2352,7 +2384,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
               <div className="flex items-center gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setEditingItem(null)}
+                  onClick={navigateBack}
                   className="p-1.5 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                   title="Cancel and close"
                 >
@@ -2372,7 +2404,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
               </div>
               <button 
                 type="button"
-                onClick={() => setEditingItem(null)} 
+                onClick={navigateBack} 
                 className="p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
                 title="Close"
               >
@@ -2624,7 +2656,7 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                   <div className="flex items-center gap-2.5 pt-2">
                     <button
                       type="button"
-                      onClick={() => setEditingItem(null)}
+                      onClick={navigateBack}
                       className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
                     >
                       Cancel

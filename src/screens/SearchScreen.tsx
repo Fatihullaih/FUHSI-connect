@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Post, MarketplaceItem, UserProfile, FollowRecord, Comment } from '../types';
 import { PostCard } from '../components/PostCard';
 import { AuthorProfileModal } from '../components/AuthorProfileModal';
+import { useBackHandler, NAV_PRIORITY, pushNavState, navigateBack } from '../utils/navigationStack';
 import { AvatarIcon } from '../components/AvatarIcon';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { calculateUserPoints } from '../utils/reputationUtils';
@@ -127,15 +128,14 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   // Author profile modal
   const [selectedAuthor, setSelectedAuthor] = useState<UserProfile | null>(null);
 
-  React.useEffect(() => {
-    const handlePopState = () => {
-      if (selectedAuthor) {
-        setSelectedAuthor(null);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [selectedAuthor]);
+  useBackHandler(
+    'search_selected_author',
+    NAV_PRIORITY.SUBPAGE,
+    Boolean(selectedAuthor),
+    () => {
+      setSelectedAuthor(null);
+    }
+  );
 
   const trendingTopics = [
     'SUG Welfare',
@@ -403,7 +403,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
         isVerified: acc.isVerified,
       };
       setSelectedAuthor(profile);
-      try { window.history.pushState({ subModal: 'searchAuthor' }, ''); } catch (e) { console.error(e); }
+      pushNavState({ type: 'search_author', author: profile.nickname });
     }
   };
 
@@ -747,7 +747,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
           onLikeClick={onLikeClick}
           onBookmarkClick={onBookmarkClick}
           onAuthorClick={onAuthorClick}
-          onClose={() => setSelectedAuthor(null)}
+          onClose={navigateBack}
           onCommentClick={(post) => {
             onSelectPost(post);
           }}

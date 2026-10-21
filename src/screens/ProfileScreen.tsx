@@ -57,6 +57,7 @@ import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
 import { ImageCropModal } from '../components/ImageCropModal';
+import { useBackHandler, NAV_PRIORITY, navigateBack, pushNavState } from '../utils/navigationStack';
 
 export type SettingsSubpage = 'main' | 'edit_profile' | 'display_mode' | 'privacy_visibility' | 'help_support' | 'delete_account' | 'logout_confirm' | 'get_verified';
 
@@ -355,42 +356,59 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     return () => window.removeEventListener('fuhsi_open_settings_verification', handleOpenVerif);
   }, []);
 
-  // Handle popstate for back button inside ProfileScreen
-  useEffect(() => {
-    const handlePopState = () => {
-      if (showFollowersModal) {
-        setShowFollowersModal(null);
-        return;
-      }
-      if (confirmLogout) {
-        setConfirmLogout(false);
-        return;
-      }
-      if (showPictureModal) {
-        setShowPictureModal(false);
-        return;
-      }
-      if (showPointsBreakdown) {
-        setShowPointsBreakdown(false);
-        return;
-      }
-      if (settingsSubpage !== 'main') {
-        if (settingsSubpage === 'edit_profile') {
-          handleCancelEdit();
-        } else {
-          setSettingsSubpage('main');
-        }
-        return;
-      }
-      if (isEditingSettings) {
-        setIsEditingSettings(false);
-        return;
-      }
-    };
+  // Hierarchical back handlers for modals and subpages within ProfileScreen
+  useBackHandler('profile_crop_image', NAV_PRIORITY.SUBMODAL, Boolean(cropImageSource), () => {
+    setCropImageSource(null);
+  });
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [showFollowersModal, confirmLogout, showPictureModal, showPointsBreakdown, isEditingSettings, settingsSubpage]);
+  useBackHandler('profile_delete_confirm', NAV_PRIORITY.SUBMODAL, showDeleteConfirmModal, () => {
+    setShowDeleteConfirmModal(false);
+  });
+
+  useBackHandler('profile_picture_modal', NAV_PRIORITY.SUBPAGE, showPictureModal, () => {
+    setShowPictureModal(false);
+  });
+
+  useBackHandler('profile_points_breakdown', NAV_PRIORITY.SUBPAGE, showPointsBreakdown, () => {
+    setShowPointsBreakdown(false);
+  });
+
+  useBackHandler('profile_followers_modal', NAV_PRIORITY.SUBPAGE, Boolean(showFollowersModal), () => {
+    setShowFollowersModal(null);
+  });
+
+  useBackHandler('profile_verification_modal', NAV_PRIORITY.SUBPAGE, showVerificationModal, () => {
+    setShowVerificationModal(false);
+  });
+
+  useBackHandler('profile_logout_confirm', NAV_PRIORITY.SUBPAGE, confirmLogout, () => {
+    setConfirmLogout(false);
+  });
+
+  // Settings subpage back handler (Edit Profile, Display Mode, Privacy, etc. -> returns to 'main' settings)
+  useBackHandler(
+    'profile_settings_subpage',
+    NAV_PRIORITY.SUBPAGE,
+    isEditingSettings && settingsSubpage !== 'main',
+    () => {
+      if (settingsSubpage === 'edit_profile') {
+        handleCancelEdit();
+      } else {
+        setSettingsSubpage('main');
+      }
+    }
+  );
+
+  // Settings overlay back handler (Main settings menu -> returns to Profile)
+  useBackHandler(
+    'profile_settings_menu',
+    NAV_PRIORITY.SCREEN_OVERLAY,
+    isEditingSettings && settingsSubpage === 'main',
+    () => {
+      handleCancelEdit();
+      setIsEditingSettings(false);
+    }
+  );
 
   const departments = [
     'Medicine and Surgery (MBS)',
@@ -457,6 +475,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const myFollowersCount = useMemo(() => getFollowersCount(normMyNick, allFollows), [normMyNick, allFollows]);
   const myFollowingCount = useMemo(() => getFollowingCount(normMyNick, allFollows), [normMyNick, allFollows]);
 
+  const handleOpenSubpage = (sub: SettingsSubpage) => {
+    setSettingsSubpage(sub);
+    pushNavState({ type: 'profile_settings_subpage', subpage: sub });
+  };
+
   const handleOpenEditProfile = () => {
     if (userProfile) {
       setNickname(userProfile.nickname || '@Student');
@@ -474,7 +497,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     setSaveErrorMessage(null);
     setIsEditingSettings(true);
     setSettingsSubpage('edit_profile');
-    try { window.history.pushState({ subModal: 'editProfile' }, ''); } catch (e) { console.error(e); }
+    pushNavState({ type: 'profile_edit_profile' });
   };
 
   const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -606,14 +629,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <ArrowLeft size={20} />
             </button>
           ) : (
-            <div />
+            <button
+              onClick={navigateBack}
+              className="p-2 rounded-full hover:bg-slate-100 text-slate-600 transition-colors"
+              title="Go back"
+            >
+              <ArrowLeft size={20} />
+            </button>
           )}
 
           <button
             onClick={() => {
               setSettingsSubpage('main');
               setIsEditingSettings(true);
-              try { window.history.pushState({ subModal: 'accountSettings' }, ''); } catch (e) { console.error(e); }
+              pushNavState({ type: 'profile_settings' });
             }}
             className="px-3 py-2 rounded-full bg-slate-100 hover:bg-teal-50 text-slate-800 hover:text-teal-800 transition-all border border-slate-200 shadow-2xs flex items-center gap-1.5 font-extrabold text-xs cursor-pointer"
             title="Account Settings"
@@ -897,10 +926,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <div className="flex items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={() => {
-                        handleCancelEdit();
-                        setIsEditingSettings(false);
-                      }}
+                      onClick={navigateBack}
                       className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                       title="Return to profile"
                     >
@@ -917,10 +943,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      handleCancelEdit();
-                      setIsEditingSettings(false);
-                    }}
+                    onClick={navigateBack}
                     className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Close"
                   >
@@ -954,7 +977,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   {/* 🎨 Display Mode */}
                   <button
                     type="button"
-                    onClick={() => setSettingsSubpage('display_mode')}
+                    onClick={() => handleOpenSubpage('display_mode')}
                     className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-indigo-500 dark:hover:border-indigo-400 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                   >
                     <div className="flex items-center gap-3.5">
@@ -981,7 +1004,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   {/* 🔒 Privacy & Visibility */}
                   <button
                     type="button"
-                    onClick={() => setSettingsSubpage('privacy_visibility')}
+                    onClick={() => handleOpenSubpage('privacy_visibility')}
                     className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-teal-500 dark:hover:border-teal-400 hover:bg-teal-50/40 dark:hover:bg-teal-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                   >
                     <div className="flex items-center gap-3.5">
@@ -1015,7 +1038,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   {/* 🔐 Get Verified */}
                   <button
                     type="button"
-                    onClick={() => setSettingsSubpage('get_verified')}
+                    onClick={() => handleOpenSubpage('get_verified')}
                     className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-sky-500 dark:hover:border-sky-400 hover:bg-sky-50/40 dark:hover:bg-sky-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                   >
                     <div className="flex items-center gap-3.5">
@@ -1057,7 +1080,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     type="button"
                     onClick={() => {
                       setSupportEmailCopied(false);
-                      setSettingsSubpage('help_support');
+                      handleOpenSubpage('help_support');
                     }}
                     className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/90 dark:border-slate-700/80 hover:border-teal-500 dark:hover:border-teal-400 hover:bg-teal-50/40 dark:hover:bg-teal-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                   >
@@ -1086,7 +1109,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                       onClick={() => {
                         setDeleteConfirmText('');
                         setDeleteErrorMessage(null);
-                        setSettingsSubpage('delete_account');
+                        handleOpenSubpage('delete_account');
                       }}
                       className="w-full p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-rose-200/90 dark:border-rose-900/40 hover:border-rose-400 hover:bg-rose-50/50 dark:hover:bg-rose-950/20 transition-all text-left flex items-center justify-between group shadow-xs cursor-pointer"
                     >
@@ -1139,11 +1162,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <VerificationModal
                 userProfile={userProfile}
                 embedded={true}
-                onBackToSettings={() => setSettingsSubpage('main')}
-                onClose={() => {
-                  handleCancelEdit();
-                  setIsEditingSettings(false);
-                }}
+                onBackToSettings={navigateBack}
+                onClose={navigateBack}
                 onSubmitVerification={(data) => {
                   if (onSubmitVerification) onSubmitVerification(data);
                   setSettingsSubpage('main');
@@ -1158,7 +1178,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <div className="flex items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={() => setSettingsSubpage('main')}
+                      onClick={navigateBack}
                       className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                       title="Return to Settings"
                     >
@@ -1177,10 +1197,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      handleCancelEdit();
-                      setIsEditingSettings(false);
-                    }}
+                    onClick={navigateBack}
                     className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Close"
                   >
@@ -1267,7 +1284,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <div className="flex items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={() => setSettingsSubpage('main')}
+                      onClick={navigateBack}
                       className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                       title="Return to Settings"
                     >
@@ -1286,10 +1303,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      handleCancelEdit();
-                      setIsEditingSettings(false);
-                    }}
+                    onClick={navigateBack}
                     className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Close"
                   >
@@ -1433,7 +1447,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <div className="flex items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={() => setSettingsSubpage('main')}
+                      onClick={navigateBack}
                       className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                       title="Return to Settings"
                     >
@@ -1452,10 +1466,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      handleCancelEdit();
-                      setIsEditingSettings(false);
-                    }}
+                    onClick={navigateBack}
                     className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Close"
                   >
@@ -1693,7 +1704,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <div className="flex items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={() => setSettingsSubpage('main')}
+                      onClick={navigateBack}
                       className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                       title="Return to Settings"
                     >
@@ -1712,10 +1723,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      handleCancelEdit();
-                      setIsEditingSettings(false);
-                    }}
+                    onClick={navigateBack}
                     className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Close"
                   >
@@ -1788,7 +1796,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSettingsSubpage('main')}
+                      onClick={navigateBack}
                       className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs transition-colors cursor-pointer text-center"
                     >
                       Keep My Account
@@ -1805,7 +1813,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <div className="flex items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={() => setSettingsSubpage('main')}
+                      onClick={navigateBack}
                       className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                       title="Return to Settings"
                     >
@@ -1824,10 +1832,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      handleCancelEdit();
-                      setIsEditingSettings(false);
-                    }}
+                    onClick={navigateBack}
                     className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Close"
                   >
@@ -1862,7 +1867,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSettingsSubpage('main')}
+                      onClick={navigateBack}
                       className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition-colors cursor-pointer"
                     >
                       Stay Logged In
@@ -1880,7 +1885,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <div className="flex items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={handleCancelEdit}
+                      onClick={navigateBack}
                       className="p-1.5 -ml-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1 font-bold text-xs sm:text-sm cursor-pointer"
                       title="Return to Settings"
                     >
@@ -1899,10 +1904,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      handleCancelEdit();
-                      setIsEditingSettings(false);
-                    }}
+                    onClick={navigateBack}
                     className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Close"
                   >

@@ -12,6 +12,7 @@ import { isItemLikedByUser, getEffectiveLikesCount, isItemBookmarkedByUser } fro
 import { ShareRepostModal } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
 import { LinkifiedText } from './LinkifiedText';
+import { useBackHandler, NAV_PRIORITY, pushNavState, navigateBack } from '../utils/navigationStack';
 
 interface PostDetailModalProps {
   post: Post;
@@ -146,21 +147,53 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     return reposterNorm === 'you' || (Boolean(userNick) && reposterNorm === userNick);
   }, [effectiveReposter, userProfile?.nickname]);
 
-  React.useEffect(() => {
-    const handlePopState = () => {
-      if (previewImage) {
-        setPreviewImage(null);
-        return;
-      }
-      if (confirmDeletePost) {
-        setConfirmDeletePost(false);
-        return;
-      }
-    };
+  useBackHandler(
+    'post_preview_image',
+    NAV_PRIORITY.SUBMODAL,
+    Boolean(previewImage),
+    () => setPreviewImage(null)
+  );
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [previewImage, confirmDeletePost]);
+  useBackHandler(
+    'post_confirm_delete',
+    NAV_PRIORITY.SUBMODAL,
+    confirmDeletePost,
+    () => setConfirmDeletePost(false)
+  );
+
+  useBackHandler(
+    'post_share_modal',
+    NAV_PRIORITY.SUBMODAL,
+    showShareModal,
+    () => setShowShareModal(false)
+  );
+
+  useBackHandler(
+    'post_edit_lock_modal',
+    NAV_PRIORITY.SUBMODAL,
+    showEditLockModal,
+    () => setShowEditLockModal(false)
+  );
+
+  const handleOpenPreviewImage = (img: string) => {
+    setPreviewImage(img);
+    pushNavState({ type: 'post_image_preview' });
+  };
+
+  const handleOpenConfirmDelete = () => {
+    setConfirmDeletePost(true);
+    pushNavState({ type: 'post_delete_confirm' });
+  };
+
+  const handleOpenShareModal = () => {
+    setShowShareModal(true);
+    pushNavState({ type: 'post_share_modal' });
+  };
+
+  const handleOpenEditLockModal = () => {
+    setShowEditLockModal(true);
+    pushNavState({ type: 'post_edit_lock_modal' });
+  };
 
   const handleCommentImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -324,7 +357,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           {comment.imageUrl && (
             <div className="pl-9 pt-2">
               <div 
-                onClick={() => setPreviewImage(comment.imageUrl!)}
+                onClick={() => handleOpenPreviewImage(comment.imageUrl!)}
                 className="inline-block rounded-xl overflow-hidden border border-slate-200 max-h-52 max-w-sm bg-slate-950 cursor-pointer group"
               >
                 <img
@@ -566,7 +599,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                               setIsEditing(true);
                               setEditedContent(post.content);
                             } else {
-                              setShowEditLockModal(true);
+                              handleOpenEditLockModal();
                             }
                           }}
                           className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-xs font-bold ${
@@ -582,7 +615,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                         {!isModulaAdmin && (
                           <button
                             type="button"
-                            onClick={() => setConfirmDeletePost(true)}
+                            onClick={handleOpenConfirmDelete}
                             className="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
                             title="Delete your thread"
                           >
@@ -595,7 +628,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                     {isModulaAdmin && (
                       <button
                         type="button"
-                        onClick={() => setConfirmDeletePost(true)}
+                        onClick={handleOpenConfirmDelete}
                         className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
                         title="Admin Delete Thread (@modula)"
                         aria-label="Admin delete thread"
@@ -615,7 +648,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                     <div className="flex items-center gap-2 justify-end">
                       <button
                         type="button"
-                        onClick={() => setConfirmDeletePost(false)}
+                        onClick={navigateBack}
                         className="px-3 py-1.5 rounded-lg bg-slate-200 text-slate-800 font-bold hover:bg-slate-300 transition-colors cursor-pointer"
                       >
                         Cancel
@@ -687,7 +720,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               if (postImages.length === 1) {
                 return (
                   <div 
-                    onClick={() => setPreviewImage(postImages[0])}
+                    onClick={() => handleOpenPreviewImage(postImages[0])}
                     className="rounded-2xl overflow-hidden border border-slate-200 max-h-64 bg-slate-100 cursor-pointer"
                   >
                     <img src={postImages[0]} alt="attachment" className="w-full h-full object-cover hover:scale-101 transition-transform duration-200" />
@@ -700,7 +733,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                   {postImages.slice(0, 2).map((imgUrl, idx) => (
                     <div
                       key={idx}
-                      onClick={() => setPreviewImage(imgUrl)}
+                      onClick={() => handleOpenPreviewImage(imgUrl)}
                       className="rounded-2xl overflow-hidden border border-slate-200 h-48 sm:h-56 bg-slate-100 cursor-pointer"
                     >
                       <img src={imgUrl} alt={`attachment ${idx + 1}`} className="w-full h-full object-cover hover:scale-105 transition-transform duration-200" />
@@ -853,7 +886,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                   id={`btn-detail-share-${post.id}`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    setShowShareModal(true);
+                    handleOpenShareModal();
                   }}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl transition-colors cursor-pointer ${
                     isRepostedByMe ? 'text-emerald-700 font-black bg-emerald-50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
@@ -987,7 +1020,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
         <ImagePreviewModal
           imageUrl={previewImage}
           title={`Attachment by ${post.authorNickname}`}
-          onClose={() => setPreviewImage(null)}
+          onClose={navigateBack}
         />
       )}
 
@@ -1008,7 +1041,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             <div className="flex items-center gap-2 pt-1">
               <button
                 type="button"
-                onClick={() => setShowEditLockModal(false)}
+                onClick={navigateBack}
                 className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
               >
                 Cancel
@@ -1016,7 +1049,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setShowEditLockModal(false);
+                  navigateBack();
                   onClose();
                   window.dispatchEvent(new CustomEvent('fuhsi_open_settings_verification'));
                 }}
@@ -1035,7 +1068,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           post={post}
           currentUser={userProfile}
           isOpen={showShareModal}
-          onClose={() => setShowShareModal(false)}
+          onClose={navigateBack}
           onRepost={(target) => {
             if (onRepost) onRepost(target);
           }}

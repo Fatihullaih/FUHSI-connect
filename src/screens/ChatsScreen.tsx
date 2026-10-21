@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, ChatConversation, DirectMessage, ChatReport, ChatGroup, FollowRecord } from '../types';
 import { AvatarIcon } from '../components/AvatarIcon';
 import { VerificationBadge } from '../components/VerificationBadge';
+import { useBackHandler, NAV_PRIORITY, pushNavState, navigateBack } from '../utils/navigationStack';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount, isUserPermanentlyDeleted } from '../utils/userDbUtils';
@@ -199,6 +200,82 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Priority Back Handlers for hierarchical unwinding in Chats
+  useBackHandler(
+    'chats_report_modal',
+    NAV_PRIORITY.SUBMODAL,
+    showReportModal,
+    () => setShowReportModal(false)
+  );
+
+  useBackHandler(
+    'chats_delete_group_modal',
+    NAV_PRIORITY.SUBMODAL,
+    Boolean(groupDeleteModalTarget),
+    () => setGroupDeleteModalTarget(null)
+  );
+
+  useBackHandler(
+    'chats_delete_message_modal',
+    NAV_PRIORITY.SUBMODAL,
+    Boolean(messageToDelete),
+    () => setMessageToDelete(null)
+  );
+
+  useBackHandler(
+    'chats_forward_modal',
+    NAV_PRIORITY.SUBPAGE,
+    Boolean(forwardingMessage),
+    () => setForwardingMessage(null)
+  );
+
+  useBackHandler(
+    'chats_group_info_modal',
+    NAV_PRIORITY.SUBPAGE,
+    showGroupInfoModal,
+    () => setShowGroupInfoModal(false)
+  );
+
+  useBackHandler(
+    'chats_create_group_modal',
+    NAV_PRIORITY.SUBPAGE,
+    showCreateGroupModal,
+    () => setShowCreateGroupModal(false)
+  );
+
+  useBackHandler(
+    'chats_new_chat_modal',
+    NAV_PRIORITY.SUBPAGE,
+    showNewChatModal,
+    () => setShowNewChatModal(false)
+  );
+
+  useBackHandler(
+    'chats_active_conversation',
+    NAV_PRIORITY.SCREEN_OVERLAY,
+    Boolean(activeConvId),
+    () => {
+      setActiveConvId(null);
+      setActiveRecipient(null);
+      setActiveGroup(null);
+    }
+  );
+
+  const handleOpenNewChatModal = () => {
+    setShowNewChatModal(true);
+    pushNavState({ type: 'chats_new_chat' });
+  };
+
+  const handleOpenCreateGroupModal = () => {
+    setShowCreateGroupModal(true);
+    pushNavState({ type: 'chats_create_group' });
+  };
+
+  const handleOpenReportModal = () => {
+    setShowReportModal(true);
+    pushNavState({ type: 'chats_report' });
+  };
 
   const myNickname = userProfile?.nickname || '@Student';
   const cleanMyNickname = normalizeNickname(myNickname);
@@ -619,6 +696,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 
     const convId = getConversationId(myNickname, pureTarget);
     setActiveConvId(convId);
+    pushNavState({ type: 'chats_conv', convId });
 
     // Resolve user details
     const userMatch = allUsers.find(
@@ -646,6 +724,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     setActiveRecipient(null);
     markGroupMessagesAsRead(group.id, myNickname);
     refreshConversations();
+    pushNavState({ type: 'chats_conv', convId: group.id });
   };
 
   const handleGroupCreated = (newGroup: ChatGroup) => {
@@ -654,6 +733,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     setActiveConvId(newGroup.id);
     setActiveGroup(newGroup);
     setActiveRecipient(null);
+    pushNavState({ type: 'chats_conv', convId: newGroup.id });
     showToast(`Group "${newGroup.name}" created!`, 'success');
   };
 
@@ -1128,7 +1208,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   id="chats-header-create-group-btn"
-                  onClick={() => setShowCreateGroupModal(true)}
+                  onClick={handleOpenCreateGroupModal}
                   className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 active:scale-95 text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
                   title="Create a Group"
                 >
@@ -1228,13 +1308,13 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 </p>
                 <div className="flex items-center justify-center gap-2 pt-1">
                   <button
-                    onClick={() => setShowCreateGroupModal(true)}
+                    onClick={handleOpenCreateGroupModal}
                     className="px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-extrabold rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
                   >
                     + Create Group
                   </button>
                   <button
-                    onClick={() => setShowNewChatModal(true)}
+                    onClick={handleOpenNewChatModal}
                     className="px-3.5 py-1.5 bg-teal-700 hover:bg-teal-800 text-white text-xs font-extrabold rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
                   >
                     Find Students
@@ -1427,6 +1507,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                         badgeTitle: conv.otherUserBadgeTitle,
                         isVerified: conv.otherUserIsVerified,
                       });
+                      pushNavState({ type: 'chats_conv', convId: conv.id });
                     }}
                     className={`p-3.5 sm:px-4 flex items-center gap-3 cursor-pointer transition-all group relative border-b border-slate-100 ${
                       isSelected
@@ -1591,11 +1672,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                   /* Group Top Header */
                   <div className="flex items-center gap-2.5 min-w-0">
                     <button
-                      onClick={() => {
-                        setActiveConvId(null);
-                        setActiveRecipient(null);
-                        setActiveGroup(null);
-                      }}
+                      onClick={navigateBack}
                       className="md:hidden p-1.5 hover:bg-slate-100 text-slate-700 rounded-xl transition-colors cursor-pointer"
                       title="Back to conversation list"
                     >
@@ -1603,7 +1680,10 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                     </button>
 
                     <div
-                      onClick={() => setShowGroupInfoModal(true)}
+                      onClick={() => {
+                        setShowGroupInfoModal(true);
+                        pushNavState({ type: 'chats_group_info' });
+                      }}
                       className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-br from-teal-700 to-emerald-800 flex items-center justify-center overflow-hidden border border-slate-200 cursor-pointer shrink-0 hover:scale-105 transition-transform shadow-2xs"
                       title="View Group Info"
                     >
@@ -1621,7 +1701,10 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 
                     <div className="min-w-0">
                       <div
-                        onClick={() => setShowGroupInfoModal(true)}
+                        onClick={() => {
+                          setShowGroupInfoModal(true);
+                          pushNavState({ type: 'chats_group_info' });
+                        }}
                         className="flex items-center gap-1.5 cursor-pointer group leading-tight"
                       >
                         <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate group-hover:text-teal-700 transition-colors">
@@ -1632,7 +1715,10 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                         </span>
                       </div>
                       <p
-                        onClick={() => setShowGroupInfoModal(true)}
+                        onClick={() => {
+                          setShowGroupInfoModal(true);
+                          pushNavState({ type: 'chats_group_info' });
+                        }}
                         className="text-[10px] text-slate-500 font-medium truncate cursor-pointer hover:text-teal-700 mt-0.5"
                       >
                         {activeGroup.memberNicknames?.length || 0} members • Tap for details
@@ -1643,11 +1729,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                   /* Direct 1-on-1 Top Header */
                   <div className="flex items-center gap-2.5 min-w-0">
                     <button
-                      onClick={() => {
-                        setActiveConvId(null);
-                        setActiveRecipient(null);
-                        setActiveGroup(null);
-                      }}
+                      onClick={navigateBack}
                       className="md:hidden p-1.5 hover:bg-slate-100 text-slate-700 rounded-xl transition-colors cursor-pointer"
                       title="Back to conversation list"
                     >
@@ -1717,7 +1799,10 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 <div className="flex items-center gap-1.5 shrink-0">
                   {activeGroup ? (
                     <button
-                      onClick={() => setShowGroupInfoModal(true)}
+                      onClick={() => {
+                        setShowGroupInfoModal(true);
+                        pushNavState({ type: 'chats_group_info' });
+                      }}
                       className="px-2.5 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 text-[11px] font-bold border border-teal-200 flex items-center gap-1 transition-all cursor-pointer"
                       title="Group Info and Members"
                     >
@@ -1727,7 +1812,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                   ) : (
                     <button
                       id="btn-report-chat"
-                      onClick={() => setShowReportModal(true)}
+                      onClick={handleOpenReportModal}
                       className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 text-[11px] font-bold border border-slate-200 flex items-center gap-1 transition-all cursor-pointer"
                       title="Report Harassment, Threats, or Prohibited Content"
                     >
@@ -2005,7 +2090,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 Choose a conversation from the left or click <strong className="text-teal-700 font-bold">New Chat</strong> to connect with students.
               </p>
               <button
-                onClick={() => setShowNewChatModal(true)}
+                onClick={handleOpenNewChatModal}
                 className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white text-xs font-extrabold rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
               >
                 Start New Chat
@@ -2030,7 +2115,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 </div>
               </div>
               <button
-                onClick={() => setShowNewChatModal(false)}
+                onClick={navigateBack}
                 className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
               >
                 <X size={18} />
@@ -2120,7 +2205,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 </div>
               </div>
               <button
-                onClick={() => setShowReportModal(false)}
+                onClick={navigateBack}
                 className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
               >
                 <X size={18} />
@@ -2162,7 +2247,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowReportModal(false)}
+                  onClick={navigateBack}
                   className="px-3.5 py-2 text-xs font-extrabold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
                 >
                   Cancel
@@ -2230,7 +2315,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
         <CreateGroupModal
           myNickname={myNickname}
           allUsers={allUsers}
-          onClose={() => setShowCreateGroupModal(false)}
+          onClose={navigateBack}
           onGroupCreated={handleGroupCreated}
         />
       )}
@@ -2241,7 +2326,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
           group={activeGroup}
           myNickname={myNickname}
           allUsers={allUsers}
-          onClose={() => setShowGroupInfoModal(false)}
+          onClose={navigateBack}
           onGroupUpdated={handleGroupUpdated}
           onGroupLeftOrDeleted={handleLeaveOrDeleteGroup}
           onOpenProfile={onOpenProfile}
@@ -2277,7 +2362,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 type="button"
                 onClick={() => {
                   const grp = groupDeleteModalTarget;
-                  setGroupDeleteModalTarget(null);
+                  navigateBack();
                   handleConfirmExitAndDeleteGroup(grp);
                 }}
                 className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-black shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
@@ -2290,7 +2375,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
                 type="button"
                 onClick={() => {
                   const grp = groupDeleteModalTarget;
-                  setGroupDeleteModalTarget(null);
+                  navigateBack();
                   handleConfirmClearGroupHistoryOnly(grp);
                 }}
                 className="w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 hover:border-teal-200 border border-slate-200 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
@@ -2301,7 +2386,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
 
               <button
                 type="button"
-                onClick={() => setGroupDeleteModalTarget(null)}
+                onClick={navigateBack}
                 className="w-full py-2 px-4 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs font-bold transition-all cursor-pointer"
               >
                 Cancel
@@ -2314,7 +2399,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       {/* Floating Action Button (FAB) for New Chat (Like Create Post on Feed / Post Item on Marketplace) */}
       <button
         id="chats-new-chat-fab"
-        onClick={() => setShowNewChatModal(true)}
+        onClick={handleOpenNewChatModal}
         className={`fixed bottom-20 sm:bottom-8 right-4 sm:right-8 z-40 bg-teal-700 hover:bg-teal-800 active:scale-95 text-white rounded-full p-4 sm:px-5 sm:py-3.5 shadow-2xl items-center gap-2 transition-all hover:scale-105 border border-teal-500/40 group cursor-pointer ${
           activeConvId ? 'hidden md:flex' : 'flex'
         }`}

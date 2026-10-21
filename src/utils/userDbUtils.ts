@@ -78,45 +78,73 @@ export function isUserPermanentlyDeleted(userOrIdentifier?: Partial<UserProfile>
     if (userOrIdentifier.matricNumber) targetMatric = String(userOrIdentifier.matricNumber).trim().toUpperCase();
   }
 
-  // 1. Primary check: permanent internal account ID
-  if (targetId) {
-    return deletedList.some((entry) => entry.id && entry.id === targetId);
+  // Admin cannot be deleted
+  if (targetId === 'usr_admin_modula' || targetNick === 'modula') return false;
+
+  // 1. Check permanent internal account ID
+  if (targetId && deletedList.some((entry) => entry.id && String(entry.id).trim() === targetId)) {
+    return true;
   }
 
-  // 2. Nickname check: If an active user exists with this nickname whose ID is not in deletedList, it is a brand new account!
-  if (targetNick) {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        const stored = localStorage.getItem(USER_DB_KEY);
-        if (stored) {
-          const users: UserProfile[] = JSON.parse(stored);
-          const activeMatch = users.find(
-            (u) => (u.nickname || '').trim().toLowerCase().replace(/^@/, '') === targetNick
-          );
-          if (activeMatch && activeMatch.id && !deletedList.some((e) => e.id === activeMatch.id)) {
-            return false;
-          }
-        }
-      }
-    } catch {}
-    return deletedList.some(
-      (entry) => entry.nickname && entry.nickname.trim().toLowerCase().replace(/^@/, '') === targetNick
-    );
+  // 2. Check nickname
+  if (targetNick && deletedList.some((entry) => entry.nickname && entry.nickname.trim().toLowerCase().replace(/^@/, '') === targetNick)) {
+    return true;
   }
 
-  if (targetEmail) {
-    return deletedList.some(
-      (entry) => entry.studentEmail && entry.studentEmail.trim().toLowerCase() === targetEmail
-    );
+  // 3. Check student email
+  if (targetEmail && deletedList.some((entry) => entry.studentEmail && entry.studentEmail.trim().toLowerCase() === targetEmail)) {
+    return true;
   }
 
-  if (targetMatric) {
-    return deletedList.some(
-      (entry) => entry.matricNumber && entry.matricNumber.trim().toUpperCase() === targetMatric
-    );
+  // 4. Check matric number
+  if (targetMatric && deletedList.some((entry) => entry.matricNumber && entry.matricNumber.trim().toUpperCase() === targetMatric)) {
+    return true;
   }
 
   return false;
+}
+
+/**
+ * Synchronize deleted account tombstones received from server or Firestore
+ */
+export function syncDeletedTombstones(deletedIds: string[] = [], deletedNicks: string[] = []): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const list = getDeletedUsersList();
+    let changed = false;
+    const existingIds = new Set(list.map((e) => e.id ? String(e.id).trim() : '').filter(Boolean));
+    const existingNicks = new Set(list.map((e) => (e.nickname || '').toLowerCase().replace(/^@/, '').trim()).filter(Boolean));
+
+    deletedIds.forEach((id) => {
+      const cleanId = String(id).trim();
+      if (cleanId && cleanId !== 'usr_admin_modula' && !existingIds.has(cleanId)) {
+        list.push({ id: cleanId, deletedAt: new Date().toISOString() });
+        existingIds.add(cleanId);
+        changed = true;
+      }
+    });
+
+    deletedNicks.forEach((nick) => {
+      const cleanNick = String(nick).toLowerCase().replace(/^@/, '').trim();
+      if (cleanNick && cleanNick !== 'modula' && !existingNicks.has(cleanNick)) {
+        list.push({ nickname: cleanNick, deletedAt: new Date().toISOString() });
+        existingNicks.add(cleanNick);
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      localStorage.setItem(DELETED_USERS_KEY, JSON.stringify(list));
+      const stored = localStorage.getItem(USER_DB_KEY);
+      if (stored) {
+        const users: UserProfile[] = JSON.parse(stored);
+        const filtered = users.filter((u) => !isUserPermanentlyDeleted(u));
+        localStorage.setItem(USER_DB_KEY, JSON.stringify(filtered));
+      }
+    }
+  } catch (err) {
+    console.error('Error syncing deleted tombstones:', err);
+  }
 }
 
 /**
@@ -503,7 +531,7 @@ export function purgeAccountPermanently(options: PurgeAccountOptions): PurgedDat
     console.error('Error purging Firestore during permanent account deletion:', err)
   );
 
-  // 13. PUSH DELETION TO SERVER SYNC
+  // 13. PUSH DELETION TO SERVER SYNC AND CENTRAL DELETION API
   pushServerDbSync({
     deletedUserIds: targetUserId ? [targetUserId] : [],
     deletedUserNicknames: cleanNick ? [cleanNick] : [],
@@ -511,6 +539,22 @@ export function purgeAccountPermanently(options: PurgeAccountOptions): PurgedDat
     deletedCommentIds,
     deletedMarketplaceItemIds,
   } as any).catch((err) => console.error('Error syncing deletion to server:', err));
+
+  try {
+    fetch('/api/user/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: targetUserId,
+        nickname: cleanNick,
+        studentEmail: cleanEmail,
+        matricNumber: cleanMatric,
+        deletedPostIds,
+        deletedCommentIds,
+        deletedMarketplaceItemIds,
+      }),
+    }).catch(() => {});
+  } catch {}
 
   // 14. DISPATCH CUSTOM EVENTS FOR INSTANT LIVE UI REACTION
   if (typeof window !== 'undefined') {
@@ -537,6 +581,50 @@ export function purgeAccountPermanently(options: PurgeAccountOptions): PurgedDat
     deletedCommentIds,
     deletedMarketplaceItemIds,
   };
+}
+
+/**
+ * ASYNCHRONOUS COMPLETE CASCADE ACCOUNT DELETION
+ * Awaits both Firestore cloud database and central server eradication before resolving.
+ */
+export async function purgeAccountPermanentlyAsync(options: PurgeAccountOptions): Promise<PurgedDataSummary> {
+  const targetUserId = options.userId ? String(options.userId).trim() : '';
+  const cleanNick = options.nickname ? options.nickname.trim().toLowerCase().replace(/^@/, '') : '';
+  const cleanEmail = options.studentEmail ? options.studentEmail.trim().toLowerCase() : '';
+  const cleanMatric = options.matricNumber ? options.matricNumber.trim().toUpperCase() : '';
+
+  if (targetUserId === 'usr_admin_modula' || cleanNick === 'modula') {
+    throw new Error('Platform administrator (@modula) cannot be deleted.');
+  }
+
+  // 1. Run local cascade purge
+  const summary = purgeAccountPermanently(options);
+
+  // 2. Await Firestore cloud database deletion and tombstones
+  await deleteUserFromFirestore(targetUserId, cleanNick, cleanEmail).catch((err) =>
+    console.error('Error awaiting Firestore purge during permanent account deletion:', err)
+  );
+
+  // 3. Await central server deletion endpoint
+  try {
+    await fetch('/api/user/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: targetUserId,
+        nickname: cleanNick,
+        studentEmail: cleanEmail,
+        matricNumber: cleanMatric,
+        deletedPostIds: summary.deletedPostIds,
+        deletedCommentIds: summary.deletedCommentIds,
+        deletedMarketplaceItemIds: summary.deletedMarketplaceItemIds,
+      }),
+    });
+  } catch (err) {
+    console.error('Error awaiting /api/user/delete:', err);
+  }
+
+  return summary;
 }
 
 /**
@@ -749,262 +837,6 @@ export const DEFAULT_USERS_LIST: UserProfile[] = [
     password: 'ibraheem',
     joinedDate: 'Sep 2024',
     createdAt: '2024-09-01T00:00:00.000Z',
-  },
-  {
-    id: 'usr_student_adedeji_ayo_24prt007',
-    nickname: '@Deji',
-    accountType: 'Student',
-    realName: 'Adedeji Ayo',
-    matricNumber: '24/PRT/007',
-    studentEmail: 'faithlucas.co@gmail.com',
-    emergencyHomePhone: '091562232018',
-    department: 'Prosthetics and Orthotics',
-    level: '200L',
-    bio: '',
-    savedPassword: 'password123',
-    password: 'password123',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1785421590000',
-    nickname: '@fatih',
-    accountType: 'Student',
-    realName: 'Adepoju Fatih',
-    matricNumber: '2022/MED/001',
-    studentEmail: 'fatihadepoju8@gmail.com',
-    emergencyHomePhone: '08031234567',
-    department: 'Medicine & Surgery',
-    level: '300 Level',
-    bio: '',
-    savedPassword: 'password123',
-    password: 'password123',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1787333690153',
-    nickname: '@Fadlullah',
-    accountType: 'Student',
-    realName: 'bello fadlullah',
-    matricNumber: '24/AUD/098',
-    studentEmail: 'bellofadlullah507@gmail.com',
-    emergencyHomePhone: '09138203259',
-    department: 'Audiology',
-    level: '300L',
-    bio: '',
-    savedPassword: '1234',
-    password: '1234',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1787938187966',
-    nickname: '@kunle',
-    accountType: 'Student',
-    realName: 'Olakunle Ayo',
-    matricNumber: '25/NSC/100',
-    studentEmail: 'adepojufatih33@gmail.com',
-    emergencyHomePhone: '08012345678',
-    department: 'Nursing Science',
-    level: '100L',
-    bio: '',
-    savedPassword: '1234',
-    password: '1234',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1788014361344',
-    nickname: '@idera',
-    accountType: 'Guest',
-    realName: 'idera oluwa',
-    matricNumber: '',
-    studentEmail: 'faithdavid.co@gmail.com',
-    emergencyHomePhone: '08037471294',
-    department: 'Medicine and Surgery (MBBS)',
-    level: '300L',
-    bio: '',
-    savedPassword: '0800',
-    password: '0800',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1788966315443',
-    nickname: '@fuhsibro',
-    accountType: 'Student',
-    realName: 'Ifeoluwa Olamide',
-    matricNumber: '23/NSC/045',
-    studentEmail: 'fuhsibroofficial@gmail.com',
-    emergencyHomePhone: '09161517756',
-    department: 'Nursing Science',
-    level: '300L',
-    bio: '',
-    savedPassword: '1234567890',
-    password: '1234567890',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1788968181651',
-    nickname: '@tigress',
-    accountType: 'Student',
-    realName: 'Tigress',
-    matricNumber: '25/PHM/012',
-    studentEmail: 'togress@gmail.com',
-    emergencyHomePhone: '07012345678',
-    department: 'Pharmacology',
-    level: '100L',
-    bio: '',
-    savedPassword: '1234567890',
-    password: '1234567890',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1788969442703',
-    nickname: '@guest1',
-    accountType: 'Guest',
-    realName: 'Gust',
-    matricNumber: '',
-    studentEmail: 'guest@gmail.com',
-    emergencyHomePhone: '08145611236',
-    department: '',
-    level: '',
-    bio: '',
-    savedPassword: '0987654321',
-    password: '0987654321',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1789032260674',
-    nickname: '@Maleeqq',
-    accountType: 'Student',
-    realName: 'Balogun Abdulmalik',
-    matricNumber: '24/PRT/019',
-    studentEmail: 'ayodejibalogun66@gmail.com',
-    emergencyHomePhone: '08149006536',
-    department: 'Prosthetics and Orthotics',
-    level: '200L',
-    bio: '',
-    savedPassword: 'Ayodeji1976.',
-    password: 'Ayodeji1976.',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1789222162096',
-    nickname: '@Ibraheem',
-    accountType: 'Student',
-    realName: 'Ibraheem kunle',
-    matricNumber: '25/PHM/011',
-    studentEmail: 'fatihadepoju88@gmail.com',
-    emergencyHomePhone: '09156232018',
-    department: 'Pharmacology',
-    level: '100L',
-    bio: '',
-    savedPassword: '1234',
-    password: '1234',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1789291362767',
-    nickname: '@Bello',
-    accountType: 'Guest',
-    realName: 'Bello',
-    matricNumber: '',
-    studentEmail: 'bellofadlullah9@gmail.com',
-    emergencyHomePhone: '09138203259',
-    department: '',
-    level: '',
-    bio: '',
-    savedPassword: '1234',
-    password: '1234',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1789668651638',
-    nickname: '@Pop',
-    accountType: 'Guest',
-    realName: 'Adam Popoola',
-    matricNumber: '',
-    studentEmail: 'olagokerodiat036@gmail.com',
-    emergencyHomePhone: '08123456789',
-    department: 'Medicine and Surgery (MBBS)',
-    level: '300L',
-    bio: '',
-    savedPassword: '1234',
-    password: '1234',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_guest_1789804676390',
-    nickname: '@Guest_798',
-    accountType: 'Guest',
-    realName: 'Campus Guest',
-    matricNumber: '',
-    studentEmail: '',
-    emergencyHomePhone: '08000000000',
-    department: 'General Campus',
-    level: 'Guest',
-    bio: '',
-    savedPassword: 'password123',
-    password: 'password123',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1790088695337',
-    nickname: '@Shola',
-    accountType: 'Student',
-    realName: 'Apo',
-    matricNumber: '23/BCH/011',
-    studentEmail: 'fatihadepoju888@gmail.com',
-    emergencyHomePhone: '07054915494',
-    department: 'Biochemistry',
-    level: 'Graduated',
-    bio: '',
-    savedPassword: '0900',
-    password: '0900',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1790199069264',
-    nickname: '@Dele',
-    accountType: 'Student',
-    realName: 'Dele',
-    matricNumber: '25/MBS/001',
-    studentEmail: 'dele@gmail.com',
-    emergencyHomePhone: '07032165498',
-    department: 'Medicine and Surgery',
-    level: '100L',
-    bio: '',
-    savedPassword: '1111',
-    password: '1111',
-    isApproved: true,
-    isAdmin: false,
-  },
-  {
-    id: 'usr_1791355677408',
-    nickname: '@ADEOLA',
-    accountType: 'Student',
-    realName: 'FAVOUR PRAISE',
-    matricNumber: '25/BCH/2024',
-    studentEmail: 'adebisisaheed250@gmail.com',
-    emergencyHomePhone: '08086062200',
-    department: 'Biochemistry',
-    level: '200L',
-    bio: '',
-    savedPassword: 'Priscilla@2026',
-    password: 'Priscilla@2026',
-    isApproved: true,
-    isAdmin: false,
   },
 ];
 

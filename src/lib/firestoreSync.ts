@@ -18,6 +18,7 @@ import { mergeUsers, isPostDeletedLocally, isCommentDeletedLocally } from '../ut
 
 // Collection references
 const USERS_COL = 'users';
+const DELETED_USERS_COL = 'deleted_users';
 const POSTS_COL = 'posts';
 const COMMENTS_COL = 'comments';
 const MARKETPLACE_APPROVED_COL = 'marketplace_approved';
@@ -51,12 +52,17 @@ export function subscribeUsers(onUpdate: (users: UserProfile[]) => void) {
             const deleted = JSON.parse(raw);
             if (Array.isArray(deleted) && deleted.length > 0) {
               const uId = u.id ? String(u.id).trim() : '';
-              // Primary: Match by permanent internal account ID
-              const isDel = deleted.some((d: any) => {
-                const dId = d.id ? String(d.id).trim() : '';
-                return uId && dId && uId === dId;
-              });
-              if (isDel) return;
+              const uNick = u.nickname ? String(u.nickname).trim().toLowerCase().replace(/^@/, '') : '';
+              const uEmail = u.studentEmail ? String(u.studentEmail).trim().toLowerCase() : '';
+              if (uId !== 'usr_admin_modula' && uNick !== 'modula') {
+                const isDel = deleted.some((d: any) => {
+                  if (uId && d.id && String(d.id).trim() === uId) return true;
+                  if (uNick && d.nickname && String(d.nickname).trim().toLowerCase().replace(/^@/, '') === uNick) return true;
+                  if (uEmail && d.studentEmail && String(d.studentEmail).trim().toLowerCase() === uEmail) return true;
+                  return false;
+                });
+                if (isDel) return;
+              }
             }
           }
         } catch {}
@@ -68,6 +74,28 @@ export function subscribeUsers(onUpdate: (users: UserProfile[]) => void) {
     onUpdate(deduplicated);
   }, (err) => {
     console.warn('Firestore users subscription fallback/warning:', err?.message || err);
+  });
+}
+
+/**
+ * Real-time listener for permanently deleted users across all devices
+ */
+export function subscribeDeletedUsers(onUpdate: (deletedList: { id?: string; nickname?: string; studentEmail?: string }[]) => void) {
+  return onSnapshot(collection(db, DELETED_USERS_COL), (snapshot) => {
+    const list: any[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data) {
+        list.push({
+          id: data.userId || docSnap.id,
+          nickname: data.nickname,
+          studentEmail: data.studentEmail,
+        });
+      }
+    });
+    onUpdate(list);
+  }, (err) => {
+    console.warn('Firestore deleted_users subscription warning:', err?.message || err);
   });
 }
 
@@ -162,11 +190,37 @@ export async function saveUsersBatchToFirestore(users: UserProfile[]): Promise<v
  */
 export async function fetchUsersFromFirestore(): Promise<UserProfile[]> {
   try {
-    const snap = await getDocs(collection(db, USERS_COL));
+    const [snap, delSnap] = await Promise.all([
+      getDocs(collection(db, USERS_COL)),
+      getDocs(collection(db, DELETED_USERS_COL)).catch(() => ({ forEach: () => {} } as any)),
+    ]);
+
+    const deletedIds = new Set<string>();
+    const deletedNicks = new Set<string>();
+    const deletedEmails = new Set<string>();
+
+    delSnap.forEach((docSnap: any) => {
+      const data = docSnap.data();
+      if (data) {
+        if (data.userId) deletedIds.add(String(data.userId).trim());
+        if (docSnap.id && docSnap.id.startsWith('usr_')) deletedIds.add(String(docSnap.id).trim());
+        if (data.nickname) deletedNicks.add(String(data.nickname).toLowerCase().replace(/^@/, '').trim());
+        if (data.studentEmail) deletedEmails.add(String(data.studentEmail).toLowerCase().trim());
+      }
+    });
+
     const list: UserProfile[] = [];
     snap.forEach((docSnap) => {
       const u = docSnap.data() as UserProfile;
       if (u && (u.id || u.nickname) && !isDemoUser(u) && !isDemoNickname(u.nickname)) {
+        const uId = String(u.id || docSnap.id).trim();
+        const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '').trim();
+        const uEmail = String(u.studentEmail || '').toLowerCase().trim();
+
+        if (deletedIds.has(uId) || deletedNicks.has(uNick) || (uEmail && deletedEmails.has(uEmail))) {
+          return;
+        }
+
         const userObj = { ...u, id: u.id || docSnap.id };
         list.push(isModulaAccount(userObj) ? sanitizeModulaProfile(userObj) : userObj);
       }
@@ -207,13 +261,40 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
     const cleanNick = nickname ? nickname.toLowerCase().replace(/^@/, '') : '';
     const cleanEmail = studentEmail ? studentEmail.toLowerCase().trim() : '';
 
+    const tombstoneData = {
+      userId: userId || null,
+      nickname: cleanNick || null,
+      studentEmail: cleanEmail || null,
+      deletedAt: new Date().toISOString(),
+    };
+
+    // 0. Record central tombstone in Firestore IMMEDIATELY under both ID and nickname so all devices detect it at once
+    const tombstonePromises: Promise<any>[] = [];
     if (userId) {
-      await deleteDoc(doc(db, USERS_COL, userId)).catch(() => {});
+      tombstonePromises.push(setDoc(doc(db, DELETED_USERS_COL, userId), tombstoneData).catch(() => {}));
+    }
+    if (cleanNick) {
+      tombstonePromises.push(setDoc(doc(db, DELETED_USERS_COL, cleanNick), tombstoneData).catch(() => {}));
+    }
+    if (cleanEmail) {
+      tombstonePromises.push(setDoc(doc(db, DELETED_USERS_COL, cleanEmail.replace(/[^a-z0-9]/g, '_')), tombstoneData).catch(() => {}));
+    }
+    await Promise.all(tombstonePromises);
+
+    // 1. Immediately delete direct user documents from USERS_COL
+    const directDeletePromises: Promise<any>[] = [];
+    if (userId) {
+      directDeletePromises.push(deleteDoc(doc(db, USERS_COL, userId)).catch(() => {}));
     }
     if (nickname) {
       const docId = nickname.toLowerCase().replace(/[^a-z0-9_]/g, '');
-      await deleteDoc(doc(db, USERS_COL, docId)).catch(() => {});
+      if (docId) {
+        directDeletePromises.push(deleteDoc(doc(db, USERS_COL, docId)).catch(() => {}));
+      }
     }
+    await Promise.all(directDeletePromises);
+
+    // 2. Query and delete any matching user docs in USERS_COL
     const snap = await getDocs(collection(db, USERS_COL));
     const promises: Promise<any>[] = [];
     snap.forEach((docSnap) => {
@@ -230,7 +311,7 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
       }
     });
 
-    // 1. Purge verification requests
+    // 3. Purge verification requests
     const verifSnap = await getDocs(collection(db, VERIFICATIONS_COL));
     verifSnap.forEach((vDoc) => {
       const vData = vDoc.data() as any;
@@ -374,6 +455,15 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
     if (promises.length > 0) {
       await Promise.all(promises);
     }
+
+    // Notify server to ensure central database and disk storage are also pruned synchronously
+    try {
+      await fetch('/api/user/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, nickname: cleanNick, studentEmail: cleanEmail }),
+      });
+    } catch {}
   } catch (err) {
     console.error('Error deleting user from Firestore:', err);
   }

@@ -5,6 +5,7 @@ import { VerificationBadge } from './VerificationBadge';
 import { PostCard } from './PostCard';
 import { ProfilePictureModal } from './ProfilePictureModal';
 import { FollowersListModal } from './FollowersListModal';
+import { useBackHandler, NAV_PRIORITY, pushNavState, navigateBack } from '../utils/navigationStack';
 import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { calculateUserPoints } from '../utils/reputationUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
@@ -118,19 +119,29 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     return false;
   }, [userProfile, currentUserNickname]);
 
-  React.useEffect(() => {
-    const handlePopState = () => {
-      if (showFollowersModal) {
-        setShowFollowersModal(null);
-        return;
-      }
-      if (showPictureModal) {
-        setShowPictureModal(false);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [showPictureModal, showFollowersModal]);
+  useBackHandler(
+    'author_picture_modal',
+    NAV_PRIORITY.SUBMODAL,
+    showPictureModal,
+    () => setShowPictureModal(false)
+  );
+
+  useBackHandler(
+    'author_followers_modal',
+    NAV_PRIORITY.SUBPAGE,
+    Boolean(showFollowersModal),
+    () => setShowFollowersModal(null)
+  );
+
+  const handleOpenPictureModal = () => {
+    setShowPictureModal(true);
+    pushNavState({ type: 'author_picture', author: authorNickname });
+  };
+
+  const handleOpenFollowersModal = (tab: 'followers' | 'following') => {
+    setShowFollowersModal({ open: true, tab });
+    pushNavState({ type: 'author_followers', author: authorNickname, tab });
+  };
 
   // Derive username format
   const username = authorNickname.startsWith('@') 
@@ -389,7 +400,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
               {/* Clickable Profile Picture for Full-size View & Download */}
               <div 
                 className="relative shrink-0 cursor-pointer"
-                onClick={() => setShowPictureModal(true)}
+                onClick={handleOpenPictureModal}
                 title="Click to view full size profile picture"
               >
                 <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white/10 backdrop-blur-xs flex items-center justify-center border-2 border-teal-300/80 shadow-md overflow-hidden hover:scale-105 transition-transform">
@@ -547,7 +558,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
             <div className="bg-slate-50/90 border-b border-slate-200 py-2.5 px-4 flex items-center justify-center gap-3 text-xs font-black text-slate-700">
               <button
                 type="button"
-                onClick={() => setShowFollowersModal({ open: true, tab: 'following' })}
+                onClick={() => handleOpenFollowersModal('following')}
                 className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1 group"
               >
                 <span className="text-sm font-black text-slate-900 group-hover:text-teal-700">{authorFollowingCount}</span>
@@ -556,7 +567,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
               <span className="text-slate-300 font-bold">·</span>
               <button
                 type="button"
-                onClick={() => setShowFollowersModal({ open: true, tab: 'followers' })}
+                onClick={() => handleOpenFollowersModal('followers')}
                 className="hover:text-teal-700 transition-colors cursor-pointer flex items-center gap-1 group"
               >
                 <span className="text-sm font-black text-slate-900 group-hover:text-teal-700">{authorFollowersCount}</span>
@@ -819,7 +830,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
           avatarUrl={effectiveAvatarUrl}
           avatarKey={effectiveAvatarKey}
           isOwner={false}
-          onClose={() => setShowPictureModal(false)}
+          onClose={navigateBack}
         />
       )}
 
@@ -833,7 +844,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
           currentUserNickname={currentUserNickname || userProfile?.nickname}
           onToggleFollow={onToggleFollow}
           onSelectUser={(selectedNick) => {
-            setShowFollowersModal(null);
+            navigateBack();
             if (onAuthorClick) {
               const dummyPost: Post = {
                 id: `author_${selectedNick}`,
@@ -856,7 +867,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
               onAuthorClick(dummyPost);
             }
           }}
-          onClose={() => setShowFollowersModal(null)}
+          onClose={navigateBack}
         />
       )}
     </div>

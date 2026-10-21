@@ -12,7 +12,7 @@ import {
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
 import { useAdminPendingCounts } from './utils/adminAlertUtils';
-import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate, sendVerificationNotification, sendVerificationRevokedNotification } from './utils/userDbUtils';
+import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, purgeAccountPermanentlyAsync, syncDeletedTombstones, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate, sendVerificationNotification, sendVerificationRevokedNotification } from './utils/userDbUtils';
 import {
   fetchServerDb,
   pushServerDbSync,
@@ -31,6 +31,7 @@ import {
 } from './utils/apiSync';
 import {
   subscribeUsers,
+  subscribeDeletedUsers,
   subscribePosts,
   subscribeComments,
   subscribeVerificationRequests,
@@ -82,6 +83,7 @@ import { AuthorProfileModal } from './components/AuthorProfileModal';
 import { FollowersListModal } from './components/FollowersListModal';
 import { PWAInstallModal } from './components/PWAInstallModal';
 import { AuthModal } from './components/AuthModal';
+import { initNavigationCoordinator, useBackHandler, NAV_PRIORITY, navigateBack, pushNavState } from './utils/navigationStack';
 import { VerificationBadge } from './components/VerificationBadge';
 import { AvatarIcon } from './components/AvatarIcon';
 import { DynamicFeedIcon, LeaderboardIcon, StorefrontIcon } from './components/NavIcons';
@@ -606,16 +608,73 @@ export const App: React.FC = () => {
       console.error('Firestore seed check failed:', err)
     );
 
+    // 0. Subscribe Deleted Users (Tombstones) in real-time from Firestore across all devices
+    const unsubDeletedUsers = subscribeDeletedUsers((deletedEntries) => {
+      if (!isMounted || !deletedEntries) return;
+      const delIds = deletedEntries.map((e) => e.id).filter(Boolean) as string[];
+      const delNicks = deletedEntries.map((e) => e.nickname).filter(Boolean) as string[];
+
+      if (delIds.length > 0 || delNicks.length > 0) {
+        syncDeletedTombstones(delIds, delNicks);
+
+        // Immediately purge from local user storage
+        const currentStored = getStoredUsers();
+        const filtered = currentStored.filter((u) => !isUserPermanentlyDeleted(u));
+        localStorage.setItem('fuhsi_users_db', JSON.stringify(filtered));
+
+        // Reconcile active user profile
+        const activeRaw = localStorage.getItem('fuhsi_active_user');
+        if (activeRaw) {
+          try {
+            const activeUser = JSON.parse(activeRaw);
+            if (isUserPermanentlyDeleted(activeUser) && !activeUser.isAdmin) {
+              localStorage.removeItem('fuhsi_active_user');
+              setUserProfile(EMPTY_USER_PROFILE);
+              setIsLoggedIn(false);
+              setShowAuthModal(true);
+            }
+          } catch {}
+        }
+
+        // Cleanse posts, comments, marketplace
+        setPosts((prev) => prev.filter((p) => !isUserPermanentlyDeleted({ id: (p as any).authorId, nickname: p.authorNickname })));
+        setComments((prev) => prev.filter((c) => !isUserPermanentlyDeleted({ id: (c as any).authorId, nickname: c.authorNickname })));
+        setMarketplaceItems((prev) => prev.filter((m) => !isUserPermanentlyDeleted({ id: (m as any).sellerId, nickname: m.sellerNickname })));
+        setPendingMarketplaceItems((prev) => prev.filter((m) => !isUserPermanentlyDeleted({ id: (m as any).sellerId, nickname: m.sellerNickname })));
+        setVerificationRequests((prev) => prev.filter((v) => !isUserPermanentlyDeleted({ id: (v as any).userId, nickname: v.applicantNickname })));
+
+        setAppTotalMembers(filtered.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
+        setNotifTrigger((prev) => prev + 1);
+      }
+    });
+
     // 1. Subscribe Users in real-time from Firestore
     const unsubUsers = subscribeUsers((fsUsers) => {
       if (!isMounted) return;
       if (!fsUsers || fsUsers.length === 0) return;
 
-      const validUsers = fsUsers.filter((u) => !isDemoUser(u) && !isDemoNickname(u.nickname));
+      const validUsers = fsUsers.filter((u) => !isDemoUser(u) && !isDemoNickname(u.nickname) && !isUserPermanentlyDeleted(u));
       if (validUsers.length === 0) return;
 
+      // DO NOT resurrect deleted users from localStoredUsers!
+      // Only keep local users if newly created in the last 60 seconds awaiting cloud sync
       const localStoredUsers = getStoredUsers();
-      const mergedUsers = mergeUsers(localStoredUsers, validUsers);
+      const brandNewLocalUsers = localStoredUsers.filter((lu) => {
+        if (!lu || isUserPermanentlyDeleted(lu) || isDemoUser(lu) || isDemoNickname(lu.nickname)) return false;
+        const inFs = validUsers.some(
+          (fu) =>
+            (fu.id && lu.id && fu.id === lu.id) ||
+            (fu.nickname && lu.nickname && fu.nickname.toLowerCase() === lu.nickname.toLowerCase())
+        );
+        if (inFs) return false;
+        if (lu.createdAt) {
+          const age = Date.now() - new Date(lu.createdAt).getTime();
+          return age > 0 && age < 60000;
+        }
+        return false;
+      });
+
+      const mergedUsers = [...validUsers, ...brandNewLocalUsers].filter((u) => !isUserPermanentlyDeleted(u));
       localStorage.setItem('fuhsi_users_db', JSON.stringify(mergedUsers));
       setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
       setNotifTrigger((prev) => prev + 1);
@@ -1007,6 +1066,7 @@ export const App: React.FC = () => {
 
     return () => {
       isMounted = false;
+      unsubDeletedUsers();
       unsubUsers();
       unsubPosts();
       unsubComments();
@@ -1677,106 +1737,97 @@ export const App: React.FC = () => {
     handleNavChange(4); // Switch to Chats screen
   }, [handleNavChange, userProfile]);
 
-  // Close top modal via UI "X" / "Back" button
-  const closeModalUI = useCallback(() => {
-    if (window.history.state && window.history.state.type === 'modal') {
-      window.history.back();
-    } else {
-      // Direct state pop if no history entry
-      setModalStack((prevStack) => {
-        if (prevStack.length === 0) {
-          setSelectedPost(null);
-          setSelectedAuthorPost(null);
-          setShowProfileModal(false);
-          setShowCreatePostModal(false);
-          setShowAuthModal(false);
-          setShowPwaModal(false);
-          setShowFollowersDirectoryModal(false);
-          if (window.location.pathname.startsWith('/post/') || window.location.search.includes('post=')) {
-            try {
-              window.history.replaceState(null, '', '/');
-            } catch (e) { console.error(e); }
-          }
-          return [];
-        }
-        const newStack = [...prevStack];
-        const popped = newStack.pop();
-        if (popped?.type === 'postDetail' && (window.location.pathname.startsWith('/post/') || window.location.search.includes('post='))) {
-          try {
-            window.history.replaceState(null, '', '/');
-          } catch (e) { console.error(e); }
-        }
-
-        const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
-        setSelectedPost(lastPost ? (lastPost as any).post : null);
-
-        const lastAuthor = newStack.slice().reverse().find((item) => item.type === 'authorProfile');
-        setSelectedAuthorPost(lastAuthor ? (lastAuthor as any).post : null);
-
-        setShowProfileModal(newStack.some((item) => item.type === 'profile'));
-        setShowCreatePostModal(newStack.some((item) => item.type === 'createPost'));
-        setShowAuthModal(newStack.some((item) => item.type === 'auth'));
-        setShowPwaModal(newStack.some((item) => item.type === 'pwa'));
-        setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
-
-        return newStack;
-      });
-    }
-  }, []);
-
-  // PopState Event Handler
-  useEffect(() => {
-    const handlePopState = () => {
-      setModalStack((prevStack) => {
-        if (prevStack.length > 0) {
-          const newStack = [...prevStack];
-          newStack.pop();
-
-          const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
-          setSelectedPost(lastPost ? (lastPost as any).post : null);
-          if (!lastPost && (window.location.pathname.startsWith('/post/') || window.location.search.includes('post='))) {
-            try {
-              window.history.replaceState(null, '', '/');
-            } catch (e) { console.error(e); }
-          }
-
-          const lastAuthor = newStack.slice().reverse().find((item) => item.type === 'authorProfile');
-          setSelectedAuthorPost(lastAuthor ? (lastAuthor as any).post : null);
-
-          setShowProfileModal(newStack.some((item) => item.type === 'profile'));
-          setShowCreatePostModal(newStack.some((item) => item.type === 'createPost'));
-          setShowAuthModal(newStack.some((item) => item.type === 'auth'));
-          setShowPwaModal(newStack.some((item) => item.type === 'pwa'));
-          setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
-
-          return newStack;
-        }
-
+  const popModalState = useCallback(() => {
+    setModalStack((prevStack) => {
+      if (prevStack.length === 0) {
+        setSelectedPost(null);
+        setSelectedAuthorPost(null);
+        setShowProfileModal(false);
+        setShowCreatePostModal(false);
+        setShowAuthModal(false);
+        setShowPwaModal(false);
+        setShowFollowersDirectoryModal(false);
         if (window.location.pathname.startsWith('/post/') || window.location.search.includes('post=')) {
           try {
             window.history.replaceState(null, '', '/');
           } catch (e) { console.error(e); }
         }
-
-        // Handle navigation tab history if no modals open
-        setNavHistory((prevNav) => {
-          if (prevNav.length > 1) {
-            const newNav = [...prevNav];
-            newNav.pop();
-            const prevTab = newNav[newNav.length - 1];
-            setNavIndex(prevTab);
-            return newNav;
-          }
-          return prevNav;
-        });
-
         return [];
-      });
-    };
+      }
+      const newStack = [...prevStack];
+      const popped = newStack.pop();
+      if (popped?.type === 'postDetail' && (window.location.pathname.startsWith('/post/') || window.location.search.includes('post='))) {
+        try {
+          window.history.replaceState(null, '', '/');
+        } catch (e) { console.error(e); }
+      }
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+      const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
+      setSelectedPost(lastPost ? (lastPost as any).post : null);
+
+      const lastAuthor = newStack.slice().reverse().find((item) => item.type === 'authorProfile');
+      setSelectedAuthorPost(lastAuthor ? (lastAuthor as any).post : null);
+
+      setShowProfileModal(newStack.some((item) => item.type === 'profile'));
+      setShowCreatePostModal(newStack.some((item) => item.type === 'createPost'));
+      setShowAuthModal(newStack.some((item) => item.type === 'auth'));
+      setShowPwaModal(newStack.some((item) => item.type === 'pwa'));
+      setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
+
+      return newStack;
+    });
   }, []);
+
+  // Close top modal via UI "X" / "Back" button - delegates to hierarchical coordinator
+  const closeModalUI = useCallback(() => {
+    navigateBack();
+  }, []);
+
+  // Initialize single global navigation coordinator
+  useEffect(() => {
+    initNavigationCoordinator();
+  }, []);
+
+  // Register Primary Modal Stack Back Handler with Coordinator (Priority 20)
+  const isAnyPrimaryModalOpen =
+    modalStack.length > 0 ||
+    showProfileModal ||
+    showCreatePostModal ||
+    showAuthModal ||
+    showPwaModal ||
+    showFollowersDirectoryModal ||
+    Boolean(selectedPost) ||
+    Boolean(selectedAuthorPost);
+
+  useBackHandler(
+    'app_modal_stack',
+    NAV_PRIORITY.PRIMARY_MODAL,
+    isAnyPrimaryModalOpen,
+    () => {
+      popModalState();
+      return true;
+    }
+  );
+
+  // Register Main Navigation Tabs Back Handler with Coordinator (Priority 10)
+  useBackHandler(
+    'app_tab_history',
+    NAV_PRIORITY.MAIN_TAB,
+    navHistory.length > 1,
+    () => {
+      setNavHistory((prevNav) => {
+        if (prevNav.length > 1) {
+          const newNav = [...prevNav];
+          newNav.pop();
+          const prevTab = newNav[newNav.length - 1];
+          setNavIndex(prevTab);
+          return newNav;
+        }
+        return prevNav;
+      });
+      return true;
+    }
+  );
 
   // Deep linking: Handle /post/:id or ?post=... or #post/... URL routing
   const deepLinkHandledRef = useRef<string | null>(null);
@@ -2679,8 +2730,8 @@ export const App: React.FC = () => {
     const targetMatric = userProfile.matricNumber || '';
 
     try {
-      // 1. Comprehensive cascade account deletion across all platforms, stores, and caches
-      const summary = purgeAccountPermanently({
+      // 1. Comprehensive cascade account deletion across all platforms, stores, caches, Firestore, and Server
+      const summary = await purgeAccountPermanentlyAsync({
         userId: targetUserId,
         nickname: targetNickname,
         studentEmail: targetEmail,
