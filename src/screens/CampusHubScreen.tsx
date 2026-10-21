@@ -4,7 +4,6 @@ import { isModulaAccount } from '../utils/userDbUtils';
 import { 
   ShoppingBag, 
   MapPin, 
-  Eye, 
   Plus, 
   Camera, 
   AlertCircle, 
@@ -583,29 +582,11 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
   };
 
   /**
-   * Active View Counter & Preview Opener
-   * Increments real view count and opens details modal
+   * Preview Opener
+   * Opens details modal
    */
   const handleOpenItemDetails = (item: MarketplaceItem) => {
-    // 1. Notify parent / database to increment persistent view count
-    if (onIncrementItemView) {
-      onIncrementItemView(item.id);
-    }
-
-    // 2. Track in session storage to dynamically reflect live increment without spam
-    let nextCount = typeof item.viewCount === 'number' && !isNaN(item.viewCount) ? item.viewCount : 0;
-    try {
-      const sessionKey = `fuhsi_viewed_mkt_${item.id}`;
-      const last = sessionStorage.getItem(sessionKey);
-      const now = Date.now();
-      if (!last || now - Number(last) >= 45000) {
-        nextCount += 1;
-      }
-    } catch (e) {
-      nextCount += 1;
-    }
-
-    setDetailsModalItem({ ...item, viewCount: nextCount });
+    setDetailsModalItem(item);
     setActivePhotoIdx(0);
     pushNavState({ type: 'hub_item_details', itemId: item.id });
   };
@@ -1095,11 +1076,6 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                             <MapPin className="w-3 h-3 text-rose-500 shrink-0" />
                             <span>{locationText}</span>
                           </span>
-                          <span className="text-slate-300">•</span>
-                          <span className="flex items-center gap-1 text-slate-500 font-semibold" title="Total Views">
-                            <Eye className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>{item.viewCount || 0}</span>
-                          </span>
                         </div>
 
                         {/* Description snippet */}
@@ -1319,11 +1295,6 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                             <h4 className="font-extrabold text-slate-900 text-sm line-clamp-1 group-hover:text-emerald-700 transition-colors">{item.title}</h4>
                             <p className="text-xs text-slate-600 font-semibold flex items-center gap-1.5 flex-wrap">
                               <span>₦{item.askingPrice.toLocaleString()} • {item.category}</span>
-                              <span className="text-slate-300">•</span>
-                              <span className="flex items-center gap-1 text-[11px] text-slate-500 font-semibold" title="Total Views">
-                                <Eye size={12} className="text-slate-400" />
-                                <span>{item.viewCount || 0}</span>
-                              </span>
                             </p>
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                               {soldInfo.isSold && (
@@ -1602,11 +1573,6 @@ export const CampusHubScreen: React.FC<CampusHubScreenProps> = ({
                      detailsModalItem.meetupPoint?.replace(/^📍\s*/, '') || 
                      'FUHSI Campus / Ayeka'}
                   </span>
-                </span>
-
-                <span className="flex items-center gap-1 text-slate-500 ml-auto font-semibold" title="Total Views">
-                  <Eye className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span>{detailsModalItem.viewCount || 0}</span>
                 </span>
               </div>
 
