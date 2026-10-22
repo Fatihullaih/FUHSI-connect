@@ -1050,25 +1050,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 group-hover:text-sky-700 dark:group-hover:text-sky-300 transition-colors">
                             Get Verified
                           </h3>
-                          {userProfile?.isVerified && (
+                          {userProfile?.isVerified ? (
                             <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 border border-sky-300">
                               Verified ✓
                             </span>
-                          )}
-                          {userProfile?.verificationStatus === 'pending' && (
-                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                              Pending
+                          ) : (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                              Coming Soon
                             </span>
                           )}
                         </div>
                         <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                           {userProfile?.isVerified
                             ? 'Account is officially verified with badge & benefits'
-                            : userProfile?.verificationStatus === 'pending'
-                            ? 'Verification application pending'
-                            : isGuest
-                            ? 'Apply for official Guest verification checkmark badge & benefits'
-                            : 'Apply for official student verification badge & benefits'}
+                            : 'Account verification will be available soon'}
                         </p>
                       </div>
                     </div>

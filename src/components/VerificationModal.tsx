@@ -24,6 +24,10 @@ import { VerificationBadge } from './VerificationBadge';
 import { subscribeVerificationFee } from '../lib/firestoreSync';
 import { isGuestAccount } from '../utils/userDbUtils';
 
+// Feature flag: set to true to display the "Coming Soon" page while the payment gateway is being finalized.
+// Toggle back to false whenever ready to restore the active verification application & payment flow.
+export const IS_VERIFICATION_COMING_SOON = true;
+
 interface VerificationModalProps {
   userProfile: UserProfile | null;
   onClose: () => void;
@@ -219,207 +223,319 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             </p>
           </div>
 
-          {/* Current Status Banner */}
+          {/* MODE 1: USER IS ALREADY VERIFIED */}
           {isAlreadyVerified ? (
-            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex items-center gap-3 shadow-xs">
-              <CheckCircle className="w-6 h-6 text-emerald-600 shrink-0" />
-              <div className="font-extrabold text-sm text-emerald-900 flex items-center gap-2">
-                <span>Your Account is Verified</span>
-                <VerificationBadge isVerified badgeType={userProfile?.badgeType} title={userProfile?.badgeTitle} showTitle />
-              </div>
-            </div>
-          ) : isPending ? (
-            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-              <div className="flex items-center gap-3">
-                <Clock className="w-6 h-6 text-amber-600 shrink-0" />
-                <div>
-                  <span className="font-extrabold text-sm text-amber-900">Application Pending</span>
-                  <p className="text-xs text-amber-800 font-medium mt-0.5">
-                    Reference: <strong className="font-mono text-slate-900">{submittedPaymentRef || 'PENDING'}</strong>
-                  </p>
-                </div>
-              </div>
-              <a
-                href="https://pay.squadco.com/9G4DX4"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-black transition-colors shrink-0 cursor-pointer"
-              >
-                <span>Payment Page</span>
-                <ExternalLink size={13} />
-              </a>
-            </div>
-          ) : (
-            <div className="p-4 rounded-2xl bg-slate-100 border border-slate-200/90 text-slate-800 flex items-center gap-3 shadow-xs">
-              <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0" />
-              <div className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
-                <span>Account Not Verified</span>
-                <span className="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-extrabold uppercase tracking-wider">Unverified</span>
-              </div>
-            </div>
-          )}
-
-          {/* Verification Benefits */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
-              Verification Benefits
-            </h3>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-800 font-bold">
-              {(isGuest
-                ? [
-                    'Verification Checkmark',
-                    'Editable Threads',
-                    'Higher Trust & Credibility',
-                    'Eligibility for Future Features',
-                  ]
-                : [
-                    'Verified Checkmark',
-                    'Higher Trust and Credibility',
-                    'Editable Thread',
-                    'Handle Marketplace',
-                    'Priority Support',
-                    'Eligibility for Future Premium Features',
-                  ]
-              ).map((benefit, idx) => (
-                <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-2.5">
-                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{benefit}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Form & Fee Section (if not yet verified/pending) */}
-          {!isAlreadyVerified && !isPending && (
-            <form onSubmit={handleFormSubmit} className="pt-3 border-t border-slate-200 space-y-4">
-              {errorMsg && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-                  <AlertCircle size={16} className="text-rose-600 shrink-0" />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
-
-              {/* Verification Category (Student accounts only) */}
-              {!isGuest && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    Verification Category
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => { setAccountType('Student'); }}
-                      className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                        accountType === 'Student' 
-                          ? 'bg-sky-50 border-sky-400 text-sky-900 shadow-xs' 
-                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                      }`}
-                    >
-                      <UserCheck size={16} className={accountType === 'Student' ? 'text-sky-600' : ''} />
-                      <span>Student</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => { setAccountType('Executive'); }}
-                      className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                        accountType === 'Executive' 
-                          ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-xs' 
-                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                      }`}
-                    >
-                      <Crown size={16} className={accountType === 'Executive' ? 'text-emerald-600' : ''} />
-                      <span>Executive</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => { setAccountType('Organization'); }}
-                      className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                        accountType === 'Organization' 
-                          ? 'bg-amber-50 border-amber-400 text-amber-900 shadow-xs' 
-                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                      }`}
-                    >
-                      <Building size={16} className={accountType === 'Organization' ? 'text-amber-600' : ''} />
-                      <span>Organization</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Additional Position (Student accounts only) */}
-              {!isGuest && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Additional Position Held (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={positionTitle}
-                    onChange={(e) => setPositionTitle(e.target.value)}
-                    placeholder="e.g. Class Representative, Departmental President, SUG Executive, Club President"
-                    className="w-full text-xs rounded-xl border border-slate-300 p-2.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-slate-900"
-                  />
-                  <p className="text-[11px] text-slate-500 font-medium mt-1">
-                    If you hold any leadership or official campus position, enter it here. Otherwise, leave this field empty.
-                  </p>
-                </div>
-              )}
-
-              {/* Verification Fee Display */}
-              <div className="bg-sky-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl p-4 border border-sky-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-                <div>
-                  <span className="text-[10px] font-bold text-sky-700 dark:text-sky-400 uppercase tracking-wider block">
-                    Verification Fee
-                  </span>
-                  <div className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
-                    ₦{feeAmount.toLocaleString()}
-                  </div>
-                </div>
-
-                <div className="text-right text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
-                  <Lock size={12} className="text-emerald-500 dark:text-emerald-400" />
-                  <span>Secure Payment</span>
+            <>
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex items-center gap-3 shadow-xs">
+                <CheckCircle className="w-6 h-6 text-emerald-600 shrink-0" />
+                <div className="font-extrabold text-sm text-emerald-900 flex items-center gap-2">
+                  <span>Your Account is Verified</span>
+                  <VerificationBadge isVerified badgeType={userProfile?.badgeType} title={userProfile?.badgeTitle} showTitle />
                 </div>
               </div>
 
-              {/* Subscribe Button */}
-              <div className="pt-2 flex items-center justify-end gap-2">
+              {/* Active Verification Benefits */}
+              <div className="space-y-3">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
+                  Active Verification Benefits
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-800 dark:text-slate-200 font-bold">
+                  {(isGuest
+                    ? [
+                        'Verification Checkmark',
+                        'Editable Threads',
+                        'Higher Trust & Credibility',
+                        'Eligibility for Future Features',
+                      ]
+                    : [
+                        'Verified Checkmark',
+                        'Higher Trust and Credibility',
+                        'Editable Thread',
+                        'Handle Marketplace',
+                        'Priority Support',
+                        'Eligibility for Future Premium Features',
+                      ]
+                  ).map((benefit, idx) => (
+                    <div key={idx} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 flex items-center gap-2.5">
+                      <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{benefit}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end">
                 <button
                   type="button"
-                  onClick={onClose}
-                  className="px-4 py-2.5 rounded-full border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-extrabold text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
+                  className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
                 >
-                  Cancel
+                  {embedded ? 'Back to Settings' : 'Close Window'}
                 </button>
-                
-                <a
-                  href="https://pay.squadco.com/9G4DX4"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={handleSubscribe}
-                  className="bg-teal-700 hover:bg-teal-800 text-white px-6 py-3 rounded-full text-xs font-black transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
-                >
-                  <CreditCard size={16} />
-                  <span>Subscribe</span>
-                  <ArrowRight size={14} />
-                </a>
               </div>
-            </form>
-          )}
+            </>
+          ) : IS_VERIFICATION_COMING_SOON ? (
+            /* MODE 2: COMING SOON VIEW (Active while payment gateway is being finalized) */
+            <>
+              <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-b from-teal-50/90 to-white dark:from-slate-800/90 dark:to-slate-900 border border-teal-200/80 dark:border-slate-700 text-center space-y-4 shadow-sm">
+                <div className="w-16 h-16 mx-auto rounded-3xl bg-teal-600/10 dark:bg-teal-400/10 text-teal-700 dark:text-teal-300 flex items-center justify-center shadow-xs">
+                  <Sparkles className="w-8 h-8 text-teal-600 dark:text-teal-400" />
+                </div>
+                
+                <div className="space-y-2 max-w-md mx-auto">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-extrabold border border-teal-200 dark:border-teal-800">
+                    <Clock size={13} />
+                    <span>Coming Soon</span>
+                  </div>
+                  <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-100 tracking-tight">
+                    Verification Coming Soon
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
+                    Official account verification is currently being updated. We are finalizing our secure payment system so you can enjoy a smooth, reliable verification process.
+                  </p>
+                </div>
 
-          {(isAlreadyVerified || isPending) && (
-            <div className="pt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
-                className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
-              >
-                {embedded ? 'Back to Settings' : 'Close Window'}
-              </button>
-            </div>
+                <div className="p-3.5 bg-teal-50/70 dark:bg-slate-800/80 rounded-2xl border border-teal-100 dark:border-slate-700 text-teal-900 dark:text-teal-200 text-xs font-bold max-w-sm mx-auto flex items-center justify-center gap-2">
+                  <ShieldCheck size={16} className="text-teal-600 shrink-0" />
+                  <span>Verification applications will open shortly</span>
+                </div>
+              </div>
+
+              {/* Upcoming Verification Benefits */}
+              <div className="space-y-3">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
+                  Upcoming Verification Benefits
+                </h3>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-800 dark:text-slate-200 font-bold">
+                  {(isGuest
+                    ? [
+                        'Verification Checkmark',
+                        'Editable Threads',
+                        'Higher Trust & Credibility',
+                        'Eligibility for Future Features',
+                      ]
+                    : [
+                        'Verified Checkmark',
+                        'Higher Trust and Credibility',
+                        'Editable Thread',
+                        'Handle Marketplace',
+                        'Priority Support',
+                        'Eligibility for Future Premium Features',
+                      ]
+                  ).map((benefit, idx) => (
+                    <div key={idx} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 flex items-center gap-2.5">
+                      <CheckCircle className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0" />
+                      <span>{benefit}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Return to Settings Button */}
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
+                  className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer shadow-xs"
+                >
+                  {embedded ? 'Back to Settings' : 'Close'}
+                </button>
+              </div>
+            </>
+          ) : (
+            /* MODE 3: ACTIVE APPLICATION & PAYMENT FLOW (When IS_VERIFICATION_COMING_SOON is false) */
+            <>
+              {isPending ? (
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-center gap-3">
+                    <Clock className="w-6 h-6 text-amber-600 shrink-0" />
+                    <div>
+                      <span className="font-extrabold text-sm text-amber-900">Application Pending</span>
+                      <p className="text-xs text-amber-800 font-medium mt-0.5">
+                        Reference: <strong className="font-mono text-slate-900">{submittedPaymentRef || 'PENDING'}</strong>
+                      </p>
+                    </div>
+                  </div>
+                  <a
+                    href="https://pay.squadco.com/9G4DX4"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-black transition-colors shrink-0 cursor-pointer"
+                  >
+                    <span>Payment Page</span>
+                    <ExternalLink size={13} />
+                  </a>
+                </div>
+              ) : (
+                <div className="p-4 rounded-2xl bg-slate-100 border border-slate-200/90 text-slate-800 flex items-center gap-3 shadow-xs">
+                  <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0" />
+                  <div className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+                    <span>Account Not Verified</span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-extrabold uppercase tracking-wider">Unverified</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Verification Benefits */}
+              <div className="space-y-3">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
+                  Verification Benefits
+                </h3>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-800 font-bold">
+                  {(isGuest
+                    ? [
+                        'Verification Checkmark',
+                        'Editable Threads',
+                        'Higher Trust & Credibility',
+                        'Eligibility for Future Features',
+                      ]
+                    : [
+                        'Verified Checkmark',
+                        'Higher Trust and Credibility',
+                        'Editable Thread',
+                        'Handle Marketplace',
+                        'Priority Support',
+                        'Eligibility for Future Premium Features',
+                      ]
+                  ).map((benefit, idx) => (
+                    <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-2.5">
+                      <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{benefit}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Form & Fee Section */}
+              {!isPending && (
+                <form onSubmit={handleFormSubmit} className="pt-3 border-t border-slate-200 space-y-4">
+                  {errorMsg && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                      <AlertCircle size={16} className="text-rose-600 shrink-0" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+
+                  {!isGuest && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        Verification Category
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setAccountType('Student'); }}
+                          className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                            accountType === 'Student' 
+                              ? 'bg-sky-50 border-sky-400 text-sky-900 shadow-xs' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          <UserCheck size={16} className={accountType === 'Student' ? 'text-sky-600' : ''} />
+                          <span>Student</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => { setAccountType('Executive'); }}
+                          className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                            accountType === 'Executive' 
+                              ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-xs' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          <Crown size={16} className={accountType === 'Executive' ? 'text-emerald-600' : ''} />
+                          <span>Executive</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => { setAccountType('Organization'); }}
+                          className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                            accountType === 'Organization' 
+                              ? 'bg-amber-50 border-amber-400 text-amber-900 shadow-xs' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          <Building size={16} className={accountType === 'Organization' ? 'text-amber-600' : ''} />
+                          <span>Organization</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!isGuest && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Additional Position Held (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={positionTitle}
+                        onChange={(e) => setPositionTitle(e.target.value)}
+                        placeholder="e.g. Class Representative, Departmental President, SUG Executive, Club President"
+                        className="w-full text-xs rounded-xl border border-slate-300 p-2.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-slate-900"
+                      />
+                      <p className="text-[11px] text-slate-500 font-medium mt-1">
+                        If you hold any leadership or official campus position, enter it here. Otherwise, leave this field empty.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="bg-sky-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl p-4 border border-sky-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                    <div>
+                      <span className="text-[10px] font-bold text-sky-700 dark:text-sky-400 uppercase tracking-wider block">
+                        Verification Fee
+                      </span>
+                      <div className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
+                        ₦{feeAmount.toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="text-right text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
+                      <Lock size={12} className="text-emerald-500 dark:text-emerald-400" />
+                      <span>Secure Payment</span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="px-4 py-2.5 rounded-full border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-extrabold text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    
+                    <a
+                      href="https://pay.squadco.com/9G4DX4"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={handleSubscribe}
+                      className="bg-teal-700 hover:bg-teal-800 text-white px-6 py-3 rounded-full text-xs font-black transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <CreditCard size={16} />
+                      <span>Subscribe</span>
+                      <ArrowRight size={14} />
+                    </a>
+                  </div>
+                </form>
+              )}
+
+              {isPending && (
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
+                    className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
+                  >
+                    {embedded ? 'Back to Settings' : 'Close Window'}
+                  </button>
+                </div>
+              )}
+            </>
           )}
 
         </div>
