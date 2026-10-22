@@ -718,6 +718,7 @@ export function calculateDepartmentStandings(
     if (entry.students.length === 0) return; // Only show departments with registered students
 
     const totalPoints = entry.students.reduce((acc, curr) => acc + curr.points, 0);
+    if (totalPoints <= 0) return; // Hide departments with zero points
     // Find top contributor in this department
     const sortedStudents = [...entry.students].sort((a, b) => b.points - a.points);
     const top = sortedStudents[0];
@@ -775,7 +776,8 @@ export interface TrendingPostItem {
 export function calculateTopTrendingPosts(
   allPosts: Post[] = [],
   allCommentsOrLimit?: Comment[] | number,
-  limitArg?: number
+  limitArg?: number,
+  customWindow?: WeeklyRankingWindow
 ): TrendingPostItem[] {
   let allComments: Comment[] | null = null;
   let limit = 5;
@@ -789,6 +791,9 @@ export function calculateTopTrendingPosts(
     limit = allCommentsOrLimit;
   }
 
+  const currentWindow = customWindow || getWeeklyRankingWindow();
+  const { startMs, endMs } = currentWindow;
+
   const validPosts = (allPosts || []).filter((p) => {
     if (!p) return false;
     if (p.status === 'Removed' || p.isQuarantined) return false;
@@ -796,23 +801,50 @@ export function calculateTopTrendingPosts(
     return true;
   });
 
-  const scoredPosts = validPosts.map((p) => {
-    const likes = p.likesCount ?? (Array.isArray(p.likedBy) ? p.likedBy.length : 0);
-    const comments = Array.isArray(allComments)
-      ? allComments.filter((c) => c && c.postId === p.id && !c.parentId).length
-      : (p.commentsCount ?? 0);
-    const shares = p.repostsCount ?? (Array.isArray(p.repostedBy) ? p.repostedBy.length : (p.shareCount ?? 0));
-    // Comments and shares indicate deeper engagement, weighted slightly higher
-    const totalEngagement = likes * 1 + comments * 2 + shares * 2;
+  const scoredPosts = validPosts
+    .map((p) => {
+      const postTime = parseItemTimestamp(p);
+      const isThisWeekPost = postTime >= startMs && postTime <= endMs;
 
-    return {
-      post: p,
-      likesCount: likes,
-      commentsCount: comments,
-      sharesCount: shares,
-      totalEngagement,
-    };
-  });
+      // Likes on post:
+      let likes = 0;
+      if (Array.isArray(p.likedBy)) {
+        likes = p.likedBy.length;
+      } else {
+        likes = p.likesCount ?? 0;
+      }
+
+      // Comments: count active top-level comments during the weekly ranking window
+      let comments = 0;
+      if (Array.isArray(allComments)) {
+        comments = allComments.filter((c) => {
+          if (!c || c.postId !== p.id || c.parentId) return false;
+          const cTime = parseItemTimestamp(c);
+          return cTime >= startMs && cTime <= endMs;
+        }).length;
+      } else {
+        comments = isThisWeekPost ? (p.commentsCount ?? 0) : 0;
+      }
+
+      // Shares / Reposts
+      const shares = p.repostsCount ?? (Array.isArray(p.repostedBy) ? p.repostedBy.length : (p.shareCount ?? 0));
+
+      const effectiveLikes = isThisWeekPost ? likes : 0;
+      const effectiveShares = isThisWeekPost ? shares : 0;
+
+      // Comments and shares indicate deeper engagement, weighted slightly higher
+      const totalEngagement = effectiveLikes * 1 + comments * 2 + effectiveShares * 2;
+
+      return {
+        post: p,
+        likesCount: effectiveLikes,
+        commentsCount: comments,
+        sharesCount: effectiveShares,
+        totalEngagement,
+      };
+    })
+    // STRICT RULE: Hide trending posts with zero engagement.
+    .filter((item) => item.totalEngagement > 0);
 
   // Sort descending by totalEngagement, breaking ties by recency
   scoredPosts.sort((a, b) => {

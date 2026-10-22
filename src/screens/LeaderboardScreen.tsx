@@ -135,23 +135,26 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
       });
 
     // Sort descending by weekly points, breaking ties by total all-time points
-    scored.sort((a, b) => {
+    // STRICT RULE: Hide users with zero ranking points; do not fill with zero-score entries.
+    const activeScored = scored.filter((item) => item.weeklyPoints > 0);
+
+    activeScored.sort((a, b) => {
       if (b.weeklyPoints !== a.weeklyPoints) {
         return b.weeklyPoints - a.weeklyPoints;
       }
       return b.totalPoints - a.totalPoints;
     });
 
-    return scored.slice(0, 10).map((item, idx) => ({
+    return activeScored.slice(0, 10).map((item, idx) => ({
       ...item,
       rank: idx + 1,
     }));
   }, [realUsersList, activePosts, allComments, allReports, weeklyWindow]);
 
-  // 2. TOP 5 TRENDING POSTS: Dynamic engagement based on real likes, comments, and shares
+  // 2. TOP 5 TRENDING POSTS: Dynamic engagement based on real likes, comments, and shares during weekly period
   const top5TrendingPosts: TrendingPostItem[] = useMemo(() => {
-    return calculateTopTrendingPosts(activePosts, allComments, 5);
-  }, [activePosts, allComments]);
+    return calculateTopTrendingPosts(activePosts, allComments, 5, weeklyWindow);
+  }, [activePosts, allComments, weeklyWindow]);
 
   // 3. DEPARTMENT STANDINGS: Real registered student accounts only, guests excluded, aggregates legitimate student points
   const departmentStandings: DepartmentStandingItem[] = useMemo(() => {
@@ -244,7 +247,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
             <div className="space-y-2.5">
               {top10EngagingUsers.length === 0 ? (
                 <div className="bg-white rounded-2xl p-10 text-center text-xs text-slate-500 font-medium border border-slate-200">
-                  No activity yet this week.
+                  No users have earned ranking points yet this week.
                 </div>
               ) : (
                 top10EngagingUsers.map((item) => {
@@ -349,7 +352,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
             <div className="space-y-3">
               {top5TrendingPosts.length === 0 ? (
                 <div className="bg-white rounded-2xl p-10 text-center text-xs text-slate-500 font-medium border border-slate-200">
-                  No trending posts yet.
+                  No trending posts with engagement yet this week.
                 </div>
               ) : (
                 top5TrendingPosts.map((item) => {

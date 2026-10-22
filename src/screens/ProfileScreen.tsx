@@ -2104,7 +2104,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Bio / Profile Description</label>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Status</label>
                         <span className={`text-[10px] font-bold ${bio.length >= 50 ? 'text-rose-500' : 'text-slate-400'}`}>
                           {bio.length}/50
                         </span>
@@ -2114,11 +2114,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                         onChange={(e) => setBio(e.target.value.slice(0, 50))}
                         maxLength={50}
                         rows={2}
-                        placeholder="e.g. Unto God I believe."
+                        placeholder="Write something about yourself..."
                         className="w-full text-xs rounded-xl border border-slate-200 dark:border-slate-700 p-2.5 text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
                       />
                       <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                        Short profile description (max 50 characters)
+                        Personal status (max 50 characters)
                       </p>
                     </div>
                   </div>

@@ -370,9 +370,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         emergencyHomePhone: cleanPhone,
         department: regAccountType === 'Student' ? regDept : '',
         level: regAccountType === 'Student' ? regLevel : '',
-        bio: regAccountType === 'Student'
-          ? `Student in ${regDept} (${regLevel}) at FUHSI Ila-Orangun.`
-          : `Community Guest member on FUHSI-Connect.`,
+        bio: '',
         avatarKey,
         badgeType: 'GREEN',
         badgeTitle: regAccountType === 'Student' ? 'FUHSI Student' : 'Guest',
