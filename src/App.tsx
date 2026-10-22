@@ -3109,7 +3109,7 @@ export const App: React.FC = () => {
       positionTitle: isGuest ? '' : positionTitle,
       matricNumber: isGuest ? '' : (userProfile.matricNumber || data?.matricNumber || 'N/A'),
       proofDetails: data?.proofDetails || (isGuest ? 'Guest Account Verification Request' : (positionTitle ? `Position Held: ${positionTitle}` : 'Standard Verification Request')),
-      paymentRef: data?.paymentRef || `SQUADCO-9G4DX4-${Math.floor(100000 + Math.random() * 900000)}`,
+      paymentRef: data?.paymentRef || `VERIF-9G4DX4-${Math.floor(100000 + Math.random() * 900000)}`,
       amountPaid: data?.amountPaid || 1500,
       statement: data?.statement || (isGuest ? 'Guest Account Verification' : `Category: ${accountType}${positionTitle ? ` | Position: ${positionTitle}` : ''} | Name: ${userProfile.realName || userProfile.nickname || 'Student'} | Dept: ${userProfile.department || 'FUHSI'} (${userProfile.level || 'N/A'})`),
       timestamp: new Date().toISOString(),
@@ -3426,7 +3426,7 @@ export const App: React.FC = () => {
       const updatedUser: UserProfile = {
         ...userProfile,
         isVerified: false,
-        verificationStatus: 'rejected' as const,
+        verificationStatus: 'unverified' as const,
         badgeType: 'NONE' as const,
         badgeTitle: '',
         updatedAt: nowIso,
@@ -3448,7 +3448,7 @@ export const App: React.FC = () => {
           const updatedRecord: UserProfile = {
             ...u,
             isVerified: false,
-            verificationStatus: 'rejected' as const,
+            verificationStatus: 'unverified' as const,
             badgeType: 'NONE' as const,
             badgeTitle: '',
             updatedAt: new Date().toISOString(),
@@ -3524,9 +3524,6 @@ export const App: React.FC = () => {
         })
       );
     }
-
-    // 7. Deliver single, simple verification revocation notification to user
-    sendVerificationRevokedNotification(cleanTarget);
 
     // 7. Dispatch events across window for immediate real-time update
     if (typeof window !== 'undefined') {

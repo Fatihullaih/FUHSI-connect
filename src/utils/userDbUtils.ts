@@ -1390,11 +1390,9 @@ export function updateUserBadgeAndVerification(
     }
   } catch (e) {}
 
-  // 6. Deliver instant in-app notification to the target user
+  // 6. Deliver instant in-app notification to the target user if verified
   if (isVerified) {
     sendVerificationNotification(cleanTarget, effectiveBadgeType, wasAlreadyVerified);
-  } else {
-    sendVerificationRevokedNotification(cleanTarget);
   }
 
   // 7. Dispatch custom event for real-time reactivity across active views
@@ -1481,81 +1479,39 @@ export function sendVerificationNotification(
 // In-memory debounce lock to guarantee no double notifications can ever enter simultaneously
 const lastRevokedTimestamps: Record<string, number> = {};
 
-/**
- * Helper to dispatch in-app notification when an admin removes or revokes a user's verification badge.
- * Delivers exactly one simple notification:
- * Title: 'Account Verification Revoked'
- * Message: 'Your verification badge has been removed.'
- * Deduplicates strictly so 2 notifications never enter at the same time.
- */
 export function sendVerificationRevokedNotification(targetNickname: string): void {
   if (!targetNickname) return;
   const cleanTarget = targetNickname.trim().toLowerCase().replace(/^@/, '');
   const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-  const now = Date.now();
-
-  // 1. In-memory debounce: if a revocation notification was sent within 30 seconds, block completely
-  if (lastRevokedTimestamps[cleanTarget] && now - lastRevokedTimestamps[cleanTarget] < 30000) {
-    return;
-  }
-  lastRevokedTimestamps[cleanTarget] = now;
 
   try {
     const storedNotifs = localStorage.getItem(notifKey);
-    let existingNotifs: any[] = storedNotifs ? JSON.parse(storedNotifs) : [];
+    if (!storedNotifs) return;
+    let existingNotifs: any[] = JSON.parse(storedNotifs);
 
-    // 2. Filter out any unwanted verbose "Verification Update" notifications from history
+    // Clean up any internal revocation or review explanation messages from history
     existingNotifs = existingNotifs.filter((n: any) => {
       if (!n) return false;
       const title = String(n.title || '').toLowerCase();
       const msg = String(n.message || '').toLowerCase();
-      if (title === 'verification update' || title.includes('verification update')) {
+      if (title.includes('revoked') || title.includes('verification update')) {
         return false;
       }
       if (
         msg.includes('verification status has been reviewed') ||
         msg.includes('has been reviewed and updated') ||
-        msg.includes('the verification badge has been removed from your account')
+        msg.includes('the verification badge has been removed from your account') ||
+        msg.includes('revoked your verification')
       ) {
         return false;
       }
       return true;
     });
 
-    // 3. Storage deduplication: prevent duplicate revocation notification within 30 seconds
-    const isRecentDuplicate = existingNotifs.some((n: any) =>
-      n.title === 'Account Verification Revoked' &&
-      (n._actionTimestamp ? now - n._actionTimestamp < 30000 : n.timestamp === 'Just now')
-    );
-    if (isRecentDuplicate) {
-      // Save purged list even if we don't append a new one
-      localStorage.setItem(notifKey, JSON.stringify(existingNotifs));
-      return;
-    }
-
-    const badgeNotif = {
-      id: `badge_rev_${now}_${Math.random().toString(36).substring(2, 6)}`,
-      type: 'VERIFICATION',
-      title: 'Account Verification Revoked',
-      message: 'Your verification badge has been removed.',
-      timestamp: 'Just now',
-      isRead: false,
-      _actionTimestamp: now,
-    };
-
-    const updatedNotifs = [badgeNotif, ...existingNotifs];
-    localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
-    pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
-
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('fuhsi_notification_received', {
-          detail: { targetNickname: cleanTarget, notif: badgeNotif },
-        })
-      );
-    }
+    localStorage.setItem(notifKey, JSON.stringify(existingNotifs));
+    pushServerDbSync({ notifications: { [cleanTarget]: existingNotifs } } as any).catch(() => {});
   } catch (e) {
-    console.error('Error sending verification revocation notification:', e);
+    console.error('Error cleaning up notifications:', e);
   }
 }
 

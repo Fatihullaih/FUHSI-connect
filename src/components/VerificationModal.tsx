@@ -95,101 +95,81 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
   );
   const [positionTitle, setPositionTitle] = useState('');
 
-  const [showPaymentGateway, setShowPaymentGateway] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<'card' | 'transfer' | 'ussd'>('card');
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isSubmittedSuccess, setIsSubmittedSuccess] = useState(false);
   const [submittedPaymentRef, setSubmittedPaymentRef] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   const isAlreadyVerified = useMemo(() => {
-    if (userProfile?.isVerified || userProfile?.verificationStatus === 'approved') return true;
-    try {
-      const vStr = localStorage.getItem('fuhsi_verifications_db');
-      if (vStr && userProfile?.nickname) {
-        const vList: any[] = JSON.parse(vStr);
-        const cleanNick = (userProfile?.nickname || '').toLowerCase().replace(/^@/, '');
-        return vList.some(
-          (v) =>
-            v.status === 'APPROVED' &&
-            v.requestType !== 'STUDENT_CONVERSION' &&
-            v.category !== 'Student Conversion Subscription' &&
-            (v.applicantNickname?.toLowerCase().replace(/^@/, '') === cleanNick ||
-              v.applicantNickname?.toLowerCase() === (userProfile?.nickname || '').toLowerCase())
-        );
-      }
-    } catch (e) {
-      console.error(e);
+    if (!userProfile?.isVerified) return false;
+    return userProfile.verificationStatus === 'approved' || userProfile.verificationStatus === 'verified';
+  }, [userProfile]);
+
+  const isPending = useMemo(() => {
+    if (isAlreadyVerified) return false;
+    if (isSubmittedSuccess) return true;
+    if (userProfile?.verificationStatus === 'pending') {
+      try {
+        const vStr = localStorage.getItem('fuhsi_verifications_db');
+        if (vStr && userProfile?.nickname) {
+          const vList: any[] = JSON.parse(vStr);
+          const cleanNick = (userProfile.nickname || '').toLowerCase().replace(/^@/, '');
+          const myRequests = vList.filter(
+            (v) =>
+              (v.applicantNickname?.toLowerCase().replace(/^@/, '') === cleanNick ||
+                v.applicantNickname?.toLowerCase() === userProfile.nickname?.toLowerCase())
+          );
+          if (myRequests.length > 0) {
+            const latest = myRequests[0];
+            if (latest.status === 'REVOKED' || latest.status === 'DECLINED' || latest.status === 'REJECTED') {
+              return false;
+            }
+            return latest.status === 'PENDING';
+          }
+        }
+      } catch (e) {}
+      return true;
     }
     return false;
-  }, [userProfile]);
-  const isPending = userProfile?.verificationStatus === 'pending' || isSubmittedSuccess;
+  }, [isAlreadyVerified, isSubmittedSuccess, userProfile]);
 
-  const handleOpenPaymentGateway = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Temporarily disabled per user request: clicking "Subscribe & Pay" does nothing / takes nowhere at the moment.
-    return;
-
-    /* PREVIOUS IMPLEMENTATION - READY TO RESTORE WHEN REQUESTED:
+  const handleSubscribe = () => {
     setErrorMsg('');
-
-    const ref = `SQUADCO-9G4DX4-${Math.floor(100000 + Math.random() * 900000)}`;
+    const effAccountType = isGuest ? 'Guest' : accountType;
+    const ref = `VERIF-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
     setSubmittedPaymentRef(ref);
 
-    const effAccountType = isGuest ? 'Guest' : accountType;
-
-    // Submit details
-    onSubmitVerification({
-      accountType: effAccountType,
-      positionTitle: isGuest ? '' : positionTitle.trim(),
-      matricNumber: isGuest ? '' : (userProfile?.matricNumber || 'N/A'),
-      department: isGuest ? '' : (userProfile?.department || 'N/A'),
-      level: isGuest ? '' : (userProfile?.level || 'N/A'),
-      proofDetails: isGuest
-        ? 'Guest Verification Request'
-        : (positionTitle.trim() ? `Position Held: ${positionTitle.trim()}` : 'Standard Verification Request'),
-      paymentRef: ref,
-      amountPaid: feeAmount,
-    });
+    if (onSubmitVerification) {
+      onSubmitVerification({
+        accountType: effAccountType,
+        positionTitle: isGuest ? '' : positionTitle.trim(),
+        matricNumber: isGuest ? '' : (userProfile?.matricNumber || 'N/A'),
+        department: isGuest ? '' : (userProfile?.department || 'N/A'),
+        level: isGuest ? '' : (userProfile?.level || 'N/A'),
+        proofDetails: isGuest
+          ? 'Guest Verification Application'
+          : (positionTitle.trim() ? `Position Held: ${positionTitle.trim()}` : 'Student Verification Application'),
+        paymentRef: ref,
+        amountPaid: feeAmount,
+      });
+    }
 
     setIsSubmittedSuccess(true);
-
-    // Redirect user to SquadCo Payment Gateway
-    try {
-      window.open('https://pay.squadco.com/9G4DX4', '_blank');
-    } catch {
-      // Fallback if popups are blocked
-    }
-    */
   };
 
-  const handleSimulatePayment = () => {
-    setIsProcessingPayment(true);
-    setTimeout(() => {
-      const ref = `PAY-FUHSI-${Math.floor(100000 + Math.random() * 900000)}`;
-      setSubmittedPaymentRef(ref);
-      setIsProcessingPayment(false);
-      setShowPaymentGateway(false);
-
-      const effAccountType = isGuest ? 'Guest' : accountType;
-
-      if (onSubmitVerification) {
-        onSubmitVerification({
-          accountType: effAccountType,
-          positionTitle: isGuest ? '' : positionTitle.trim(),
-          matricNumber: isGuest ? '' : (userProfile?.matricNumber || 'N/A'),
-          department: isGuest ? '' : (userProfile?.department || 'N/A'),
-          level: isGuest ? '' : (userProfile?.level || 'N/A'),
-          proofDetails: isGuest
-            ? 'Guest Verification Request'
-            : (positionTitle.trim() ? `Position Held: ${positionTitle.trim()}` : 'Verified via subscription gateway'),
-          paymentRef: ref,
-          amountPaid: feeAmount,
-        });
-      }
-
-      setIsSubmittedSuccess(true);
-    }, 1800);
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleSubscribe();
+    try {
+      const link = document.createElement('a');
+      link.href = 'https://pay.squadco.com/9G4DX4';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch {
+      window.location.href = 'https://pay.squadco.com/9G4DX4';
+    }
   };
 
   return (
@@ -251,11 +231,11 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
           ) : isPending ? (
             <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-3">
-                <Clock className="w-6 h-6 text-amber-600 shrink-0 animate-pulse" />
+                <Clock className="w-6 h-6 text-amber-600 shrink-0" />
                 <div>
-                  <span className="font-extrabold text-sm text-amber-900">Verification Application Submitted</span>
+                  <span className="font-extrabold text-sm text-amber-900">Application Pending</span>
                   <p className="text-xs text-amber-800 font-medium mt-0.5">
-                    Your request reference: <strong className="font-mono text-slate-900">{submittedPaymentRef || 'PAY-SQUADCO-SUBMITTED'}</strong>
+                    Reference: <strong className="font-mono text-slate-900">{submittedPaymentRef || 'PENDING'}</strong>
                   </p>
                 </div>
               </div>
@@ -263,9 +243,9 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 href="https://pay.squadco.com/9G4DX4"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-200/80 hover:bg-amber-300 text-amber-950 text-xs font-black transition-colors shrink-0"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-black transition-colors shrink-0 cursor-pointer"
               >
-                <span>Open SquadCo Pay</span>
+                <span>Payment Page</span>
                 <ExternalLink size={13} />
               </a>
             </div>
@@ -312,7 +292,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
           {/* Form & Fee Section (if not yet verified/pending) */}
           {!isAlreadyVerified && !isPending && (
-            <form onSubmit={handleOpenPaymentGateway} className="pt-3 border-t border-slate-200 space-y-4">
+            <form onSubmit={handleFormSubmit} className="pt-3 border-t border-slate-200 space-y-4">
               {errorMsg && (
                 <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
                   <AlertCircle size={16} className="text-rose-600 shrink-0" />
@@ -401,11 +381,11 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
                 <div className="text-right text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
                   <Lock size={12} className="text-emerald-500 dark:text-emerald-400" />
-                  <span>Secure Payment Gateway</span>
+                  <span>Secure Payment</span>
                 </div>
               </div>
 
-              {/* Subscribe & Pay Button */}
+              {/* Subscribe Button */}
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
@@ -415,18 +395,17 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                   Cancel
                 </button>
                 
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    // Inactive at the moment per user request - clicking does nothing
-                  }}
+                <a
+                  href="https://pay.squadco.com/9G4DX4"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={handleSubscribe}
                   className="bg-teal-700 hover:bg-teal-800 text-white px-6 py-3 rounded-full text-xs font-black transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
                 >
                   <CreditCard size={16} />
-                  <span>Subscribe & Pay ₦{feeAmount.toLocaleString()}</span>
+                  <span>Subscribe</span>
                   <ArrowRight size={14} />
-                </button>
+                </a>
               </div>
             </form>
           )}
@@ -446,145 +425,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         </div>
 
       </div>
-
-      {/* Interactive Payment Gateway Modal */}
-      {showPaymentGateway && (
-        <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 max-w-md w-full rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200">
-            {/* Payment Header */}
-            <div className="bg-teal-800 dark:bg-slate-950 text-white p-4 flex items-center justify-between border-b border-teal-900/40 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <Lock className="w-4 h-4 text-emerald-400" />
-                <span className="font-extrabold text-xs tracking-wider uppercase">FUHSI Connect Secure Pay</span>
-              </div>
-              <button
-                onClick={() => setShowPaymentGateway(false)}
-                className="p-1 rounded-full text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <div className="text-center space-y-1">
-                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Verification Subscription</span>
-                <div className="text-2xl font-black text-slate-900">₦{feeAmount.toLocaleString()}</div>
-                <p className="text-xs text-slate-600 font-medium">
-                  {userProfile?.nickname} • {isGuest ? 'Guest' : accountType} {!isGuest && positionTitle ? `(${positionTitle})` : ''}
-                </p>
-              </div>
-
-              {/* Method Tabs */}
-              <div className="grid grid-cols-3 gap-2 bg-slate-100 p-1 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('card')}
-                  className={`py-1.5 text-xs font-extrabold rounded-lg transition-colors cursor-pointer ${
-                    paymentMethod === 'card' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
-                  }`}
-                >
-                  Card
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('transfer')}
-                  className={`py-1.5 text-xs font-extrabold rounded-lg transition-colors cursor-pointer ${
-                    paymentMethod === 'transfer' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
-                  }`}
-                >
-                  Bank Transfer
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('ussd')}
-                  className={`py-1.5 text-xs font-extrabold rounded-lg transition-colors cursor-pointer ${
-                    paymentMethod === 'ussd' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
-                  }`}
-                >
-                  USSD
-                </button>
-              </div>
-
-              {paymentMethod === 'card' && (
-                <div className="space-y-2 text-xs">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Card Number</label>
-                    <input
-                      type="text"
-                      readOnly
-                      value="5399 •••• •••• 4021"
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 font-mono text-slate-700"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Expiry</label>
-                      <input
-                        type="text"
-                        readOnly
-                        value="08/28"
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 font-mono text-slate-700"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">CVV</label>
-                      <input
-                        type="text"
-                        readOnly
-                        value="***"
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 font-mono text-slate-700"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {paymentMethod === 'transfer' && (
-                <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200 text-sky-950 space-y-1.5 text-xs">
-                  <div className="flex items-center justify-between font-bold">
-                    <span>Bank Name:</span>
-                    <span>FUHSI Microfinance Bank</span>
-                  </div>
-                  <div className="flex items-center justify-between font-bold">
-                    <span>Account No:</span>
-                    <span className="font-mono text-sm text-sky-900">8031234567</span>
-                  </div>
-                  <div className="flex items-center justify-between font-bold">
-                    <span>Account Name:</span>
-                    <span>FUHSI Connect Verifications</span>
-                  </div>
-                </div>
-              )}
-
-              {paymentMethod === 'ussd' && (
-                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 text-center space-y-1 text-xs">
-                  <span className="font-extrabold text-amber-900 block">Dial USSD Code:</span>
-                  <span className="font-mono text-base font-black text-amber-950 block">*737*2*1500*8031234567#</span>
-                </div>
-              )}
-
-              <button
-                type="button"
-                disabled={isProcessingPayment}
-                onClick={handleSimulatePayment}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-2xl font-black text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {isProcessingPayment ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>Processing Secure Payment...</span>
-                  </>
-                ) : (
-                  <>
-                    <Check size={16} />
-                    <span>Confirm & Complete Payment ₦{feeAmount.toLocaleString()}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

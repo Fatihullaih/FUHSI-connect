@@ -1065,7 +1065,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                           {userProfile?.isVerified
                             ? 'Account is officially verified with badge & benefits'
                             : userProfile?.verificationStatus === 'pending'
-                            ? 'Verification application is currently pending review'
+                            ? 'Verification application pending'
                             : isGuest
                             ? 'Apply for official Guest verification checkmark badge & benefits'
                             : 'Apply for official student verification badge & benefits'}
