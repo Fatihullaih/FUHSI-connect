@@ -1063,7 +1063,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                         <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                           {userProfile?.isVerified
                             ? 'Account is officially verified with badge & benefits'
-                            : 'Account verification will be available soon'}
+                            : 'Coming soon'}
                         </p>
                       </div>
                     </div>

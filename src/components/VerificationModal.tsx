@@ -211,139 +211,62 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         </div>
 
         {/* Scrollable Main Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-
-          {/* Intro Description */}
-          <div className="bg-gradient-to-br from-teal-800 via-teal-900 to-emerald-900 dark:from-teal-950 dark:via-slate-900 dark:to-slate-950 text-white rounded-2xl p-4 sm:p-5 shadow-sm space-y-2 border border-teal-700/40 dark:border-teal-800/40">
-            <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-              Get Verified on FUHSI Connect
-            </h1>
-            <p className="text-xs sm:text-sm text-teal-100 dark:text-slate-300 font-medium leading-relaxed">
-              Verification provides additional benefits and helps users access exclusive features on the platform, establishing high trust for students, campus executives, and student organizations.
-            </p>
+        {IS_VERIFICATION_COMING_SOON && !isAlreadyVerified ? (
+          <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center text-center space-y-4">
+            <div className="w-16 h-16 rounded-3xl bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center shadow-xs">
+              <Clock className="w-8 h-8 text-teal-600 dark:text-teal-400" />
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-slate-900 dark:text-slate-100 tracking-tight">
+                Coming Soon
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-xs leading-relaxed">
+                This feature is not available yet.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
+              className="mt-2 bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
+            >
+              {embedded ? 'Back to Settings' : 'Close'}
+            </button>
           </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
 
-          {/* MODE 1: USER IS ALREADY VERIFIED */}
-          {isAlreadyVerified ? (
-            <>
-              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex items-center gap-3 shadow-xs">
-                <CheckCircle className="w-6 h-6 text-emerald-600 shrink-0" />
-                <div className="font-extrabold text-sm text-emerald-900 flex items-center gap-2">
-                  <span>Your Account is Verified</span>
-                  <VerificationBadge isVerified badgeType={userProfile?.badgeType} title={userProfile?.badgeTitle} showTitle />
-                </div>
-              </div>
+            {/* Intro Description */}
+            <div className="bg-gradient-to-br from-teal-800 via-teal-900 to-emerald-900 dark:from-teal-950 dark:via-slate-900 dark:to-slate-950 text-white rounded-2xl p-4 sm:p-5 shadow-sm space-y-2 border border-teal-700/40 dark:border-teal-800/40">
+              <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                Get Verified on FUHSI Connect
+              </h1>
+              <p className="text-xs sm:text-sm text-teal-100 dark:text-slate-300 font-medium leading-relaxed">
+                Verification provides additional benefits and helps users access exclusive features on the platform, establishing high trust for students, campus executives, and student organizations.
+              </p>
+            </div>
 
-              {/* Active Verification Benefits */}
-              <div className="space-y-3">
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
-                  Active Verification Benefits
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-800 dark:text-slate-200 font-bold">
-                  {(isGuest
-                    ? [
-                        'Verification Checkmark',
-                        'Editable Threads',
-                        'Higher Trust & Credibility',
-                        'Eligibility for Future Features',
-                      ]
-                    : [
-                        'Verified Checkmark',
-                        'Higher Trust and Credibility',
-                        'Editable Thread',
-                        'Handle Marketplace',
-                        'Priority Support',
-                        'Eligibility for Future Premium Features',
-                      ]
-                  ).map((benefit, idx) => (
-                    <div key={idx} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 flex items-center gap-2.5">
-                      <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>{benefit}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="pt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
-                  className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
-                >
-                  {embedded ? 'Back to Settings' : 'Close Window'}
-                </button>
-              </div>
-            </>
-          ) : IS_VERIFICATION_COMING_SOON ? (
-            /* MODE 2: COMING SOON VIEW (Active while payment gateway is being finalized) */
-            <>
-              <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-b from-teal-50/90 to-white dark:from-slate-800/90 dark:to-slate-900 border border-teal-200/80 dark:border-slate-700 text-center space-y-4 shadow-sm">
-                <div className="w-16 h-16 mx-auto rounded-3xl bg-teal-600/10 dark:bg-teal-400/10 text-teal-700 dark:text-teal-300 flex items-center justify-center shadow-xs">
-                  <Sparkles className="w-8 h-8 text-teal-600 dark:text-teal-400" />
-                </div>
-                
-                <div className="space-y-2 max-w-md mx-auto">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-extrabold border border-teal-200 dark:border-teal-800">
-                    <Clock size={13} />
-                    <span>Coming Soon</span>
+            {/* USER IS ALREADY VERIFIED */}
+            {isAlreadyVerified ? (
+              <>
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex items-center gap-3 shadow-xs">
+                  <CheckCircle className="w-6 h-6 text-emerald-600 shrink-0" />
+                  <div className="font-extrabold text-sm text-emerald-900 flex items-center gap-2">
+                    <span>Your Account is Verified</span>
+                    <VerificationBadge isVerified badgeType={userProfile?.badgeType} title={userProfile?.badgeTitle} showTitle />
                   </div>
-                  <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-100 tracking-tight">
-                    Verification Coming Soon
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
-                    Official account verification is currently being updated. We are finalizing our secure payment system so you can enjoy a smooth, reliable verification process.
-                  </p>
                 </div>
 
-                <div className="p-3.5 bg-teal-50/70 dark:bg-slate-800/80 rounded-2xl border border-teal-100 dark:border-slate-700 text-teal-900 dark:text-teal-200 text-xs font-bold max-w-sm mx-auto flex items-center justify-center gap-2">
-                  <ShieldCheck size={16} className="text-teal-600 shrink-0" />
-                  <span>Verification applications will open shortly</span>
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
+                    className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer"
+                  >
+                    {embedded ? 'Back to Settings' : 'Close Window'}
+                  </button>
                 </div>
-              </div>
-
-              {/* Upcoming Verification Benefits */}
-              <div className="space-y-3">
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
-                  Upcoming Verification Benefits
-                </h3>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-800 dark:text-slate-200 font-bold">
-                  {(isGuest
-                    ? [
-                        'Verification Checkmark',
-                        'Editable Threads',
-                        'Higher Trust & Credibility',
-                        'Eligibility for Future Features',
-                      ]
-                    : [
-                        'Verified Checkmark',
-                        'Higher Trust and Credibility',
-                        'Editable Thread',
-                        'Handle Marketplace',
-                        'Priority Support',
-                        'Eligibility for Future Premium Features',
-                      ]
-                  ).map((benefit, idx) => (
-                    <div key={idx} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 flex items-center gap-2.5">
-                      <CheckCircle className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0" />
-                      <span>{benefit}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Return to Settings Button */}
-              <div className="pt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={embedded && onBackToSettings ? onBackToSettings : onClose}
-                  className="bg-teal-800 hover:bg-teal-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 py-2.5 rounded-full text-xs font-black transition-colors cursor-pointer shadow-xs"
-                >
-                  {embedded ? 'Back to Settings' : 'Close'}
-                </button>
-              </div>
-            </>
-          ) : (
+              </>
+            ) : (
             /* MODE 3: ACTIVE APPLICATION & PAYMENT FLOW (When IS_VERIFICATION_COMING_SOON is false) */
             <>
               {isPending ? (
@@ -539,6 +462,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
           )}
 
         </div>
+      )}
 
       </div>
     </div>
