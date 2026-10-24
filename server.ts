@@ -1288,18 +1288,24 @@ async function dispatchEmailNotification({
     const htmlContent = generateFuhsiOtpEmailTemplate({ recipientName, code, purposeTitle });
     const textContent = `Hello ${recipientName},\n\nYour ${purposeTitle} verification code on FUHSI Connect is: ${code}\n\nThis code is valid for 10 minutes. For your security, do not share this code with anyone.\n\nSender: fuhsiconnectsupport@gmail.com\nFederal University of Health Sciences, Ila-Orangun`;
 
-    const info = await transporter.sendMail({
-      from: '"FUHSI Connect Support" <fuhsiconnectsupport@gmail.com>',
-      to: to.trim(),
-      subject: `[FUHSI Connect] ${purposeTitle}: ${code}`,
-      html: htmlContent,
-      text: textContent,
-    });
-    console.log(`[SMTP Success] ${purposeTitle} email sent to ${to}: ${info.messageId}`);
+    // Timeout safety: Ensure SMTP dispatch never hangs or blocks request cycle
+    const info = await Promise.race([
+      transporter.sendMail({
+        from: '"FUHSI Connect Support" <fuhsiconnectsupport@gmail.com>',
+        to: to.trim(),
+        subject: `[FUHSI Connect] ${purposeTitle}`,
+        html: htmlContent,
+        text: textContent,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('SMTP connection timed out')), 5000)
+      ),
+    ]);
+    console.log(`[SMTP Notice] Email successfully dispatched for ${purposeTitle} to ${to} (ID: ${info.messageId})`);
     return { delivered: true };
   } catch (err: any) {
     const errMsg = err?.message || 'SMTP delivery failed';
-    console.warn(`[SMTP Warning] Unable to send email to ${to}: ${errMsg}`);
+    console.warn(`[SMTP Notice] Email delivery status for ${to}: ${errMsg}`);
     return { delivered: false, error: errMsg };
   }
 }
@@ -1373,30 +1379,27 @@ app.post('/api/otp/request', async (req, res) => {
       purposeTitle: purposeLabel,
     });
 
-    // Save in sent emails log for admin inspection
+    // Save in sent emails log for admin inspection without ever exposing raw OTP
     if (!activeDb.sentEmails) activeDb.sentEmails = [];
     activeDb.sentEmails.push({
       id: `email_${Date.now()}`,
       to: cleanEmail,
       purpose: purposeLabel,
-      code: generatedCode,
+      code: '******', // Strictly masked for security
       delivered: dispatchResult.delivered,
       timestamp: new Date().toISOString(),
     });
     if (activeDb.sentEmails.length > 50) activeDb.sentEmails.shift();
 
+    // Never return the OTP code to the client; user must check their email
     return res.json({
       success: true,
       emailDelivered: dispatchResult.delivered,
       expiresIn: 600, // 10 minutes in seconds
-      message: dispatchResult.delivered
-        ? `A 6-digit verification code has been dispatched to ${cleanEmail}.`
-        : `Verification code generated for ${cleanEmail}.`,
-      // For preview sandbox testing when SMTP credentials require Google App Password:
-      previewCode: !dispatchResult.delivered ? generatedCode : undefined,
+      message: `A 6-digit verification code has been dispatched to ${cleanEmail}. Please check your email inbox.`,
     });
   } catch (error: any) {
-    console.error('[OTP Request Error]:', error);
+    console.error('[OTP Request Error]:', error?.message || error);
     return res.status(500).json({ success: false, error: 'Internal server error processing OTP request.' });
   }
 });

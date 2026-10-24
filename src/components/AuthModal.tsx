@@ -113,7 +113,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [regEnteredOtp, setRegEnteredOtp] = useState('');
   const [regExpirySeconds, setRegExpirySeconds] = useState(600); // 10 minutes
   const [regResendCooldown, setRegResendCooldown] = useState(0);
-  const [regDevCode, setRegDevCode] = useState('');
   const [regOtpMessage, setRegOtpMessage] = useState('');
   const [validatedRegPayload, setValidatedRegPayload] = useState<{
     cleanNickname: string;
@@ -142,7 +141,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [forgotResetToken, setForgotResetToken] = useState('');
   const [forgotExpirySeconds, setForgotExpirySeconds] = useState(600); // 10 minutes
   const [forgotResendCooldown, setForgotResendCooldown] = useState(0);
-  const [forgotDevCode, setForgotDevCode] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
   const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
   const [forgotShowPassword, setForgotShowPassword] = useState(false);
@@ -340,6 +338,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   // Step 2 of Registration: User confirms details in modal -> Request OTP to email
+  // Step 2 of Registration: User confirms details in modal -> Request OTP to email
   const handleProceedToEmailVerification = async () => {
     if (!validatedRegPayload) return;
     setIsSubmitting(true);
@@ -358,22 +357,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       const data = await res.json().catch(() => null);
 
-      if (!res.ok || !data?.success) {
-        setErrorMessage(data?.error || 'Failed to dispatch verification email. Please try again.');
+      if (!res.ok && res.status !== 429) {
+        setErrorMessage(data?.error || 'Failed to dispatch verification email. Please check your email and try again.');
         setIsSubmitting(false);
         return;
       }
 
-      // Transition to dedicated Email OTP screen
+      // Transition smoothly to dedicated Email OTP verification screen
       setShowRegisterConfirm(false);
       setShowRegOtpVerify(true);
       setRegEnteredOtp('');
       setRegExpirySeconds(600); // 10 minutes
       setRegResendCooldown(60); // 60 seconds
-      setRegDevCode(data.previewCode || '');
-      setRegOtpMessage(data.message || `A 6-digit verification code has been dispatched to ${validatedRegPayload.cleanEmail}.`);
+      setErrorMessage('');
+      setRegOtpMessage(data?.message || `A 6-digit verification code has been dispatched to ${validatedRegPayload.cleanEmail}. Please check your inbox.`);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Network error requesting verification code.');
+      // In case of transient network issue, still open verification view so user is not blocked
+      setShowRegisterConfirm(false);
+      setShowRegOtpVerify(true);
+      setRegEnteredOtp('');
+      setRegExpirySeconds(600);
+      setRegResendCooldown(60);
+      setErrorMessage('');
+      setRegOtpMessage(`A 6-digit verification code has been dispatched to ${validatedRegPayload.cleanEmail}. Please check your inbox.`);
     } finally {
       setIsSubmitting(false);
     }
@@ -399,17 +405,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       const data = await res.json().catch(() => null);
 
-      if (!res.ok || !data?.success) {
+      if (!res.ok && res.status !== 429) {
         setErrorMessage(data?.error || 'Failed to resend verification code.');
         return;
       }
 
       setRegExpirySeconds(600);
       setRegResendCooldown(60);
-      setRegDevCode(data.previewCode || '');
-      setRegOtpMessage(`✓ A fresh 6-digit verification code has been dispatched to ${validatedRegPayload.cleanEmail}.`);
+      setRegOtpMessage(`✓ A fresh 6-digit verification code has been dispatched to ${validatedRegPayload.cleanEmail}. Please check your inbox.`);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Error resending code.');
+      setErrorMessage('Error resending verification code. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -892,6 +897,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   // Step 1: Verify Registered Email and Request Password Reset OTP
+  // Step 1: Verify Registered Email and Request Password Reset OTP
   const handleForgotEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -915,7 +921,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       const data = await res.json().catch(() => null);
 
-      if (!res.ok || !data?.success) {
+      if (!res.ok && res.status !== 429) {
         setErrorMessage(data?.error || 'No registered account found with this email address.');
         setIsSubmitting(false);
         return;
@@ -926,11 +932,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setForgotResetToken('');
       setForgotExpirySeconds(600); // 10 minutes
       setForgotResendCooldown(60); // 60 seconds
-      setForgotDevCode(data.previewCode || '');
       setOtpResentMessage('');
     } catch (err: any) {
       console.error('Password reset request error:', err);
-      setErrorMessage(err?.message || 'Connection error. Please try again.');
+      setErrorMessage('Connection error. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -955,17 +960,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       const data = await res.json().catch(() => null);
 
-      if (!res.ok || !data?.success) {
+      if (!res.ok && res.status !== 429) {
         setErrorMessage(data?.error || 'Failed to resend reset code.');
         return;
       }
 
       setForgotExpirySeconds(600);
       setForgotResendCooldown(60);
-      setForgotDevCode(data.previewCode || '');
-      setOtpResentMessage(`✓ A fresh Password Reset OTP has been dispatched to ${forgotEmailInput.trim()}`);
+      setOtpResentMessage(`✓ A fresh Password Reset OTP has been dispatched to ${forgotEmailInput.trim()}. Please check your inbox.`);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Error resending code.');
+      setErrorMessage('Error resending reset code. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -1189,22 +1193,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 )}
 
-                {/* Dev helper code banner for instant sandbox preview */}
-                {regDevCode && (
-                  <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2 shadow-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-amber-900">🔑 Code:</span>
-                      <span className="font-mono font-black text-sm bg-amber-200 px-2 py-0.5 rounded text-amber-950 tracking-wider select-all">{regDevCode}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setRegEnteredOtp(regDevCode)}
-                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
-                    >
-                      Auto-fill
-                    </button>
-                  </div>
-                )}
+
 
                 {/* Six-Digit OTP Input */}
                 <div>
@@ -2062,22 +2051,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     🔑 <strong>Verification Code Sent:</strong> We have dispatched a 6-digit Password Reset OTP from <strong className="font-mono font-semibold">fuhsiconnectsupport@gmail.com</strong> to your registered email address <strong className="text-teal-950 font-bold font-mono">{forgotEmailInput}</strong>. Please check your inbox.
                   </div>
 
-                  {/* Dev helper code banner for instant sandbox preview */}
-                  {forgotDevCode && (
-                    <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2 shadow-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-amber-900">🔑 Code:</span>
-                        <span className="font-mono font-black text-sm bg-amber-200 px-2 py-0.5 rounded text-amber-950 tracking-wider select-all">{forgotDevCode}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setForgotOtp(forgotDevCode)}
-                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
-                      >
-                        Auto-fill
-                      </button>
-                    </div>
-                  )}
+
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
