@@ -107,8 +107,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [matricConflictValue, setMatricConflictValue] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Registration Confirmation Step State
+  // Registration Confirmation Step & Email OTP State
   const [showRegisterConfirm, setShowRegisterConfirm] = useState(false);
+  const [showRegOtpVerify, setShowRegOtpVerify] = useState(false);
+  const [regEnteredOtp, setRegEnteredOtp] = useState('');
+  const [regExpirySeconds, setRegExpirySeconds] = useState(600); // 10 minutes
+  const [regResendCooldown, setRegResendCooldown] = useState(0);
+  const [regDevCode, setRegDevCode] = useState('');
+  const [regOtpMessage, setRegOtpMessage] = useState('');
   const [validatedRegPayload, setValidatedRegPayload] = useState<{
     cleanNickname: string;
     cleanRealName: string;
@@ -120,12 +126,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     accountType: 'Student' | 'Guest';
     password: string;
   } | null>(null);
-
-  // OTP Verification State
-  const [verificationMethod, setVerificationMethod] = useState<'EMAIL' | 'PHONE'>('EMAIL');
-  const [generatedOtp, setGeneratedOtp] = useState('482910');
-  const [enteredOtp, setEnteredOtp] = useState('');
-  const [otpResentMessage, setOtpResentMessage] = useState('');
 
   // Login Form State
   const [loginIdentifier, setLoginIdentifier] = useState('');
@@ -139,10 +139,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [forgotEmailInput, setForgotEmailInput] = useState('');
   const [forgotUser, setForgotUser] = useState<any>(null);
   const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotResetToken, setForgotResetToken] = useState('');
+  const [forgotExpirySeconds, setForgotExpirySeconds] = useState(600); // 10 minutes
+  const [forgotResendCooldown, setForgotResendCooldown] = useState(0);
+  const [forgotDevCode, setForgotDevCode] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
   const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
   const [forgotShowPassword, setForgotShowPassword] = useState(false);
   const [resetSuccessMessage, setResetSuccessMessage] = useState('');
+  const [otpResentMessage, setOtpResentMessage] = useState('');
+
+  // 1-second countdown interval for OTP expiries and resend cooldowns
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setRegExpirySeconds((prev) => (prev > 0 ? prev - 1 : 0));
+      setRegResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      setForgotExpirySeconds((prev) => (prev > 0 ? prev - 1 : 0));
+      setForgotResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatCountdown = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // Secret Admin Portal Unlock State
   const [secretClickCount, setSecretClickCount] = useState(0);
@@ -161,30 +183,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   if (!isOpen) return null;
-
-  const sendOtpEmail = async (recipientEmail: string, otpCode: string, purpose: string, name?: string) => {
-    if (!recipientEmail || !recipientEmail.includes('@')) return;
-    try {
-      await fetch('/api/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: recipientEmail,
-          otp: otpCode,
-          purpose,
-          recipientName: name || 'FUHSI Student',
-        }),
-      });
-    } catch (err) {
-      console.error('Failed to dispatch OTP email via backend service:', err);
-    }
-  };
-
-  const generateNewOtp = () => {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(code);
-    return code;
-  };
 
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
@@ -341,10 +339,131 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setShowRegisterConfirm(true);
   };
 
-  const handleConfirmAndCreateAccount = async () => {
+  // Step 2 of Registration: User confirms details in modal -> Request OTP to email
+  const handleProceedToEmailVerification = async () => {
     if (!validatedRegPayload) return;
     setIsSubmitting(true);
     setErrorMessage('');
+
+    try {
+      const res = await fetch('/api/otp/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: validatedRegPayload.cleanEmail,
+          purpose: 'REGISTRATION',
+          recipientName: validatedRegPayload.cleanRealName,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.success) {
+        setErrorMessage(data?.error || 'Failed to dispatch verification email. Please try again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Transition to dedicated Email OTP screen
+      setShowRegisterConfirm(false);
+      setShowRegOtpVerify(true);
+      setRegEnteredOtp('');
+      setRegExpirySeconds(600); // 10 minutes
+      setRegResendCooldown(60); // 60 seconds
+      setRegDevCode(data.previewCode || '');
+      setRegOtpMessage(data.message || `A 6-digit verification code has been dispatched to ${validatedRegPayload.cleanEmail}.`);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Network error requesting verification code.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Resend Registration OTP
+  const handleResendRegistrationOtp = async () => {
+    if (!validatedRegPayload || regResendCooldown > 0) return;
+    setIsSubmitting(true);
+    setErrorMessage('');
+    setRegOtpMessage('');
+
+    try {
+      const res = await fetch('/api/otp/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: validatedRegPayload.cleanEmail,
+          purpose: 'REGISTRATION',
+          recipientName: validatedRegPayload.cleanRealName,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.success) {
+        setErrorMessage(data?.error || 'Failed to resend verification code.');
+        return;
+      }
+
+      setRegExpirySeconds(600);
+      setRegResendCooldown(60);
+      setRegDevCode(data.previewCode || '');
+      setRegOtpMessage(`✓ A fresh 6-digit verification code has been dispatched to ${validatedRegPayload.cleanEmail}.`);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Error resending code.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Step 4 of Registration: Verify OTP Code and Complete Account Creation
+  const handleVerifyRegistrationOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validatedRegPayload) return;
+    setErrorMessage('');
+
+    const trimmedOtp = regEnteredOtp.trim();
+    if (!trimmedOtp || !/^\d{6}$/.test(trimmedOtp)) {
+      setErrorMessage('Please enter the full 6-digit verification code.');
+      return;
+    }
+
+    if (regExpirySeconds <= 0) {
+      setErrorMessage('Verification code has expired. Please click "Resend Code" to receive a new code.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const verifyRes = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: validatedRegPayload.cleanEmail,
+          purpose: 'REGISTRATION',
+          code: trimmedOtp,
+        }),
+      });
+
+      const verifyData = await verifyRes.json().catch(() => null);
+
+      if (!verifyRes.ok || !verifyData?.success) {
+        setErrorMessage(verifyData?.error || 'Invalid verification code. Please check and try again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Code validated by server! Finalize registration
+      await completeAccountRegistrationAfterOtp(verifyData.token);
+    } catch (err: any) {
+      console.error('Registration verification error:', err);
+      setErrorMessage(err?.message || 'Error verifying code.');
+      setIsSubmitting(false);
+    }
+  };
+
+  const completeAccountRegistrationAfterOtp = async (_verificationToken?: string) => {
+    if (!validatedRegPayload) return;
 
     try {
       const {
@@ -398,7 +517,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       // Store user permanently in local and cloud DB
       upsertUser(newUserProfile);
       localStorage.setItem('fuhsi_active_user', JSON.stringify(newUserProfile));
-      
+
       try {
         await Promise.all([
           saveUserToFirestore(newUserProfile).catch(console.error),
@@ -413,6 +532,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: newUserProfile }));
       } catch (e) {}
 
+      setShowRegOtpVerify(false);
       setShowRegisterConfirm(false);
       onLoginSuccess(newUserProfile);
       setErrorMessage('');
@@ -771,103 +891,137 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Step 1: Verify Registered Email
+  // Step 1: Verify Registered Email and Request Password Reset OTP
   const handleForgotEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
     const input = forgotEmailInput.trim().toLowerCase();
-    if (!input) {
-      setErrorMessage('Please enter your registered Email Address.');
+    if (!input || !input.includes('@') || !input.includes('.')) {
+      setErrorMessage('Please enter a valid registered Email Address.');
       return;
     }
 
     setIsSubmitting(true);
 
-    let allUsers: UserProfile[] = [];
     try {
-      const stored = localStorage.getItem('fuhsi_users_db');
-      const localUsers: UserProfile[] = stored ? JSON.parse(stored) : [];
+      const res = await fetch('/api/otp/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: input,
+          purpose: 'PASSWORD_RESET',
+        }),
+      });
 
-      // Query server and firestore in parallel for real-time validation
-      const [serverDb, firestoreUsers] = await Promise.all([
-        fetchServerDb().catch(() => null),
-        fetchUsersFromFirestore().catch(() => []),
-      ]);
+      const data = await res.json().catch(() => null);
 
-      const centralUsers = [
-        ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
-        ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
-      ];
-
-      allUsers = mergeUsers(localUsers, centralUsers);
-      if (allUsers.length > 0) {
-        localStorage.setItem('fuhsi_users_db', JSON.stringify(allUsers));
+      if (!res.ok || !data?.success) {
+        setErrorMessage(data?.error || 'No registered account found with this email address.');
+        setIsSubmitting(false);
+        return;
       }
-    } catch (err) {
-      console.error('Error fetching latest users during forgot password check:', err);
-      try {
-        const stored = localStorage.getItem('fuhsi_users_db');
-        allUsers = stored ? JSON.parse(stored) : existingUsers;
-      } catch {
-        allUsers = existingUsers;
-      }
+
+      setForgotStep('OTP');
+      setForgotOtp('');
+      setForgotResetToken('');
+      setForgotExpirySeconds(600); // 10 minutes
+      setForgotResendCooldown(60); // 60 seconds
+      setForgotDevCode(data.previewCode || '');
+      setOtpResentMessage('');
+    } catch (err: any) {
+      console.error('Password reset request error:', err);
+      setErrorMessage(err?.message || 'Connection error. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Filter out demo accounts and permanently deleted records
-    const validUsers = allUsers.filter(
-      (u) => u && !isDemoUser(u) && !isDemoNickname(u.nickname) && !isUserPermanentlyDeleted(u)
-    );
-
-    const cleanInput = input.trim().toLowerCase();
-    const cleanNick = cleanInput.replace(/^@/, '');
-
-    // Strictly match by registered studentEmail or valid registered account handle
-    const matched = validUsers.find((u) => {
-      const uEmail = (u.studentEmail || '').toLowerCase().trim();
-      const uNick = (u.nickname || '').toLowerCase().trim().replace(/^@/, '');
-      if (cleanInput.includes('@') && cleanInput.includes('.')) {
-        return uEmail === cleanInput;
-      }
-      return (uNick === cleanNick || `@${uNick}` === cleanInput) && Boolean(uEmail);
-    });
-
-    setIsSubmitting(false);
-
-    if (!matched) {
-      setErrorMessage('no record found with this email');
-      return;
-    }
-
-    // Real registered account verified! Generate OTP and advance to step 2
-    const code = generateNewOtp();
-    setForgotUser(matched);
-    setForgotOtp('');
-    setForgotStep('OTP');
-    const recipientEmail = matched.studentEmail || forgotEmailInput.trim();
-    sendOtpEmail(recipientEmail, code, 'Password Reset OTP', matched.realName || matched.nickname);
   };
 
-  // Step 2: Verify Reset OTP Code
-  const handleForgotOtpSubmit = (e: React.FormEvent) => {
+  // Resend Password Reset OTP
+  const handleResendForgotOtp = async () => {
+    if (!forgotEmailInput || forgotResendCooldown > 0) return;
+    setIsSubmitting(true);
+    setErrorMessage('');
+    setOtpResentMessage('');
+
+    try {
+      const res = await fetch('/api/otp/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: forgotEmailInput.trim().toLowerCase(),
+          purpose: 'PASSWORD_RESET',
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.success) {
+        setErrorMessage(data?.error || 'Failed to resend reset code.');
+        return;
+      }
+
+      setForgotExpirySeconds(600);
+      setForgotResendCooldown(60);
+      setForgotDevCode(data.previewCode || '');
+      setOtpResentMessage(`✓ A fresh Password Reset OTP has been dispatched to ${forgotEmailInput.trim()}`);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Error resending code.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Step 2: Verify Reset OTP Code on the server
+  const handleForgotOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
-    if (!forgotOtp.trim()) {
-      setErrorMessage('Please enter the 6-digit OTP code.');
+    const trimmedOtp = forgotOtp.trim();
+    if (!trimmedOtp || !/^\d{6}$/.test(trimmedOtp)) {
+      setErrorMessage('Please enter the full 6-digit OTP code.');
       return;
     }
 
-    if (forgotOtp.trim() !== generatedOtp && forgotOtp.trim() !== '123456') {
-      setErrorMessage('Invalid OTP verification code. Please check the code and try again.');
+    if (forgotExpirySeconds <= 0) {
+      setErrorMessage('This verification code has expired. Please click "Resend Code" to receive a new code.');
       return;
     }
 
-    // OTP Verified! Advance to step 3 (New Password)
-    setForgotStep('NEW_PASSWORD');
+    setIsSubmitting(true);
+
+    try {
+      const res = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: forgotEmailInput.trim().toLowerCase(),
+          purpose: 'PASSWORD_RESET',
+          code: trimmedOtp,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.success) {
+        setErrorMessage(data?.error || 'Invalid OTP verification code. Please check the code and try again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Validated strictly by server!
+      setForgotResetToken(data.token);
+      setForgotStep('NEW_PASSWORD');
+      setErrorMessage('');
+    } catch (err: any) {
+      console.error('OTP verification error:', err);
+      setErrorMessage(err?.message || 'Error verifying OTP code.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Step 3: Save New Password permanently in Database
-  const handleForgotNewPasswordSubmit = (e: React.FormEvent) => {
+  const handleForgotNewPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -881,20 +1035,47 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
-    // Permanently update user password in database
-    try {
-      const targetIdentifier = forgotUser?.id || forgotUser?.studentEmail || forgotUser?.nickname || '';
-      updateUserPassword(targetIdentifier, forgotNewPassword.trim());
-    } catch (err) {
-      console.error('Error updating password:', err);
-    }
+    setIsSubmitting(true);
 
-    setResetSuccessMessage('✓ Password reset successfully! Your new password is now active. Please sign in below.');
-    setLoginIdentifier(forgotUser?.studentEmail || forgotUser?.nickname || '');
-    setLoginPassword('');
-    setForgotNewPassword('');
-    setForgotConfirmPassword('');
-    setMode('LOGIN');
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: forgotEmailInput.trim().toLowerCase(),
+          token: forgotResetToken,
+          newPassword: forgotNewPassword.trim(),
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.success) {
+        setErrorMessage(data?.error || 'Failed to update password. Session may have expired.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Update local storage user records if available
+      try {
+        updateUserPassword(forgotEmailInput.trim(), forgotNewPassword.trim());
+      } catch (err) {
+        console.error('Local db update error:', err);
+      }
+
+      setResetSuccessMessage('✓ Password reset successfully! Your new password is now active. Please sign in below.');
+      setLoginIdentifier(forgotEmailInput.trim());
+      setLoginPassword('');
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotResetToken('');
+      setMode('LOGIN');
+    } catch (err: any) {
+      console.error('Password reset submit error:', err);
+      setErrorMessage(err?.message || 'Error resetting password.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -984,7 +1165,134 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
 
           {mode === 'REGISTER' ? (
-            showRegisterConfirm && validatedRegPayload ? (
+            showRegOtpVerify && validatedRegPayload ? (
+              <form onSubmit={handleVerifyRegistrationOtp} className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
+                <div className="text-center space-y-1.5 pt-1">
+                  <div className="w-12 h-12 rounded-2xl bg-teal-50 border border-teal-200/90 text-teal-700 mx-auto flex items-center justify-center shadow-xs">
+                    <Mail size={24} />
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+                    Verify Your Email
+                  </h3>
+                  <p className="text-xs text-slate-600 max-w-sm mx-auto leading-relaxed">
+                    A six-digit verification code has been dispatched to{' '}
+                    <strong className="text-teal-900 font-mono font-bold break-all">
+                      {validatedRegPayload.cleanEmail}
+                    </strong>
+                    . Enter the code below to complete your registration.
+                  </p>
+                </div>
+
+                {regOtpMessage && (
+                  <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900 leading-relaxed text-center font-medium">
+                    {regOtpMessage}
+                  </div>
+                )}
+
+                {/* Dev helper code banner for instant sandbox preview */}
+                {regDevCode && (
+                  <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2 shadow-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-amber-900">🔑 Code:</span>
+                      <span className="font-mono font-black text-sm bg-amber-200 px-2 py-0.5 rounded text-amber-950 tracking-wider select-all">{regDevCode}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRegEnteredOtp(regDevCode)}
+                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                    >
+                      Auto-fill
+                    </button>
+                  </div>
+                )}
+
+                {/* Six-Digit OTP Input */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800">
+                      Enter 6-Digit Code <span className="text-rose-500">*</span>
+                    </label>
+                    <span className={`text-[11px] font-mono font-bold flex items-center gap-1 ${
+                      regExpirySeconds < 120 ? 'text-rose-600 animate-pulse' : 'text-teal-700'
+                    }`}>
+                      <span>⏱ Expires in:</span>
+                      <span>{formatCountdown(regExpirySeconds)}</span>
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <KeyRound size={17} className="absolute left-3.5 top-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={regEnteredOtp}
+                      onChange={(e) => {
+                        setRegEnteredOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                        setErrorMessage('');
+                      }}
+                      placeholder="000000"
+                      maxLength={6}
+                      className="w-full text-center tracking-[0.6em] text-xl font-black font-mono py-2.5 pl-8 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none transition-all"
+                      required
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                {errorMessage && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2">
+                    <Info size={16} className="text-rose-600 shrink-0" />
+                    <span>{errorMessage}</span>
+                  </div>
+                )}
+
+                {/* Verify Button */}
+                <button
+                  type="submit"
+                  disabled={isSubmitting || regEnteredOtp.length !== 6 || regExpirySeconds <= 0}
+                  className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Verifying Code & Creating Account...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={16} />
+                      <span>Verify & Complete Registration</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Resend Code and Return Actions */}
+                <div className="flex items-center justify-between text-xs pt-1">
+                  <button
+                    type="button"
+                    disabled={isSubmitting || regResendCooldown > 0}
+                    onClick={handleResendRegistrationOtp}
+                    className="text-teal-700 font-bold hover:underline disabled:text-slate-400 disabled:no-underline flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <RefreshCw size={13} className={isSubmitting ? 'animate-spin' : ''} />
+                    <span>
+                      {regResendCooldown > 0 ? `Resend Code in ${regResendCooldown}s` : 'Resend Code'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => {
+                      setShowRegOtpVerify(false);
+                      setErrorMessage('');
+                    }}
+                    className="text-slate-500 hover:text-slate-800 font-semibold hover:underline cursor-pointer"
+                  >
+                    ← Correct Email / Details
+                  </button>
+                </div>
+              </form>
+            ) : showRegisterConfirm && validatedRegPayload ? (
               <div className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
                 <div className="text-center space-y-1.5 pt-1">
                   <div className="w-12 h-12 rounded-2xl bg-teal-50 border border-teal-200/90 text-teal-700 mx-auto flex items-center justify-center shadow-xs">
@@ -1053,7 +1361,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 )}
 
-                {/* Confirmation Actions: Go Back | Confirm & Create Account */}
+                {/* Confirmation Actions: Go Back | Proceed to Email Verification */}
                 <div className="grid grid-cols-2 gap-2.5 pt-1">
                   <button
                     type="button"
@@ -1070,18 +1378,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     disabled={isSubmitting}
-                    onClick={handleConfirmAndCreateAccount}
+                    onClick={handleProceedToEmailVerification}
                     className="py-2.5 px-3.5 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-75 disabled:cursor-wait"
                   >
                     {isSubmitting ? (
                       <>
                         <Loader2 size={15} className="animate-spin" />
-                        <span>Creating Account...</span>
+                        <span>Sending Code...</span>
                       </>
                     ) : (
                       <>
-                        <CheckCircle2 size={15} />
-                        <span>Confirm & Create Account</span>
+                        <Send size={15} />
+                        <span>Proceed to Verify</span>
                       </>
                     )}
                   </button>
@@ -1751,41 +2059,64 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {forgotStep === 'OTP' && (
                 <form onSubmit={handleForgotOtpSubmit} className="space-y-4">
                   <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900 leading-relaxed">
-                    🔑 <strong>Verification Code Sent:</strong> We have dispatched a 6-digit verification code (OTP) from <strong className="font-mono font-semibold">fuhsiconnectsupport@gmail.com</strong> to your registered email address <strong className="text-teal-950 font-bold font-mono">{forgotUser?.studentEmail || forgotEmailInput}</strong>. Please check your inbox or use the quick code below.
+                    🔑 <strong>Verification Code Sent:</strong> We have dispatched a 6-digit Password Reset OTP from <strong className="font-mono font-semibold">fuhsiconnectsupport@gmail.com</strong> to your registered email address <strong className="text-teal-950 font-bold font-mono">{forgotEmailInput}</strong>. Please check your inbox.
                   </div>
 
-                  {/* Instant Code Helper Badge */}
-                  <div className="bg-amber-50 border border-amber-200/90 p-3 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2 shadow-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-amber-900">🔑 Code:</span>
-                      <span className="font-mono font-black text-sm bg-amber-200/90 px-2.5 py-0.5 rounded-md text-amber-950 tracking-wider select-all">{generatedOtp}</span>
+                  {/* Dev helper code banner for instant sandbox preview */}
+                  {forgotDevCode && (
+                    <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2 shadow-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-amber-900">🔑 Code:</span>
+                        <span className="font-mono font-black text-sm bg-amber-200 px-2 py-0.5 rounded text-amber-950 tracking-wider select-all">{forgotDevCode}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setForgotOtp(forgotDevCode)}
+                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                      >
+                        Auto-fill
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setForgotOtp(generatedOtp)}
-                      className="px-3 py-1 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold text-xs rounded-lg transition-colors shrink-0 cursor-pointer shadow-xs"
-                    >
-                      Auto-fill Code
-                    </button>
-                  </div>
+                  )}
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-800 mb-1">
-                      Enter 6-Digit Verification Code <span className="text-rose-500">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-bold text-slate-800">
+                        Enter 6-Digit Password Reset OTP <span className="text-rose-500">*</span>
+                      </label>
+                      <span className={`text-[11px] font-mono font-bold flex items-center gap-1 ${
+                        forgotExpirySeconds < 120 ? 'text-rose-600 animate-pulse' : 'text-teal-700'
+                      }`}>
+                        <span>⏱ Expires in:</span>
+                        <span>{formatCountdown(forgotExpirySeconds)}</span>
+                      </span>
+                    </div>
                     <div className="relative">
                       <KeyRound size={16} className="absolute left-3.5 top-3 text-slate-400" />
                       <input
                         type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
                         value={forgotOtp}
-                        onChange={(e) => setForgotOtp(e.target.value.replace(/[^0-9]/g, ''))}
-                        placeholder="Enter 6-digit OTP"
+                        onChange={(e) => {
+                          setForgotOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                          setErrorMessage('');
+                        }}
+                        placeholder="000000"
                         maxLength={6}
-                        className="w-full text-center tracking-[0.5em] text-lg font-black font-mono py-2.5 pl-8 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
+                        className="w-full text-center tracking-[0.6em] text-xl font-black font-mono py-2.5 pl-8 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                         required
+                        autoFocus
                       />
                     </div>
                   </div>
+
+                  {errorMessage && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2">
+                      <Info size={16} className="text-rose-600 shrink-0" />
+                      <span>{errorMessage}</span>
+                    </div>
+                  )}
 
                   {otpResentMessage && (
                     <div className="p-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold text-center">
@@ -1796,19 +2127,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <div className="flex items-center justify-between text-xs text-slate-500 font-medium pt-1">
                     <button
                       type="button"
-                      onClick={() => {
-                        const newCode = generateNewOtp();
-                        const recipientEmail = forgotUser?.studentEmail || forgotEmailInput.trim();
-                        setOtpResentMessage(`✓ A new verification code has been dispatched to ${recipientEmail}`);
-                        sendOtpEmail(recipientEmail, newCode, 'Password Reset OTP', forgotUser?.realName || forgotUser?.nickname);
-                      }}
-                      className="text-teal-700 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                      disabled={isSubmitting || forgotResendCooldown > 0}
+                      onClick={handleResendForgotOtp}
+                      className="text-teal-700 font-bold hover:underline disabled:text-slate-400 disabled:no-underline flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
                     >
-                      <RefreshCw size={13} />
-                      <span>Resend Code</span>
+                      <RefreshCw size={13} className={isSubmitting ? 'animate-spin' : ''} />
+                      <span>
+                        {forgotResendCooldown > 0 ? `Resend Code in ${forgotResendCooldown}s` : 'Resend Code'}
+                      </span>
                     </button>
                     <button
                       type="button"
+                      disabled={isSubmitting}
                       onClick={() => {
                         setForgotStep('EMAIL');
                         setErrorMessage('');
@@ -1821,10 +2151,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   <button
                     type="submit"
-                    className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    disabled={isSubmitting || forgotOtp.length !== 6 || forgotExpirySeconds <= 0}
+                    className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <CheckCircle2 size={16} />
-                    <span>Verify Code</span>
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Verifying Code...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={16} />
+                        <span>Verify Code</span>
+                      </>
+                    )}
                   </button>
                 </form>
               )}
@@ -1832,7 +2172,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {forgotStep === 'NEW_PASSWORD' && (
                 <form onSubmit={handleForgotNewPasswordSubmit} className="space-y-4">
                   <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-950 leading-relaxed">
-                    ✅ <strong>Identity Verified!</strong> Choose a new security password for <strong className="font-bold">{forgotUser?.realName} ({forgotUser?.studentEmail || forgotUser?.nickname})</strong>. Your old password will be replaced.
+                    ✅ <strong>Identity Verified!</strong> Please enter your new security password for <strong className="font-bold">{forgotEmailInput}</strong>.
                   </div>
 
                   <div>
@@ -1844,10 +2184,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <input
                         type={forgotShowPassword ? 'text' : 'password'}
                         value={forgotNewPassword}
-                        onChange={(e) => setForgotNewPassword(e.target.value)}
+                        onChange={(e) => {
+                          setForgotNewPassword(e.target.value);
+                          setErrorMessage('');
+                        }}
                         placeholder="Enter new password (min 4 chars)"
                         className="w-full pl-9 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                         required
+                        autoFocus
                       />
                       <button
                         type="button"
@@ -1868,7 +2212,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <input
                         type={forgotShowPassword ? 'text' : 'password'}
                         value={forgotConfirmPassword}
-                        onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                        onChange={(e) => {
+                          setForgotConfirmPassword(e.target.value);
+                          setErrorMessage('');
+                        }}
                         placeholder="Re-enter new password"
                         className="w-full pl-9 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                         required
@@ -1876,17 +2223,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                   </div>
 
+                  {errorMessage && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2">
+                      <Info size={16} className="text-rose-600 shrink-0" />
+                      <span>{errorMessage}</span>
+                    </div>
+                  )}
+
                   <button
                     type="submit"
-                    className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    disabled={isSubmitting}
+                    className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <Key size={16} />
-                    <span>Save New Password</span>
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Updating Password...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Key size={16} />
+                        <span>Save New Password</span>
+                      </>
+                    )}
                   </button>
 
                   <div className="text-center pt-1">
                     <button
                       type="button"
+                      disabled={isSubmitting}
                       onClick={() => {
                         setErrorMessage('');
                         setResetSuccessMessage('');
