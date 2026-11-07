@@ -1183,10 +1183,11 @@ setInterval(() => {
 // Verifies registered account ownership without requiring external email OTP dispatch
 app.post('/api/auth/verify-reset-identity', (req, res) => {
   try {
-    const { identifier, phone, matricNumber, realName } = req.body || {};
+    const { identifier, phone, matricNumber, matricNo, matricOrName } = req.body || {};
+    const effectiveMatric = matricNo || matricNumber || matricOrName;
 
     if (!identifier) {
-      return res.status(400).json({ success: false, error: 'Account username or email is required.' });
+      return res.status(400).json({ success: false, error: 'Registered Email Address is required.' });
     }
 
     const cleanInput = String(identifier).trim().toLowerCase();
@@ -1204,7 +1205,7 @@ app.post('/api/auth/verify-reset-identity', (req, res) => {
     if (!matchedUser) {
       return res.status(404).json({
         success: false,
-        error: 'No registered account found with the provided username or email.',
+        error: 'No registered account found with the provided email address.',
       });
     }
 
@@ -1219,24 +1220,14 @@ app.post('/api/auth/verify-reset-identity', (req, res) => {
       });
     }
 
-    // If student has a registered matric number, check it
-    if (matchedUser.accountType === 'Student' && matchedUser.matricNumber) {
+    // If account has a registered matric number, check it strictly
+    if (matchedUser.matricNumber) {
       const registeredMatric = normalizeMatricNumber(matchedUser.matricNumber);
-      const enteredMatric = normalizeMatricNumber(String(matricNumber || ''));
-      if (enteredMatric && enteredMatric !== registeredMatric) {
+      const enteredMatric = normalizeMatricNumber(String(effectiveMatric || ''));
+      if (!enteredMatric || enteredMatric !== registeredMatric) {
         return res.status(401).json({
           success: false,
-          error: 'The matriculation number provided does not match our account records.',
-        });
-      }
-    } else if (matchedUser.realName && realName) {
-      // Guest or student real name check if provided
-      const regName = String(matchedUser.realName || '').trim().toLowerCase();
-      const entName = String(realName || '').trim().toLowerCase();
-      if (entName && !regName.includes(entName) && !entName.includes(regName)) {
-        return res.status(401).json({
-          success: false,
-          error: 'The full name provided does not match our account records.',
+          error: 'The Matric No. provided does not match our account records.',
         });
       }
     }

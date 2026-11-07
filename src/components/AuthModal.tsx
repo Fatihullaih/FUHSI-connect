@@ -744,13 +744,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Step 1: Identify Account by Username or Email (No OTP)
+  // Step 1: Identify Account by Email Address
   const handleForgotIdentifySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
     const input = forgotIdentifierInput.trim();
     if (!input) {
-      setErrorMessage('Please enter your registered Username or Email address.');
+      setErrorMessage('Please enter your registered Email Address.');
       return;
     }
 
@@ -758,7 +758,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       let foundUser: UserProfile | null = null;
-      const cleanInput = input.toLowerCase().replace(/^@+/, '');
+      const cleanInput = input.toLowerCase();
 
       let allUsers: UserProfile[] = existingUsers;
       try {
@@ -768,9 +768,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       foundUser = allUsers.find((u) => {
         if (!u || isUserPermanentlyDeleted(u)) return false;
-        const uNick = String(u.nickname || '').toLowerCase().replace(/^@+/, '');
         const uEmail = String(u.studentEmail || '').toLowerCase();
-        return uNick === cleanInput || uEmail === input.toLowerCase();
+        return uEmail === cleanInput || String(u.nickname || '').toLowerCase().replace(/^@+/, '') === cleanInput.replace(/^@+/, '');
       }) || null;
 
       if (!foundUser) {
@@ -779,9 +778,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           if (sDb && Array.isArray(sDb.users)) {
             foundUser = sDb.users.find((u: any) => {
               if (!u || isUserPermanentlyDeleted(u)) return false;
-              const uNick = String(u.nickname || '').toLowerCase().replace(/^@+/, '');
               const uEmail = String(u.studentEmail || '').toLowerCase();
-              return uNick === cleanInput || uEmail === input.toLowerCase();
+              return uEmail === cleanInput || String(u.nickname || '').toLowerCase().replace(/^@+/, '') === cleanInput.replace(/^@+/, '');
             }) || null;
           }
         } catch {}
@@ -793,16 +791,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           if (Array.isArray(fsUsers)) {
             foundUser = fsUsers.find((u: any) => {
               if (!u || isUserPermanentlyDeleted(u)) return false;
-              const uNick = String(u.nickname || '').toLowerCase().replace(/^@+/, '');
               const uEmail = String(u.studentEmail || '').toLowerCase();
-              return uNick === cleanInput || uEmail === input.toLowerCase();
+              return uEmail === cleanInput || String(u.nickname || '').toLowerCase().replace(/^@+/, '') === cleanInput.replace(/^@+/, '');
             }) || null;
           }
         } catch {}
       }
 
       if (!foundUser) {
-        setErrorMessage('No registered account was found with that Username or Email address.');
+        setErrorMessage('No registered account was found with that Email Address.');
         setIsSubmitting(false);
         return;
       }
@@ -820,20 +817,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Step 2: Verify Security Identity (Phone + Matric Number or Full Name)
+  // Step 2: Verify Security Identity (Phone + Matric No.)
   const handleForgotVerifySecuritySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
     const phoneClean = forgotPhoneInput.trim().replace(/[\s-]/g, '');
-    const matricOrName = forgotMatricOrNameInput.trim();
+    const matricClean = forgotMatricOrNameInput.trim().toUpperCase();
 
     if (!phoneClean) {
       setErrorMessage('Please enter your registered phone number.');
       return;
     }
-    if (!matricOrName) {
-      setErrorMessage('Please enter your matriculation number or full name.');
+    if (!matricClean) {
+      setErrorMessage('Please enter your Matric No.');
       return;
     }
 
@@ -846,7 +843,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         body: JSON.stringify({
           identifier: forgotIdentifierInput.trim(),
           phone: phoneClean,
-          matricOrName,
+          matricNo: matricClean,
+          matricNumber: matricClean,
         }),
       });
 
@@ -866,14 +864,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         const enteredPhone = phoneClean.replace(/\D/g, '');
         const phoneMatch = userPhone && (userPhone === enteredPhone || userPhone.endsWith(enteredPhone) || enteredPhone.endsWith(userPhone));
 
-        const userMatric = String(forgotMatchedUser.matricNumber || '').trim().toUpperCase();
-        const userRealName = String(forgotMatchedUser.realName || '').trim().toLowerCase();
-        const enteredCheck = matricOrName.toLowerCase();
+        const userMatric = normalizeMatricNumber(forgotMatchedUser.matricNumber || '');
+        const enteredMatric = normalizeMatricNumber(matricClean);
+        const matricMatch = !userMatric || userMatric === enteredMatric || userMatric.replace(/\//g, '') === enteredMatric.replace(/\//g, '');
 
-        const idMatch = (userMatric && userMatric === matricOrName.toUpperCase()) ||
-                        (userRealName && (userRealName === enteredCheck || userRealName.includes(enteredCheck) || enteredCheck.includes(userRealName)));
-
-        if (phoneMatch && idMatch) {
+        if (phoneMatch && matricMatch) {
           const clientToken = `reset_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
           setForgotResetToken(clientToken);
           setForgotStep('NEW_PASSWORD');
@@ -1748,24 +1743,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <span>Password Recovery</span>
                     </p>
                     <p className="text-teal-800 font-medium">
-                      Enter your registered <strong>Username</strong> or <strong>Email Address</strong> to locate your account and proceed with password reset.
+                      Enter your registered <strong>Email Address</strong> to locate your account and proceed with password reset.
                     </p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-1">
-                      Username or Email Address <span className="text-rose-500">*</span>
+                      Email Address <span className="text-rose-500">*</span>
                     </label>
                     <div className="relative">
-                      <User size={15} className="absolute left-3 top-2.5 text-slate-400" />
+                      <Mail size={15} className="absolute left-3 top-2.5 text-slate-400" />
                       <input
-                        type="text"
+                        type="email"
                         value={forgotIdentifierInput}
                         onChange={(e) => {
                           setForgotIdentifierInput(e.target.value);
                           if (errorMessage) setErrorMessage('');
                         }}
-                        placeholder="e.g. @nickname or student@fuhsi.edu.ng"
+                        placeholder=""
                         className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                         required
                         disabled={isSubmitting}
@@ -1827,7 +1822,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </form>
               )}
 
-              {/* STEP 2: SECURITY IDENTITY VERIFICATION (PHONE + MATRIC / NAME) */}
+              {/* STEP 2: SECURITY IDENTITY VERIFICATION (PHONE + MATRIC NO.) */}
               {forgotStep === 'VERIFY_SECURITY' && (
                 <form onSubmit={handleForgotVerifySecuritySubmit} className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
                   <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 leading-relaxed space-y-1">
@@ -1844,7 +1839,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs flex items-center justify-between">
                       <span className="text-slate-500 font-semibold">Account:</span>
                       <span className="font-bold text-slate-900">
-                        {forgotMatchedUser.nickname} {forgotMatchedUser.accountType ? `(${forgotMatchedUser.accountType})` : ''}
+                        {forgotMatchedUser.nickname}
                       </span>
                     </div>
                   )}
@@ -1871,13 +1866,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Matric Number or Full Name */}
+                  {/* Matric No. */}
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-1">
-                      {forgotMatchedUser?.accountType === 'Guest'
-                        ? 'Full Registered Real Name'
-                        : 'Matriculation Number (or Full Name)'}{' '}
-                      <span className="text-rose-500">*</span>
+                      Matric No. <span className="text-rose-500">*</span>
                     </label>
                     <div className="relative">
                       <GraduationCap size={15} className="absolute left-3 top-2.5 text-slate-400" />
@@ -1888,11 +1880,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           setForgotMatricOrNameInput(e.target.value);
                           setErrorMessage('');
                         }}
-                        placeholder={
-                          forgotMatchedUser?.accountType === 'Guest'
-                            ? 'Enter your full registered name'
-                            : 'e.g. FUHSI/2023/... or Full Name'
-                        }
+                        placeholder=""
                         className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                         required
                       />
