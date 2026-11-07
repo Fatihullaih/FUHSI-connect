@@ -237,6 +237,9 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
 
   const getCleanTitle = (n: CampusNotification) => {
     let t = n.title || 'Notification';
+    if (t.toLowerCase().includes('email notification received') || t.toLowerCase().includes('fuhsiconnect@gmail.com')) {
+      return 'Account Recovered';
+    }
     t = t.replace(/^\[CAMPUS DESK NOTICE:\s*(.*?)\]/i, '📢 $1');
     t = t.replace(/\[CAMPUS DESK NOTICE.*?\]/gi, '');
     t = t.replace(/@FUHSI Campus Secretariat/gi, '');
@@ -249,6 +252,14 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
 
   const getCleanMessage = (n: CampusNotification) => {
     let m = n.message || '';
+    if (
+      m.includes('From: FUHSI Connect') ||
+      m.includes('fuhsiconnect@gmail.com') ||
+      m.includes('Do Not Reply') ||
+      (m.toLowerCase().includes('verified and approved') && m.toLowerCase().includes('log in and start using'))
+    ) {
+      return 'Your account has been verified and approved. We are sorry for the inconvenience.';
+    }
     m = m.replace(/^\[CAMPUS DESK NOTICE:.*?\]\s*/gi, '');
     m = m.replace(/@modula\s+sent you a message/gi, 'Official update');
     m = m.replace(/Message from Admin/gi, 'Official Platform Update');

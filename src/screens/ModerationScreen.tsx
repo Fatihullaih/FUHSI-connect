@@ -477,52 +477,36 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       saveStoredUsers(updatedList);
       setAllUsersList(updatedList);
 
-      // Create official automated email object sent from fuhsiconnect@gmail.com
+      // Send standard in-app notification: "Account Recovered"
       const cleanNick = nick ? nick.toLowerCase().replace(/^@/, '') : '';
-      const emailRecord = {
-        id: `email_appr_${Date.now()}`,
-        from: 'FUHSI Connect <fuhsiconnect@gmail.com>',
-        to: targetEmail,
-        recipientName: targetRealName,
-        recipientNickname: nick,
-        subject: 'FUHSI Connect Account Verified & Approved',
-        body: 'Your FUHSI Connect account has been verified and approved. You can now log in and start using the platform.',
-        notice: 'Note: This email was sent from an unmonitored system email address (fuhsiconnect@gmail.com). Please do not reply directly to this email.',
-        isNoReply: true,
-        sentAt: new Date().toISOString(),
-        formattedDate: new Date().toLocaleString('en-US', {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-        }),
-      };
-
-      // Store email in global sent emails db
-      try {
-        const existingEmailsStr = localStorage.getItem('fuhsi_sent_emails_db');
-        const existingEmails = existingEmailsStr ? JSON.parse(existingEmailsStr) : [];
-        localStorage.setItem('fuhsi_sent_emails_db', JSON.stringify([emailRecord, ...existingEmails]));
-      } catch (e) {
-        console.error(e);
-      }
-
-      // Save notification & email copy in user's in-app inbox
       if (cleanNick) {
         const notifKey = `fuhsi_user_notifications_${cleanNick}`;
-        const approvalMsg = {
+        const recoveryMsg = {
           id: `appr_notif_${Date.now()}`,
           type: 'VERIFICATION',
-          title: '📧 Email Notification Received from fuhsiconnect@gmail.com',
-          message: `From: FUHSI Connect <fuhsiconnect@gmail.com> [Do Not Reply]\nTo: ${targetEmail}\nSubject: FUHSI Connect Account Verified & Approved\n\n"Your FUHSI Connect account has been verified and approved. You can now log in and start using the platform."`,
+          title: 'Account Recovered',
+          message: 'Your account has been verified and approved. We are sorry for the inconvenience.',
           timestamp: 'Just now',
           isRead: false,
-          emailDetails: emailRecord,
         };
         let existingNotifs = [];
         try {
           const storedNotifs = localStorage.getItem(notifKey);
           if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-        } catch (e) { console.error(e); }
-        localStorage.setItem(notifKey, JSON.stringify([approvalMsg, ...existingNotifs]));
+        } catch (e) {
+          console.error(e);
+        }
+        const updatedNotifs = [recoveryMsg, ...existingNotifs];
+        localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
+        pushServerDbSync({ notifications: { [cleanNick]: updatedNotifs } } as any).catch(() => {});
+
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('fuhsi_notification_received', {
+              detail: { targetNickname: cleanNick, notif: recoveryMsg },
+            })
+          );
+        }
       }
 
       // Update active user profile in localStorage if it matches
