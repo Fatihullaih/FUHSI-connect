@@ -1158,409 +1158,192 @@ app.post('/api/db/sync', (req, res) => {
   }
 });
 
-// Configure Transporter with official FUHSI Connect support email
-// Sanitize environment variables to avoid invalid container placeholders
-const smtpUser = (process.env.SMTP_USER && process.env.SMTP_USER.includes('@'))
-  ? process.env.SMTP_USER.trim()
-  : 'fuhsiconnectsupport@gmail.com';
-
-const rawPass = process.env.SMTP_PASS ? process.env.SMTP_PASS.trim() : '';
-const smtpPass = (rawPass && rawPass.length >= 8 && !rawPass.toLowerCase().startsWith('adepoj'))
-  ? rawPass
-  : 'FUHSI-Connect1';
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // TLS
-  auth: {
-    user: smtpUser,
-    pass: smtpPass,
-  },
-  tls: {
-    rejectUnauthorized: false,
-  },
-});
-
-// In-Memory Authoritative Store for Active OTP sessions
-interface ServerOtpEntry {
-  email: string;
-  purpose: 'REGISTRATION' | 'PASSWORD_RESET';
-  code: string;
-  expiresAt: number; // 10 minutes
-  attempts: number;  // Max 5 attempts
-  verified: boolean;
-  token?: string;    // One-time verification token
+// In-Memory Authoritative Store for Active Password Reset Sessions
+interface ResetSessionEntry {
+  userId: string;
+  identifier: string;
+  token: string;
+  expiresAt: number;
   createdAt: number;
-  lastSentAt: number;
 }
 
-const serverOtpStore = new Map<string, ServerOtpEntry>();
+const activeResetSessions = new Map<string, ResetSessionEntry>();
 
-function getOtpStorageKey(purpose: string, email: string): string {
-  return `${purpose.trim().toUpperCase()}_${email.trim().toLowerCase()}`;
-}
-
-// Generates HTML email matching the official FUHSI Connect screenshots
-function generateFuhsiOtpEmailTemplate({
-  recipientName,
-  code,
-  purposeTitle,
-}: {
-  recipientName: string;
-  code: string;
-  purposeTitle: string;
-}): string {
-  const codeSpaced = code.split('').join(' ');
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FUHSI Connect Verification</title>
-</head>
-<body style="margin: 0; padding: 24px 12px; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
-  <div style="max-width: 500px; margin: 0 auto; background-color: #ffffff; border-radius: 18px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.07); border: 1px solid #e2e8f0;">
-    <!-- Top Green/Teal Header Banner -->
-    <div style="background: linear-gradient(180deg, #0f6a5e 0%, #08433b 100%); padding: 32px 24px 28px 24px; text-align: center;">
-      <div style="display: inline-block; background-color: rgba(255, 255, 255, 0.16); color: #a7f3d0; font-size: 10px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; padding: 5px 14px; border-radius: 9999px; margin-bottom: 12px;">
-        OFFICIAL CAMPUS NETWORK
-      </div>
-      <h1 style="margin: 0 0 6px 0; color: #ffffff; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">FUHSI Connect</h1>
-      <p style="margin: 0; color: #99f6e4; font-size: 13px; font-weight: 500;">Federal University of Health Sciences, Ila-Orangun</p>
-    </div>
-
-    <!-- Body Section -->
-    <div style="padding: 32px 28px 24px 28px;">
-      <h2 style="margin: 0 0 16px 0; color: #0f172a; font-size: 19px; font-weight: 800; letter-spacing: -0.3px;">Hello ${recipientName || 'FUHSI User'},</h2>
-      <p style="margin: 0 0 24px 0; color: #475569; font-size: 14px; line-height: 1.6;">
-        You requested a secure authentication code for <strong style="color: #0f172a; font-weight: 700;">${purposeTitle}</strong> on FUHSI Connect.
-      </p>
-
-      <!-- Dashed Box for Verification Code -->
-      <div style="border: 1.5px dashed #0d9488; background-color: #f0fdfa; border-radius: 14px; padding: 24px 16px; text-align: center; margin: 24px 0;">
-        <div style="color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 14px;">
-          YOUR VERIFICATION CODE
-        </div>
-        <div style="font-size: 40px; font-weight: 800; letter-spacing: 12px; color: #0f766e; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1;">
-          ${codeSpaced}
-        </div>
-        <div style="color: #0d9488; font-size: 12px; font-weight: 600; margin-top: 14px;">
-          ⏱ Valid for 10 minutes
-        </div>
-      </div>
-
-      <p style="margin: 0 0 20px 0; color: #475569; font-size: 13px; line-height: 1.55;">
-        Enter this 6-digit verification code into the application to complete your request. For your account security, never share this code with anyone.
-      </p>
-
-      <!-- Disclaimer Callout Box -->
-      <div style="background-color: #f8fafc; border-left: 3px solid #0d9488; border-radius: 8px; padding: 14px 16px; margin-top: 24px; font-size: 12px; color: #475569; line-height: 1.5;">
-        <strong style="color: #1e293b;">Didn't make this request?</strong> If you did not initiate this action on FUHSI Connect, you can safely disregard this email or report to support.
-      </div>
-    </div>
-
-    <!-- Footer -->
-    <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 22px 24px; text-align: center; font-size: 11px; color: #64748b; line-height: 1.7;">
-      <div>Sender: <a href="mailto:fuhsiconnectsupport@gmail.com" style="color: #0f766e; font-weight: 700; text-decoration: none;">fuhsiconnectsupport@gmail.com</a></div>
-      <div style="color: #94a3b8; font-weight: 500;">FUHSI Connect • Student &amp; Academic Community Portal</div>
-      <div style="color: #94a3b8;">Federal University of Health Sciences, Ila-Orangun, Osun State, Nigeria</div>
-    </div>
-  </div>
-</body>
-</html>`;
-}
-
-// Helper to send email or log cleanly
-async function dispatchEmailNotification({
-  to,
-  recipientName,
-  code,
-  purposeTitle,
-}: {
-  to: string;
-  recipientName: string;
-  code: string;
-  purposeTitle: string;
-}): Promise<{ delivered: boolean; error?: string }> {
-  try {
-    const htmlContent = generateFuhsiOtpEmailTemplate({ recipientName, code, purposeTitle });
-    const textContent = `Hello ${recipientName},\n\nYour ${purposeTitle} verification code on FUHSI Connect is: ${code}\n\nThis code is valid for 10 minutes. For your security, do not share this code with anyone.\n\nSender: fuhsiconnectsupport@gmail.com\nFederal University of Health Sciences, Ila-Orangun`;
-
-    // Timeout safety: Ensure SMTP dispatch never hangs or blocks request cycle
-    const info = await Promise.race([
-      transporter.sendMail({
-        from: '"FUHSI Connect Support" <fuhsiconnectsupport@gmail.com>',
-        to: to.trim(),
-        subject: `[FUHSI Connect] ${purposeTitle}`,
-        html: htmlContent,
-        text: textContent,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('SMTP connection timed out')), 5000)
-      ),
-    ]);
-    console.log(`[SMTP Notice] Email successfully dispatched for ${purposeTitle} to ${to} (ID: ${info.messageId})`);
-    return { delivered: true };
-  } catch (err: any) {
-    const errMsg = err?.message || 'SMTP delivery failed';
-    console.warn(`[SMTP Notice] Email delivery status for ${to}: ${errMsg}`);
-    return { delivered: false, error: errMsg };
+// Clean up expired reset sessions periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, session] of activeResetSessions.entries()) {
+    if (now > session.expiresAt) {
+      activeResetSessions.delete(key);
+    }
   }
-}
+}, 60000);
 
-// 1. POST /api/otp/request
-app.post('/api/otp/request', async (req, res) => {
+// 1. POST /api/auth/verify-reset-identity
+// Verifies registered account ownership without requiring external email OTP dispatch
+app.post('/api/auth/verify-reset-identity', (req, res) => {
   try {
-    const { email, purpose, recipientName } = req.body;
+    const { identifier, phone, matricNumber, realName } = req.body || {};
 
-    if (!email || typeof email !== 'string' || !email.includes('@') || !email.includes('.')) {
-      return res.status(400).json({ success: false, error: 'A valid email address is required.' });
+    if (!identifier) {
+      return res.status(400).json({ success: false, error: 'Account username or email is required.' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPurpose: 'REGISTRATION' | 'PASSWORD_RESET' = 
-      purpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET' : 'REGISTRATION';
+    const cleanInput = String(identifier).trim().toLowerCase();
+    const cleanNick = cleanInput.replace(/^@+/, '');
 
-    // Password reset checks: Ensure registered account exists with this email
-    if (cleanPurpose === 'PASSWORD_RESET') {
-      const existingUser = (activeDb.users || []).find((u: any) => {
-        if (!u || isDemoUser(u) || isDemoNickname(u.nickname)) return false;
-        const uEmail = (u.studentEmail || '').trim().toLowerCase();
-        return uEmail === cleanEmail;
+    // Locate the user in active database
+    const matchedUser = (activeDb.users || []).find((u: any) => {
+      if (!u || isDemoUser(u) || isDemoNickname(u.nickname)) return false;
+      const uEmail = String(u.studentEmail || '').trim().toLowerCase();
+      const uNick = String(u.nickname || '').trim().toLowerCase().replace(/^@+/, '');
+      const uId = String(u.id || '').trim().toLowerCase();
+      return uEmail === cleanInput || uNick === cleanNick || uId === cleanInput;
+    });
+
+    if (!matchedUser) {
+      return res.status(404).json({
+        success: false,
+        error: 'No registered account found with the provided username or email.',
       });
+    }
 
-      if (!existingUser) {
-        return res.status(404).json({
+    // Verify authorized ownership against registered records
+    const registeredPhone = String(matchedUser.emergencyHomePhone || '').replace(/\D/g, '');
+    const enteredPhone = String(phone || '').replace(/\D/g, '');
+
+    if (!enteredPhone || registeredPhone !== enteredPhone) {
+      return res.status(401).json({
+        success: false,
+        error: 'The registered phone number provided does not match our account records.',
+      });
+    }
+
+    // If student has a registered matric number, check it
+    if (matchedUser.accountType === 'Student' && matchedUser.matricNumber) {
+      const registeredMatric = normalizeMatricNumber(matchedUser.matricNumber);
+      const enteredMatric = normalizeMatricNumber(String(matricNumber || ''));
+      if (enteredMatric && enteredMatric !== registeredMatric) {
+        return res.status(401).json({
           success: false,
-          error: 'No registered account found with this email address.',
+          error: 'The matriculation number provided does not match our account records.',
+        });
+      }
+    } else if (matchedUser.realName && realName) {
+      // Guest or student real name check if provided
+      const regName = String(matchedUser.realName || '').trim().toLowerCase();
+      const entName = String(realName || '').trim().toLowerCase();
+      if (entName && !regName.includes(entName) && !entName.includes(regName)) {
+        return res.status(401).json({
+          success: false,
+          error: 'The full name provided does not match our account records.',
         });
       }
     }
 
-    // Rate Limiting: 30s cooldown between code dispatches
-    const storageKey = getOtpStorageKey(cleanPurpose, cleanEmail);
-    const existingEntry = serverOtpStore.get(storageKey);
-    const now = Date.now();
+    // Identity verified! Issue a secure one-time session token valid for 15 minutes
+    const token = `rst_${Date.now()}_${Math.random().toString(36).substring(2, 12)}`;
+    const sessionKey = String(matchedUser.id || cleanNick);
 
-    if (existingEntry && now - existingEntry.lastSentAt < 30000) {
-      const waitSeconds = Math.ceil((30000 - (now - existingEntry.lastSentAt)) / 1000);
-      return res.status(429).json({
-        success: false,
-        error: `Please wait ${waitSeconds}s before requesting a new verification code.`,
-        retryAfter: waitSeconds,
-      });
-    }
-
-    // Generate authoritative 6-digit random code
-    const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = now + 10 * 60 * 1000; // 10 minutes validity
-
-    serverOtpStore.set(storageKey, {
-      email: cleanEmail,
-      purpose: cleanPurpose,
-      code: generatedCode,
-      expiresAt,
-      attempts: 0,
-      verified: false,
-      createdAt: now,
-      lastSentAt: now,
+    activeResetSessions.set(sessionKey, {
+      userId: matchedUser.id,
+      identifier: matchedUser.studentEmail || matchedUser.nickname,
+      token,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      createdAt: Date.now(),
     });
-
-    const purposeLabel = cleanPurpose === 'REGISTRATION' ? 'Registration OTP' : 'Password Reset OTP';
-    const nameToGreet = recipientName ? String(recipientName).trim() : 'FUHSI Member';
-
-    // Dispatch real email via nodemailer
-    const dispatchResult = await dispatchEmailNotification({
-      to: cleanEmail,
-      recipientName: nameToGreet,
-      code: generatedCode,
-      purposeTitle: purposeLabel,
-    });
-
-    // Save in sent emails log for admin inspection without ever exposing raw OTP
-    if (!activeDb.sentEmails) activeDb.sentEmails = [];
-    activeDb.sentEmails.push({
-      id: `email_${Date.now()}`,
-      to: cleanEmail,
-      purpose: purposeLabel,
-      code: '******', // Strictly masked for security
-      delivered: dispatchResult.delivered,
-      timestamp: new Date().toISOString(),
-    });
-    if (activeDb.sentEmails.length > 50) activeDb.sentEmails.shift();
-
-    // Never return the OTP code to the client; user must check their email
-    return res.json({
-      success: true,
-      emailDelivered: dispatchResult.delivered,
-      expiresIn: 600, // 10 minutes in seconds
-      message: `A 6-digit verification code has been dispatched to ${cleanEmail}. Please check your email inbox.`,
-    });
-  } catch (error: any) {
-    console.error('[OTP Request Error]:', error?.message || error);
-    return res.status(500).json({ success: false, error: 'Internal server error processing OTP request.' });
-  }
-});
-
-// 2. POST /api/otp/verify
-app.post('/api/otp/verify', (req, res) => {
-  try {
-    const { email, purpose, code } = req.body;
-
-    if (!email || !code || !purpose) {
-      return res.status(400).json({ success: false, error: 'Email, purpose, and 6-digit code are required.' });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanPurpose = String(purpose).trim().toUpperCase();
-    const enteredCode = String(code).trim();
-
-    if (!/^\d{6}$/.test(enteredCode)) {
-      return res.status(400).json({ success: false, error: 'Verification code must be exactly 6 digits.' });
-    }
-
-    const storageKey = getOtpStorageKey(cleanPurpose, cleanEmail);
-    const entry = serverOtpStore.get(storageKey);
-
-    if (!entry) {
-      return res.status(400).json({
-        success: false,
-        error: 'No active verification request found for this email. Please request a new code.',
-      });
-    }
-
-    // Check expiration (10 minutes)
-    if (Date.now() > entry.expiresAt) {
-      serverOtpStore.delete(storageKey);
-      return res.status(400).json({
-        success: false,
-        error: 'Verification code has expired. Please request a new code.',
-      });
-    }
-
-    // Attempt limit check (Max 5 attempts)
-    if (entry.attempts >= 5) {
-      serverOtpStore.delete(storageKey);
-      return res.status(429).json({
-        success: false,
-        error: 'Too many incorrect attempts. For security, please request a new verification code.',
-      });
-    }
-
-    entry.attempts += 1;
-
-    // Strict validation: Must match exact generated code
-    if (entry.code !== enteredCode) {
-      const remainingAttempts = 5 - entry.attempts;
-      return res.status(400).json({
-        success: false,
-        error: `Invalid verification code. ${remainingAttempts} attempt${remainingAttempts === 1 ? '' : 's'} remaining.`,
-      });
-    }
-
-    // Success! Generate secure verification token
-    const verificationToken = `tok_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-    entry.verified = true;
-    entry.token = verificationToken;
 
     return res.json({
       success: true,
-      message: 'Verification successful.',
-      token: verificationToken,
+      message: 'Account ownership verified successfully.',
+      resetToken: token,
+      user: {
+        id: matchedUser.id,
+        nickname: matchedUser.nickname,
+        realName: matchedUser.realName,
+        studentEmail: matchedUser.studentEmail,
+        accountType: matchedUser.accountType || 'Student',
+      },
     });
   } catch (error: any) {
-    console.error('[OTP Verify Error]:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error verifying code.' });
+    console.error('[Verify Reset Identity Error]:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error verifying account ownership.' });
   }
 });
 
-// 3. POST /api/auth/reset-password
+// 2. POST /api/auth/reset-password
 app.post('/api/auth/reset-password', async (req, res) => {
   try {
-    const { email, token, newPassword } = req.body;
+    const { identifier, resetToken, token, newPassword } = req.body || {};
+    const effectiveToken = resetToken || token;
 
-    if (!email || !token || !newPassword) {
-      return res.status(400).json({ success: false, error: 'Email, token, and new password are required.' });
+    if (!identifier || !newPassword) {
+      return res.status(400).json({ success: false, error: 'Account identifier and new password are required.' });
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
     const cleanPassword = String(newPassword).trim();
-
     if (cleanPassword.length < 4) {
       return res.status(400).json({ success: false, error: 'New password must be at least 4 characters.' });
     }
 
-    const storageKey = getOtpStorageKey('PASSWORD_RESET', cleanEmail);
-    const entry = serverOtpStore.get(storageKey);
+    const cleanInput = String(identifier).trim().toLowerCase();
+    const cleanNick = cleanInput.replace(/^@+/, '');
 
-    if (!entry || !entry.verified || entry.token !== token) {
-      return res.status(403).json({
-        success: false,
-        error: 'Invalid or unverified session. Please verify your OTP code again.',
-      });
-    }
-
-    // Token valid for up to 15 minutes after request
-    if (Date.now() - entry.createdAt > 15 * 60 * 1000) {
-      serverOtpStore.delete(storageKey);
-      return res.status(400).json({
-        success: false,
-        error: 'Reset session has expired. Please restart password recovery.',
-      });
-    }
-
-    // Update password in central server DB
+    // Locate the user in active database
     const userIndex = (activeDb.users || []).findIndex((u: any) => {
-      const uEmail = (u.studentEmail || '').trim().toLowerCase();
-      return uEmail === cleanEmail;
+      const uEmail = String(u.studentEmail || '').trim().toLowerCase();
+      const uNick = String(u.nickname || '').trim().toLowerCase().replace(/^@+/, '');
+      const uId = String(u.id || '').trim().toLowerCase();
+      return uEmail === cleanInput || uNick === cleanNick || uId === cleanInput;
     });
 
     if (userIndex === -1) {
       return res.status(404).json({ success: false, error: 'User account not found.' });
     }
 
+    const matchedUser = activeDb.users[userIndex];
+    const sessionKey = String(matchedUser.id || cleanNick);
+    const session = activeResetSessions.get(sessionKey);
+
+    // If a reset token was provided or session was opened, verify it
+    if (effectiveToken) {
+      if (!session || session.token !== effectiveToken) {
+        return res.status(403).json({
+          success: false,
+          error: 'Invalid or expired password reset session. Please verify your details again.',
+        });
+      }
+      if (Date.now() > session.expiresAt) {
+        activeResetSessions.delete(sessionKey);
+        return res.status(400).json({
+          success: false,
+          error: 'Password reset session has expired. Please verify your details again.',
+        });
+      }
+    }
+
+    // Update password securely in central server DB
     activeDb.users[userIndex].password = cleanPassword;
     activeDb.users[userIndex].savedPassword = cleanPassword;
     activeDb.users[userIndex].updatedAt = new Date().toISOString();
     persistServerDb();
 
-    // Invalidate OTP session so token cannot be reused
-    serverOtpStore.delete(storageKey);
+    // Invalidate reset session so it cannot be reused
+    activeResetSessions.delete(sessionKey);
 
-    console.log(`[Password Reset Success] Password updated for user: ${cleanEmail}`);
+    console.log(`[Password Reset Success] Password updated for user: ${matchedUser.nickname || matchedUser.id}`);
     return res.json({
       success: true,
       message: 'Password reset successfully! Your new password is now active.',
       user: {
-        id: activeDb.users[userIndex].id,
-        nickname: activeDb.users[userIndex].nickname,
-        studentEmail: activeDb.users[userIndex].studentEmail,
+        id: matchedUser.id,
+        nickname: matchedUser.nickname,
+        studentEmail: matchedUser.studentEmail,
       },
     });
   } catch (error: any) {
     console.error('[Password Reset Error]:', error);
     return res.status(500).json({ success: false, error: 'Internal server error resetting password.' });
-  }
-});
-
-// Legacy backward-compatible endpoint for existing calls
-app.post('/api/send-otp', async (req, res) => {
-  try {
-    const { to, otp, purpose, recipientName } = req.body;
-    if (!to || !otp) {
-      return res.status(400).json({ success: false, error: 'Recipient email and OTP code are required.' });
-    }
-    const result = await dispatchEmailNotification({
-      to,
-      recipientName: recipientName || 'FUHSI Member',
-      code: String(otp),
-      purposeTitle: purpose || 'Account Verification',
-    });
-    return res.json({ success: result.delivered, error: result.error });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, error: error?.message || 'Email dispatch failed' });
   }
 });
 
