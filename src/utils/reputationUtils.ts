@@ -1,6 +1,30 @@
 import { Post, Comment, UserProfile, Report } from '../types';
-import { isDemoUser, isDemoNickname, isDemoPost } from './postGenerator';
+import { isDemoUser, isDemoNickname, isDemoPost, isDemoComment } from './postGenerator';
 import { isGuestAccount, isModulaAccount } from './userDbUtils';
+import { isPostDeletedLocally, isCommentDeletedLocally } from './apiSync';
+
+/**
+ * Validates that a post is genuine, active, not quarantined, and not deleted (locally or on server).
+ */
+export function isPostActiveAndValid(p: Post | null | undefined): boolean {
+  if (!p || !p.id) return false;
+  if (p.status === 'Removed' || p.isQuarantined || (p as any).isDeleted || (p as any).deleted) return false;
+  if (isDemoPost(p)) return false;
+  if (isPostDeletedLocally(p.id)) return false;
+  return true;
+}
+
+/**
+ * Validates that a comment is genuine, top-level (not a reply), active, and not deleted.
+ */
+export function isCommentActiveAndValid(c: Comment | null | undefined): boolean {
+  if (!c || !c.id) return false;
+  if (c.parentId) return false; // Replies excluded from top-level comment engagement
+  if ((c as any).isDeleted || (c as any).status === 'Removed' || (c as any).deleted) return false;
+  if (isDemoComment(c)) return false;
+  if (isCommentDeletedLocally(c.id)) return false;
+  return true;
+}
 
 export const REPUTATION_RULES = {
   PROFILE_COMPLETION: 20,
@@ -432,9 +456,15 @@ export function parseItemTimestamp(item: any): number {
  * - Receive a like on a thread from others (+1)
  * - Receive a comment on a thread from others (+1)
  * - Receive a repost/share of a thread from others (+1)
- * - Profile completion (if registered/completed within this week: +20)
+ * - Repost peer posts during this week (+1)
  * - Spam / offensive penalty within this week (-20)
  * - Self-likes, self-comments, self-reposts = 0
+ * 
+ * ELIGIBILITY & SEPARATION RULES:
+ * - Profile completion points (+20) must NOT qualify a user for the weekly individual ranking!
+ * - A user who has only completed their profile but has not participated in any engagement must not appear.
+ * - Users with no posts, likes received, comments received, reposts received, or other qualifying engagement must be excluded.
+ * - Profile completion (+20) remains separate and applies solely to all-time profile reputation (calculateUserPoints).
  */
 export function calculateWeeklyUserPoints(
   nickname?: string,
@@ -455,16 +485,12 @@ export function calculateWeeklyUserPoints(
 
   let points = 0;
 
-  // 1. Profile completion reward if registered this week
-  if (userProfile?.createdAt) {
-    const regTime = new Date(userProfile.createdAt).getTime();
-    if (regTime >= startMs && regTime <= endMs) {
-      points += REPUTATION_RULES.PROFILE_COMPLETION;
-    }
-  }
+  // IMPORTANT: Profile completion points (+20) are excluded from weekly rankings.
+  // Profile completion points belong exclusively to all-time reputation (calculateUserPoints).
 
-  // Find all posts by this user
+  // Find all active, non-deleted posts by this user
   const myPosts = (allPosts || []).filter((p) => {
+    if (!isPostActiveAndValid(p)) return false;
     const author = (p.authorNickname || p.nickname || (p as any).customNickname || '')
       .toLowerCase()
       .replace(/^@/, '')
@@ -472,9 +498,8 @@ export function calculateWeeklyUserPoints(
     return author === normTarget;
   });
 
-  // 2. Posts created within current Sunday-Saturday window (+2 per post)
+  // 1. Posts created within current Sunday-Saturday window (+2 per post)
   myPosts.forEach((p) => {
-    if (p.status === 'Removed') return;
     const postTime = parseItemTimestamp(p);
     // If created this week (or fresh with 0 timestamp)
     if (postTime >= startMs && postTime <= endMs) {
@@ -482,12 +507,13 @@ export function calculateWeeklyUserPoints(
     }
   });
 
-  // 3. Likes received on posts active/created this week (+1 per like from others)
+  // 2. Likes received on active posts this week (+1 per like from others)
   myPosts.forEach((p) => {
     const postTime = parseItemTimestamp(p);
     const isThisWeekPost = postTime >= startMs && postTime <= endMs;
-    let likesCount = 0;
+    if (!isThisWeekPost) return;
 
+    let likesCount = 0;
     if (Array.isArray(p.likedBy) && p.likedBy.length > 0) {
       likesCount = p.likedBy.filter((k) => {
         const norm = (k || '').toLowerCase().replace(/^@/, '').trim();
@@ -499,15 +525,13 @@ export function calculateWeeklyUserPoints(
       likesCount = Math.max(0, totalLikes - (isSelfLiked ? 1 : 0));
     }
 
-    if (isThisWeekPost) {
-      points += likesCount * REPUTATION_RULES.RECEIVE_LIKE;
-    }
+    points += likesCount * REPUTATION_RULES.RECEIVE_LIKE;
   });
 
-  // 4. Comments received this week on user's posts from other users (+1 per active top-level comment)
+  // 3. Comments received this week on user's posts from other users (+1 per active top-level comment)
   // Replies do NOT count toward main post comment points
   (allComments || []).forEach((c) => {
-    if (!c || c.parentId) return;
+    if (!isCommentActiveAndValid(c)) return;
     const commentTime = parseItemTimestamp(c);
     if (commentTime >= startMs && commentTime <= endMs) {
       const targetPost = myPosts.find((p) => p.id === c.postId);
@@ -520,7 +544,7 @@ export function calculateWeeklyUserPoints(
     }
   });
 
-  // 5. Reposts/shares on this week's posts received from other users (+1)
+  // 4. Reposts/shares on this week's posts received from other users (+1)
   myPosts.forEach((p) => {
     const postTime = parseItemTimestamp(p);
     if (postTime >= startMs && postTime <= endMs) {
@@ -539,10 +563,10 @@ export function calculateWeeklyUserPoints(
     }
   });
 
-  // 5b. Reposts performed by this user on peer posts during this week (+1)
+  // 5. Reposts performed by this user on peer posts during this week (+1)
   const weeklyPeerPostsReposted = new Set<string>();
   (allPosts || []).forEach((p) => {
-    if (!p) return;
+    if (!isPostActiveAndValid(p)) return;
     const authorNorm = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
     if (authorNorm === normTarget) return;
 
@@ -561,7 +585,10 @@ export function calculateWeeklyUserPoints(
   points += weeklyPeerPostsReposted.size * REPUTATION_RULES.PERFORM_REPOST;
 
   // 6. Penalties for violations occurring this week
-  myPosts.forEach((p) => {
+  (allPosts || []).forEach((p) => {
+    if (!p) return;
+    const author = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
+    if (author !== normTarget) return;
     const postTime = parseItemTimestamp(p);
     if (postTime >= startMs && postTime <= endMs) {
       const flagReason = (p.flagReason || '').toLowerCase();
@@ -768,10 +795,13 @@ export interface TrendingPostItem {
  * Calculates the Top 5 Trending Posts based on real-time engagement (likes, comments, shares).
  * 
  * Rules:
- * - Real central platform data only (no demo posts, no removed/quarantined posts).
- * - Maximum of 5 posts.
- * - Dynamic ranking based on actual engagement generated on each post.
- * - Comments = number of active top-level comments (replies excluded).
+ * - Display a maximum of 5 genuinely trending posts.
+ * - Only posts with actual engagement during the current weekly ranking period should qualify.
+ * - If only 1 post qualifies, display only 1.
+ * - If 2, 3, or 4 posts qualify, display only those posts.
+ * - Do not fill the remaining positions with posts that have zero engagement or placeholder entries.
+ * - Rank eligible posts according to their actual engagement.
+ * - Deleted posts, demo posts, or posts with no qualifying engagement must not appear.
  */
 export function calculateTopTrendingPosts(
   allPosts: Post[] = [],
@@ -794,12 +824,8 @@ export function calculateTopTrendingPosts(
   const currentWindow = customWindow || getWeeklyRankingWindow();
   const { startMs, endMs } = currentWindow;
 
-  const validPosts = (allPosts || []).filter((p) => {
-    if (!p) return false;
-    if (p.status === 'Removed' || p.isQuarantined) return false;
-    if (isDemoPost(p)) return false;
-    return true;
-  });
+  // STRICT FILTER: Exclude deleted posts (locally deleted or marked deleted), removed/quarantined posts, and demo posts
+  const validPosts = (allPosts || []).filter((p) => isPostActiveAndValid(p));
 
   const scoredPosts = validPosts
     .map((p) => {
@@ -818,7 +844,7 @@ export function calculateTopTrendingPosts(
       let comments = 0;
       if (Array.isArray(allComments)) {
         comments = allComments.filter((c) => {
-          if (!c || c.postId !== p.id || c.parentId) return false;
+          if (!isCommentActiveAndValid(c) || c.postId !== p.id) return false;
           const cTime = parseItemTimestamp(c);
           return cTime >= startMs && cTime <= endMs;
         }).length;
@@ -832,8 +858,8 @@ export function calculateTopTrendingPosts(
       const effectiveLikes = isThisWeekPost ? likes : 0;
       const effectiveShares = isThisWeekPost ? shares : 0;
 
-      // Comments and shares indicate deeper engagement, weighted slightly higher
-      const totalEngagement = effectiveLikes * 1 + comments * 2 + effectiveShares * 2;
+      // Actual engagement during this weekly ranking period
+      const totalEngagement = effectiveLikes + comments + effectiveShares;
 
       return {
         post: p,
@@ -843,7 +869,7 @@ export function calculateTopTrendingPosts(
         totalEngagement,
       };
     })
-    // STRICT RULE: Hide trending posts with zero engagement.
+    // STRICT RULE: Only posts with actual engagement during the current weekly ranking period qualify
     .filter((item) => item.totalEngagement > 0);
 
   // Sort descending by totalEngagement, breaking ties by recency

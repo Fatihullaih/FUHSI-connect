@@ -247,7 +247,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
             <div className="space-y-2.5">
               {top10EngagingUsers.length === 0 ? (
                 <div className="bg-white rounded-2xl p-10 text-center text-xs text-slate-500 font-medium border border-slate-200">
-                  No users have earned ranking points yet this week.
+                  No users have earned qualifying engagement points yet this week.
                 </div>
               ) : (
                 top10EngagingUsers.map((item) => {
@@ -352,7 +352,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
             <div className="space-y-3">
               {top5TrendingPosts.length === 0 ? (
                 <div className="bg-white rounded-2xl p-10 text-center text-xs text-slate-500 font-medium border border-slate-200">
-                  No trending posts with engagement yet this week.
+                  No trending posts with qualifying engagement yet this week.
                 </div>
               ) : (
                 top5TrendingPosts.map((item) => {
