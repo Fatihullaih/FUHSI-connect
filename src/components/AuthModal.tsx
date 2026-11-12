@@ -2026,18 +2026,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               )}
             </div>
           )}
-
-          {canClose && (
-            <div className="pt-2 border-t border-slate-100 text-center">
-              <button
-                type="button"
-                onClick={onClose}
-                className="text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
-              >
-                Close Window
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>

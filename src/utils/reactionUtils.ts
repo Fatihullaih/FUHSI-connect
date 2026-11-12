@@ -22,7 +22,12 @@ export function isItemLikedByUser(
   const normUserNick = normalizeUserKey(user.nickname);
   const userId = normalizeUserKey(user.id);
 
-  if (!normUserNick && !userId) return false;
+  if (!normUserNick && !userId) {
+    if (Array.isArray(item.likedBy)) {
+      return item.likedBy.some((k) => normalizeUserKey(k) === 'guest_user');
+    }
+    return Boolean(item.isLikedByMe);
+  }
 
   if (Array.isArray(item.likedBy)) {
     return item.likedBy.some((k) => {
@@ -32,7 +37,7 @@ export function isItemLikedByUser(
     });
   }
 
-  return false;
+  return Boolean(item.isLikedByMe);
 }
 
 /**

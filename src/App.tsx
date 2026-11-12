@@ -1923,12 +1923,18 @@ export const App: React.FC = () => {
 
   // Handlers for Feed
   const handleLikeClick = (post: Post) => {
-    if (!userProfile || isGuestAccount(userProfile)) {
-      setShowAuthModal(true);
-      return;
-    }
+    // Resolve active user (students, guest accounts, or visitor device fallback)
+    // Never redirect to login page when liking a thread
+    const effectiveUser: UserProfile = (userProfile && (userProfile.nickname || userProfile.id))
+      ? userProfile
+      : {
+          ...EMPTY_USER_PROFILE,
+          id: 'guest_user',
+          nickname: '@guest_user',
+          accountType: 'Guest',
+        };
 
-    const { nextLikedBy } = toggleUserLike(post.likedBy, userProfile);
+    const { nextLikedBy } = toggleUserLike(post.likedBy, effectiveUser);
     const nextCount = nextLikedBy.length;
     const nowIso = new Date().toISOString();
 
@@ -1968,13 +1974,17 @@ export const App: React.FC = () => {
   };
 
   const handleBookmarkClick = (post: Post) => {
-    if (!userProfile || isGuestAccount(userProfile)) {
-      setShowAuthModal(true);
-      return;
-    }
+    const effectiveUser: UserProfile = (userProfile && (userProfile.nickname || userProfile.id))
+      ? userProfile
+      : {
+          ...EMPTY_USER_PROFILE,
+          id: 'guest_user',
+          nickname: '@guest_user',
+          accountType: 'Guest',
+        };
 
-    const normUserNick = normalizeUserKey(userProfile.nickname);
-    const userId = normalizeUserKey(userProfile.id);
+    const normUserNick = normalizeUserKey(effectiveUser.nickname);
+    const userId = normalizeUserKey(effectiveUser.id);
     const userKey = normUserNick || userId;
 
     if (!userKey) return;
@@ -2032,7 +2042,7 @@ export const App: React.FC = () => {
   };
 
   const handleRepost = useCallback((targetPost: Post) => {
-    if (!userProfile || isGuestAccount(userProfile)) {
+    if (!userProfile || (!userProfile.id && !userProfile.nickname)) {
       setShowAuthModal(true);
       return;
     }
@@ -2155,7 +2165,7 @@ export const App: React.FC = () => {
   }, [userProfile, selectedPost]);
 
   const handleQuotePost = useCallback((targetPost: Post, caption: string) => {
-    if (!userProfile || isGuestAccount(userProfile)) {
+    if (!userProfile || (!userProfile.id && !userProfile.nickname)) {
       setShowAuthModal(true);
       return;
     }
@@ -2677,15 +2687,19 @@ export const App: React.FC = () => {
   };
 
   const handleLikeComment = (commentId: string) => {
-    if (!userProfile || isGuestAccount(userProfile)) {
-      setShowAuthModal(true);
-      return;
-    }
+    const effectiveUser: UserProfile = (userProfile && (userProfile.nickname || userProfile.id))
+      ? userProfile
+      : {
+          ...EMPTY_USER_PROFILE,
+          id: 'guest_user',
+          nickname: '@guest_user',
+          accountType: 'Guest',
+        };
 
     setComments((prev) =>
       prev.map((c) => {
         if (c.id === commentId) {
-          const { nextLikedBy } = toggleUserLike(c.likedBy, userProfile);
+          const { nextLikedBy } = toggleUserLike(c.likedBy, effectiveUser);
           const nextCount = nextLikedBy.length;
           const updated: Comment = {
             ...c,
