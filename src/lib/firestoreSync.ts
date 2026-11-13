@@ -8,7 +8,8 @@ import {
   getDocs,
   writeBatch,
   query,
-  where
+  where,
+  runTransaction
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup } from '../types';
@@ -512,16 +513,23 @@ export function subscribePosts(onUpdate: (posts: Post[]) => void) {
   return onSnapshot(collection(db, POSTS_COL), (snapshot) => {
     const list: Post[] = [];
     snapshot.forEach((docSnap) => {
-      const p = docSnap.data() as Post;
+      const raw = docSnap.data() as Post;
+      const p: Post = { ...raw, id: raw?.id || docSnap.id };
       if (!isDemoPost(p) && !isPostDeletedLocally(p.id)) {
-        // Strip any legacy global bookmark booleans from previous sessions
+        // Strip any legacy global personal flags from previous sessions
         delete p.isBookmarked;
         delete p.isBookmarkedByMe;
+        delete p.isLikedByMe;
+        delete p.isRepostedByMe;
+        if (Array.isArray(p.likedBy)) {
+          p.likes = p.likedBy.length;
+          p.likesCount = p.likedBy.length;
+        }
         list.push(p);
       }
     });
-    // Sort descending by createdAt
-    list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    // Sort descending by createdAt / timestamp
+    list.sort((a, b) => new Date(b.createdAt || b.timestamp || 0).getTime() - new Date(a.createdAt || a.timestamp || 0).getTime());
     onUpdate(list);
   }, (err) => {
     console.warn('Firestore posts subscription fallback/warning:', err?.message || err);
@@ -536,10 +544,13 @@ export async function getPostFromFirestore(postId: string): Promise<Post | null>
   try {
     const snap = await getDoc(doc(db, POSTS_COL, postId));
     if (snap.exists()) {
-      const p = snap.data() as Post;
+      const raw = snap.data() as Post;
+      const p: Post = { ...raw, id: raw?.id || snap.id };
       if (!isDemoPost(p) && !isPostDeletedLocally(p.id)) {
         delete p.isBookmarked;
         delete p.isBookmarkedByMe;
+        delete p.isLikedByMe;
+        delete p.isRepostedByMe;
         return p;
       }
     }
@@ -552,18 +563,232 @@ export async function getPostFromFirestore(postId: string): Promise<Post | null>
 /**
  * Save single post to Firestore
  */
-export async function savePostToFirestore(post: Post): Promise<void> {
-  if (!post || !post.id || isDemoPost(post) || isPostDeletedLocally(post.id)) return;
+export async function savePostToFirestore(post: Post): Promise<boolean> {
+  if (!post || !post.id || isDemoPost(post) || isPostDeletedLocally(post.id)) return false;
   try {
     const cleanPost: any = sanitizeForFirestore(post);
-    // CRITICAL: isBookmarked and isBookmarkedByMe are strictly personal per-user flags.
-    // They must never be persisted to Firestore on the shared Post document, otherwise
-    // one user bookmarking a thread will bookmark it for all users across the platform!
+    // CRITICAL: Personal per-user flags must never be persisted to Firestore on shared documents
     delete cleanPost.isBookmarkedByMe;
     delete cleanPost.isBookmarked;
+    delete cleanPost.isLikedByMe;
+    delete cleanPost.isRepostedByMe;
+    // Strip oversized base64 authorAvatarUrl to stay well within Firestore 1MB doc limit
+    if (cleanPost.authorAvatarUrl && String(cleanPost.authorAvatarUrl).length > 150000) {
+      delete cleanPost.authorAvatarUrl;
+    }
+    if (!cleanPost.updatedAt) {
+      cleanPost.updatedAt = cleanPost.timestamp || cleanPost.createdAt || new Date().toISOString();
+    }
     await setDoc(doc(db, POSTS_COL, post.id), cleanPost, { merge: true });
+    return true;
   } catch (err) {
     console.error('Error saving post to Firestore:', err);
+    return false;
+  }
+}
+
+/**
+ * Update only a post's commentsCount in Firestore without overwriting concurrent likes/reposts
+ */
+export async function updatePostCommentsCountInFirestore(postId: string, commentsCount: number): Promise<void> {
+  if (!postId || isPostDeletedLocally(postId)) return;
+  try {
+    const safeCount = Math.max(0, Number(commentsCount) || 0);
+    await setDoc(
+      doc(db, POSTS_COL, postId),
+      { commentsCount: safeCount, commentCount: safeCount },
+      { merge: true }
+    );
+  } catch (err) {
+    console.error('Error updating post commentsCount in Firestore:', err);
+  }
+}
+
+/**
+ * Normalize a user like key (matches reactionUtils.normalizeUserKey)
+ */
+function normalizeLikeKey(value: string | null | undefined): string {
+  if (!value || typeof value !== 'string') return '';
+  return value.toLowerCase().replace(/^@/, '').trim();
+}
+
+/**
+ * Atomically toggle a user's like on a Post document in Firestore using a transaction
+ * so concurrent likes from different devices/accounts never overwrite each other.
+ */
+export async function togglePostLikeInFirestore(
+  postId: string,
+  userKey: string,
+  userAliases: string[] = [],
+  fallbackLikedBy?: string[]
+): Promise<{ likedBy: string[]; likesCount: number; updatedAt: string } | null> {
+  const cleanKey = normalizeLikeKey(userKey);
+  if (!postId || !cleanKey || isPostDeletedLocally(postId)) return null;
+
+  const aliasSet = new Set<string>([cleanKey]);
+  userAliases.forEach((a) => {
+    const norm = normalizeLikeKey(a);
+    if (norm) aliasSet.add(norm);
+  });
+
+  try {
+    const postRef = doc(db, POSTS_COL, postId);
+    const nowIso = new Date().toISOString();
+    const result = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(postRef);
+      const data = snap.exists() ? (snap.data() as any) : null;
+      const rawLikedBy: string[] = Array.isArray(data?.likedBy)
+        ? data.likedBy
+        : Array.isArray(fallbackLikedBy)
+        ? fallbackLikedBy
+        : [];
+
+      const deduped: string[] = [];
+      const seen = new Set<string>();
+      for (const item of rawLikedBy) {
+        const norm = normalizeLikeKey(item);
+        if (norm && !seen.has(norm)) {
+          seen.add(norm);
+          deduped.push(norm);
+        }
+      }
+
+      const alreadyLiked = deduped.some((k) => aliasSet.has(k));
+      const nextLikedBy = alreadyLiked
+        ? deduped.filter((k) => !aliasSet.has(k))
+        : [...deduped, cleanKey];
+      const nextCount = nextLikedBy.length;
+
+      transaction.set(
+        postRef,
+        {
+          likedBy: nextLikedBy,
+          likesCount: nextCount,
+          likes: nextCount,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      return { likedBy: nextLikedBy, likesCount: nextCount, updatedAt: nowIso };
+    });
+    return result;
+  } catch (err) {
+    console.error('Error toggling post like in Firestore transaction:', err);
+    return null;
+  }
+}
+
+/**
+ * Atomically toggle a user's like on a Comment document in Firestore using a transaction
+ */
+export async function toggleCommentLikeInFirestore(
+  commentId: string,
+  userKey: string,
+  userAliases: string[] = [],
+  fallbackLikedBy?: string[]
+): Promise<{ likedBy: string[]; likesCount: number; updatedAt: string } | null> {
+  const cleanKey = normalizeLikeKey(userKey);
+  if (!commentId || !cleanKey || isCommentDeletedLocally(commentId)) return null;
+
+  const aliasSet = new Set<string>([cleanKey]);
+  userAliases.forEach((a) => {
+    const norm = normalizeLikeKey(a);
+    if (norm) aliasSet.add(norm);
+  });
+
+  try {
+    const commentRef = doc(db, COMMENTS_COL, commentId);
+    const nowIso = new Date().toISOString();
+    const result = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(commentRef);
+      const data = snap.exists() ? (snap.data() as any) : null;
+      const rawLikedBy: string[] = Array.isArray(data?.likedBy)
+        ? data.likedBy
+        : Array.isArray(fallbackLikedBy)
+        ? fallbackLikedBy
+        : [];
+
+      const deduped: string[] = [];
+      const seen = new Set<string>();
+      for (const item of rawLikedBy) {
+        const norm = normalizeLikeKey(item);
+        if (norm && !seen.has(norm)) {
+          seen.add(norm);
+          deduped.push(norm);
+        }
+      }
+
+      const alreadyLiked = deduped.some((k) => aliasSet.has(k));
+      const nextLikedBy = alreadyLiked
+        ? deduped.filter((k) => !aliasSet.has(k))
+        : [...deduped, cleanKey];
+      const nextCount = nextLikedBy.length;
+
+      transaction.set(
+        commentRef,
+        {
+          likedBy: nextLikedBy,
+          likesCount: nextCount,
+          likes: nextCount,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      return { likedBy: nextLikedBy, likesCount: nextCount, updatedAt: nowIso };
+    });
+    return result;
+  } catch (err) {
+    console.error('Error toggling comment like in Firestore transaction:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetch all posts from Firestore (one-shot fallback/hydration)
+ */
+export async function fetchPostsFromFirestore(): Promise<Post[]> {
+  try {
+    const snap = await getDocs(collection(db, POSTS_COL));
+    const list: Post[] = [];
+    snap.forEach((docSnap) => {
+      const raw = docSnap.data() as Post;
+      const p: Post = { ...raw, id: raw?.id || docSnap.id };
+      if (!isDemoPost(p) && !isPostDeletedLocally(p.id)) {
+        delete p.isBookmarked;
+        delete p.isBookmarkedByMe;
+        delete p.isLikedByMe;
+        delete p.isRepostedByMe;
+        list.push(p);
+      }
+    });
+    return list;
+  } catch (err) {
+    console.error('Error fetching posts from Firestore:', err);
+    return [];
+  }
+}
+
+/**
+ * Fetch all comments from Firestore (one-shot fallback/hydration)
+ */
+export async function fetchCommentsFromFirestore(): Promise<Comment[]> {
+  try {
+    const snap = await getDocs(collection(db, COMMENTS_COL));
+    const list: Comment[] = [];
+    snap.forEach((docSnap) => {
+      const raw = docSnap.data() as Comment;
+      const c: Comment = { ...raw, id: raw?.id || docSnap.id };
+      if (!isDemoComment(c) && !isCommentDeletedLocally(c.id)) {
+        delete c.isLikedByMe;
+        list.push(c);
+      }
+    });
+    return list;
+  } catch (err) {
+    console.error('Error fetching comments from Firestore:', err);
+    return [];
   }
 }
 
@@ -595,11 +820,18 @@ export function subscribeComments(onUpdate: (comments: Comment[]) => void) {
   return onSnapshot(collection(db, COMMENTS_COL), (snapshot) => {
     const list: Comment[] = [];
     snapshot.forEach((docSnap) => {
-      const c = docSnap.data() as Comment;
+      const raw = docSnap.data() as Comment;
+      const c: Comment = { ...raw, id: raw?.id || docSnap.id };
       if (!isDemoComment(c) && !isCommentDeletedLocally(c.id)) {
+        delete c.isLikedByMe;
+        if (Array.isArray(c.likedBy)) {
+          c.likes = c.likedBy.length;
+          c.likesCount = c.likedBy.length;
+        }
         list.push(c);
       }
     });
+    list.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
     onUpdate(list);
   }, (err) => {
     console.warn('Firestore comments subscription fallback/warning:', err?.message || err);
@@ -609,12 +841,26 @@ export function subscribeComments(onUpdate: (comments: Comment[]) => void) {
 /**
  * Save comment to Firestore
  */
-export async function saveCommentToFirestore(comment: Comment): Promise<void> {
-  if (!comment || !comment.id || isDemoComment(comment)) return;
+export async function saveCommentToFirestore(comment: Comment): Promise<boolean> {
+  if (!comment || !comment.id || isDemoComment(comment) || isCommentDeletedLocally(comment.id)) return false;
   try {
-    await setDoc(doc(db, COMMENTS_COL, comment.id), sanitizeForFirestore(comment), { merge: true });
+    const cleanComment: any = sanitizeForFirestore(comment);
+    delete cleanComment.isLikedByMe;
+    if (!cleanComment.authorNickname) {
+      cleanComment.authorNickname = '@FUHSI_Student';
+    }
+    if (!cleanComment.updatedAt) {
+      cleanComment.updatedAt = cleanComment.timestamp || new Date().toISOString();
+    }
+    // Strip oversized base64 authorAvatarUrl so comment docs stay well under Firestore 1MB limit
+    if (cleanComment.authorAvatarUrl && String(cleanComment.authorAvatarUrl).length > 150000) {
+      delete cleanComment.authorAvatarUrl;
+    }
+    await setDoc(doc(db, COMMENTS_COL, comment.id), cleanComment, { merge: true });
+    return true;
   } catch (err) {
     console.error('Error saving comment to Firestore:', err);
+    return false;
   }
 }
 

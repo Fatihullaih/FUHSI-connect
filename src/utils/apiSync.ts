@@ -302,6 +302,20 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
   return mergedList.filter((u) => !isDemoUser(u) && !isDemoNickname(u.nickname));
 }
 
+function deduplicateLikedBy(list: any): string[] {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'string') continue;
+    const norm = item.toLowerCase().replace(/^@/, '').trim();
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm);
+    result.push(norm);
+  }
+  return result;
+}
+
 export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
   const map = new Map<string, Post>();
 
@@ -327,32 +341,39 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
 
     const existing = map.get(p.id);
     if (!existing) {
-      const likedBy = Array.isArray(p.likedBy) ? p.likedBy : [];
-      const likesCount = likedBy.length > 0 ? likedBy.length : (p.likesCount ?? p.likes ?? 0);
-      map.set(p.id, {
+      const likedBy = deduplicateLikedBy(p.likedBy);
+      const likesCount = Array.isArray(p.likedBy) ? likedBy.length : (p.likesCount ?? p.likes ?? 0);
+      const cleaned: Post = {
         ...p,
         likedBy,
         likesCount,
         likes: likesCount,
-      });
+      };
+      delete cleaned.isBookmarked;
+      delete cleaned.isBookmarkedByMe;
+      delete cleaned.isLikedByMe;
+      map.set(p.id, cleaned);
     } else {
       // Determine which version has newer edits / content / reaction updates
       const existingUpdatedMs = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
       const pUpdatedMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-      const isPNewer = pUpdatedMs >= existingUpdatedMs;
+      const isPNewer = pUpdatedMs > existingUpdatedMs || (pUpdatedMs === existingUpdatedMs && Array.isArray(p.likedBy) && (!Array.isArray(existing.likedBy) || p.likedBy.length >= existing.likedBy.length));
 
       const primary = isPNewer ? p : existing;
       const secondary = isPNewer ? existing : p;
 
-      // Handle likedBy list
+      // Handle likedBy list - strictly prefer authoritative likedBy array from the newer update
       let mergedLikedBy: string[] = [];
-      if (Array.isArray(primary.likedBy) && (primary.likedBy.length > 0 || isPNewer)) {
-        mergedLikedBy = primary.likedBy;
+      let hasLikedByArray = false;
+      if (Array.isArray(primary.likedBy)) {
+        mergedLikedBy = deduplicateLikedBy(primary.likedBy);
+        hasLikedByArray = true;
       } else if (Array.isArray(secondary.likedBy)) {
-        mergedLikedBy = secondary.likedBy;
+        mergedLikedBy = deduplicateLikedBy(secondary.likedBy);
+        hasLikedByArray = true;
       }
 
-      const likesCount = mergedLikedBy.length > 0
+      const likesCount = hasLikedByArray
         ? mergedLikedBy.length
         : (primary.likesCount !== undefined ? primary.likesCount : (secondary.likesCount ?? 0));
 
@@ -390,7 +411,7 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
       });
       const mergedRepostRecords = Array.from(recordsMap.values());
 
-      map.set(p.id, {
+      const mergedPost: Post = {
         ...secondary,
         ...primary,
         likedBy: mergedLikedBy,
@@ -403,7 +424,11 @@ export function mergePosts(a: Post[] = [], b: Post[] = []): Post[] {
         bookmarkedBy: mergedBookmarkedBy,
         bookmarks,
         commentsCount,
-      });
+      };
+      delete mergedPost.isBookmarked;
+      delete mergedPost.isBookmarkedByMe;
+      delete mergedPost.isLikedByMe;
+      map.set(p.id, mergedPost);
     }
   };
 
@@ -427,26 +452,58 @@ export function mergeComments(a: Comment[] = [], b: Comment[] = []): Comment[] {
     if (!c || !c.id || isDemoComment(c) || isCommentDeletedLocally(c.id)) return;
     const existing = map.get(c.id);
     if (!existing) {
-      const likedBy = Array.isArray(c.likedBy) ? c.likedBy : [];
-      const likesCount = likedBy.length > 0 ? likedBy.length : (c.likesCount ?? c.likes ?? 0);
-      map.set(c.id, { ...c, likedBy, likes: likesCount, likesCount });
+      const likedBy = deduplicateLikedBy(c.likedBy);
+      const likesCount = Array.isArray(c.likedBy) ? likedBy.length : (c.likesCount ?? c.likes ?? 0);
+      const cleaned: Comment = { ...c, likedBy, likes: likesCount, likesCount };
+      delete cleaned.isLikedByMe;
+      map.set(c.id, cleaned);
     } else {
-      let mergedLikedBy: string[] = [];
-      if (Array.isArray(c.likedBy)) {
-        mergedLikedBy = c.likedBy;
-      } else if (Array.isArray(existing.likedBy)) {
-        mergedLikedBy = existing.likedBy;
-      }
-      const likesCount = mergedLikedBy.length > 0
-        ? mergedLikedBy.length
-        : (c.likesCount !== undefined ? c.likesCount : (existing.likesCount ?? 0));
+      const existingUpdatedMs = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+      const cUpdatedMs = c.updatedAt ? new Date(c.updatedAt).getTime() : 0;
+      const isCNewer =
+        cUpdatedMs > existingUpdatedMs ||
+        (cUpdatedMs === existingUpdatedMs &&
+          Array.isArray(c.likedBy) &&
+          (!Array.isArray(existing.likedBy) || c.likedBy.length >= existing.likedBy.length));
 
-      map.set(c.id, { ...existing, ...c, likedBy: mergedLikedBy, likes: likesCount, likesCount });
+      const primary = isCNewer ? c : existing;
+      const secondary = isCNewer ? existing : c;
+
+      let mergedLikedBy: string[] = [];
+      let hasLikedByArray = false;
+      if (Array.isArray(primary.likedBy)) {
+        mergedLikedBy = deduplicateLikedBy(primary.likedBy);
+        hasLikedByArray = true;
+      } else if (Array.isArray(secondary.likedBy)) {
+        mergedLikedBy = deduplicateLikedBy(secondary.likedBy);
+        hasLikedByArray = true;
+      }
+
+      const likesCount = hasLikedByArray
+        ? mergedLikedBy.length
+        : (primary.likesCount !== undefined ? primary.likesCount : (secondary.likesCount ?? 0));
+
+      const mergedComment: Comment = {
+        ...secondary,
+        ...primary,
+        likedBy: mergedLikedBy,
+        likes: likesCount,
+        likesCount,
+        updatedAt: primary.updatedAt || secondary.updatedAt,
+      };
+      delete mergedComment.isLikedByMe;
+      map.set(c.id, mergedComment);
     }
   };
   a.forEach(processComment);
   b.forEach(processComment);
-  return Array.from(map.values()).filter((c) => !isDemoComment(c));
+  return Array.from(map.values())
+    .filter((c) => !isDemoComment(c))
+    .sort((x, y) => {
+      const tX = isNaN(new Date(x.timestamp || 0).getTime()) ? 0 : new Date(x.timestamp || 0).getTime();
+      const tY = isNaN(new Date(y.timestamp || 0).getTime()) ? 0 : new Date(y.timestamp || 0).getTime();
+      return tX - tY;
+    });
 }
 
 export function mergeMarketplaceItems(a: MarketplaceItem[] = [], b: MarketplaceItem[] = []): MarketplaceItem[] {

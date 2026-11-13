@@ -28,6 +28,8 @@ import {
   uploadAvatarToServer,
   markPostPermanentlyDeleted,
   markCommentPermanentlyDeleted,
+  isPostDeletedLocally,
+  isCommentDeletedLocally,
 } from './utils/apiSync';
 import {
   subscribeUsers,
@@ -43,6 +45,9 @@ import {
   deletePostFromFirestore,
   saveCommentToFirestore,
   deleteCommentFromFirestore,
+  togglePostLikeInFirestore,
+  toggleCommentLikeInFirestore,
+  updatePostCommentsCountInFirestore,
   saveMarketplaceApprovedToFirestore,
   saveVerificationRequestToFirestore,
   deleteVerificationRequestFromFirestore,
@@ -424,6 +429,19 @@ export const App: React.FC = () => {
     }
     return INITIAL_POSTS;
   });
+
+  const postsRef = useRef<Post[]>(posts);
+  postsRef.current = posts;
+  const commentsRef = useRef<Comment[]>(comments);
+  commentsRef.current = comments;
+
+  const pendingCommentWritesRef = useRef<Map<string, { comment: Comment; expiresAt: number }>>(new Map());
+  const pendingPostLikeWritesRef = useRef<
+    Map<string, { likedBy: string[]; likesCount: number; updatedAt: string; expiresAt: number }>
+  >(new Map());
+  const pendingCommentLikeWritesRef = useRef<
+    Map<string, { likedBy: string[]; likesCount: number; updatedAt: string; expiresAt: number }>
+  >(new Map());
 
   const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>(() => {
     try {
@@ -869,44 +887,133 @@ export const App: React.FC = () => {
     // 2. Subscribe Posts in real-time from Firestore
     const unsubPosts = subscribePosts((fsPosts) => {
       if (!isMounted) return;
+      const now = Date.now();
       const validPosts = (fsPosts || []).filter(
-        (p) => !isDemoPost(p) && !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)
+        (p) => !isDemoPost(p) && !isPostDeletedLocally(p.id) && !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)
       );
-      let currentStoredComments: Comment[] = [];
-      try {
-        const storedComm = localStorage.getItem('fuhsi_comments_db');
-        if (storedComm) currentStoredComments = JSON.parse(storedComm);
-      } catch {}
-      const reconciledPosts = validPosts.map((p) => {
-        const topLevelCount = currentStoredComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
+
+      // Reconcile pending optimistic post likes so in-flight toggles don't flicker back
+      const withPendingLikes = validPosts.map((p) => {
+        const pending = pendingPostLikeWritesRef.current.get(p.id);
+        if (pending) {
+          if (pending.expiresAt <= now) {
+            pendingPostLikeWritesRef.current.delete(p.id);
+          } else {
+            const incomingSet = new Set((Array.isArray(p.likedBy) ? p.likedBy : []).map((k) => normalizeUserKey(k)));
+            const pendingSet = new Set(pending.likedBy.map((k) => normalizeUserKey(k)));
+            const matches =
+              incomingSet.size === pendingSet.size &&
+              Array.from(pendingSet).every((k) => incomingSet.has(k));
+            if (matches) {
+              pendingPostLikeWritesRef.current.delete(p.id);
+            } else {
+              return {
+                ...p,
+                likedBy: pending.likedBy,
+                likesCount: pending.likesCount,
+                likes: pending.likesCount,
+                updatedAt: pending.updatedAt,
+              };
+            }
+          }
+        }
+        return p;
+      });
+
+      const currentComments = Array.isArray(commentsRef.current) ? commentsRef.current : [];
+      const mergedWithLocal = mergePosts(withPendingLikes, []);
+      const reconciledPosts = mergedWithLocal.map((p) => {
+        const topLevelCount = currentComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
         return {
           ...p,
           commentsCount: topLevelCount,
+          commentCount: topLevelCount,
         };
       });
-      localStorage.setItem('fuhsi_posts_db', JSON.stringify(reconciledPosts));
+
+      postsRef.current = reconciledPosts;
+      try {
+        localStorage.setItem('fuhsi_posts_db', JSON.stringify(reconciledPosts));
+      } catch {}
       setPosts(reconciledPosts);
       setSelectedPost((prev) => {
         if (!prev) return null;
         const match = reconciledPosts.find((p) => p.id === prev.id);
         return match || null;
       });
+      setModalStack((prevStack) =>
+        prevStack.map((item) => {
+          if (item.type === 'postDetail' && item.post) {
+            const match = reconciledPosts.find((p) => p.id === item.post.id);
+            return match ? { ...item, post: match } : item;
+          }
+          return item;
+        })
+      );
     });
 
     // 3. Subscribe Comments in real-time from Firestore
     const unsubComments = subscribeComments((fsComments) => {
       if (!isMounted) return;
-      const validComments = (fsComments || []).filter((c) => !isDemoComment(c));
-      localStorage.setItem('fuhsi_comments_db', JSON.stringify(validComments));
+      const now = Date.now();
+      const validIncoming = (fsComments || []).filter(
+        (c) => !isDemoComment(c) && !isCommentDeletedLocally(c.id) && !isPostDeletedLocally(c.postId)
+      );
+
+      // Reconcile pending optimistic comment creations and likes
+      const incomingIds = new Set(validIncoming.map((c) => c.id));
+      const stillPendingComments: Comment[] = [];
+      pendingCommentWritesRef.current.forEach((entry, cid) => {
+        if (incomingIds.has(cid) || entry.expiresAt <= now) {
+          pendingCommentWritesRef.current.delete(cid);
+        } else if (!isCommentDeletedLocally(cid) && !isPostDeletedLocally(entry.comment.postId)) {
+          stillPendingComments.push(entry.comment);
+        }
+      });
+
+      const withPendingLikes = validIncoming.map((c) => {
+        const pending = pendingCommentLikeWritesRef.current.get(c.id);
+        if (pending) {
+          if (pending.expiresAt <= now) {
+            pendingCommentLikeWritesRef.current.delete(c.id);
+          } else {
+            const incomingSet = new Set((Array.isArray(c.likedBy) ? c.likedBy : []).map((k) => normalizeUserKey(k)));
+            const pendingSet = new Set(pending.likedBy.map((k) => normalizeUserKey(k)));
+            const matches =
+              incomingSet.size === pendingSet.size &&
+              Array.from(pendingSet).every((k) => incomingSet.has(k));
+            if (matches) {
+              pendingCommentLikeWritesRef.current.delete(c.id);
+            } else {
+              return {
+                ...c,
+                likedBy: pending.likedBy,
+                likesCount: pending.likesCount,
+                likes: pending.likesCount,
+                updatedAt: pending.updatedAt,
+              };
+            }
+          }
+        }
+        return c;
+      });
+
+      const validComments = mergeComments(withPendingLikes, stillPendingComments);
+      commentsRef.current = validComments;
+      try {
+        localStorage.setItem('fuhsi_comments_db', JSON.stringify(validComments));
+      } catch {}
       setComments(validComments);
+
       setPosts((prevPosts) => {
         const reconciled = prevPosts.map((p) => {
           const topLevelCount = validComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
           if (p.commentsCount !== topLevelCount) {
-            return { ...p, commentsCount: topLevelCount };
+            return { ...p, commentsCount: topLevelCount, commentCount: topLevelCount };
           }
           return p;
         });
+        postsRef.current = reconciled;
         try {
           localStorage.setItem('fuhsi_posts_db', JSON.stringify(reconciled));
         } catch {}
@@ -915,8 +1022,17 @@ export const App: React.FC = () => {
       setSelectedPost((prev) => {
         if (!prev) return null;
         const topLevelCount = validComments.filter((c) => c && c.postId === prev.id && !c.parentId).length;
-        return { ...prev, commentsCount: topLevelCount };
+        return { ...prev, commentsCount: topLevelCount, commentCount: topLevelCount };
       });
+      setModalStack((prevStack) =>
+        prevStack.map((item) => {
+          if (item.type === 'postDetail' && item.post) {
+            const topLevelCount = validComments.filter((c) => c && c.postId === item.post.id && !c.parentId).length;
+            return { ...item, post: { ...item.post, commentsCount: topLevelCount, commentCount: topLevelCount } };
+          }
+          return item;
+        })
+      );
     });
 
     // 4. Subscribe Verification Requests in real-time from Firestore
@@ -1242,20 +1358,147 @@ export const App: React.FC = () => {
         }
       }
 
-      // 2. Sync Posts
-      if (Array.isArray(db.posts)) {
-        const validPosts = db.posts.filter(
-          (p) => !isDemoPost(p) && !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)
-        );
-        localStorage.setItem('fuhsi_posts_db', JSON.stringify(validPosts));
-        setPosts((prev) => (JSON.stringify(prev) !== JSON.stringify(validPosts) ? validPosts : prev));
+      // 1b. Honor deleted post & comment tombstones from central server
+      if (Array.isArray(db.deletedPostIds)) {
+        db.deletedPostIds.forEach((id) => id && markPostPermanentlyDeleted(String(id)));
+      }
+      if (Array.isArray(db.deletedCommentIds)) {
+        db.deletedCommentIds.forEach((id) => id && markCommentPermanentlyDeleted(String(id)));
       }
 
-      // 3. Sync Comments
+      const nowMs = Date.now();
+
+      // 2. Merge Comments first (NEVER overwrite Firestore comments with empty/stale server array)
+      let latestMergedComments = commentsRef.current || [];
       if (Array.isArray(db.comments)) {
-        const validComments = db.comments.filter((c) => !isDemoComment(c));
-        localStorage.setItem('fuhsi_comments_db', JSON.stringify(validComments));
-        setComments((prev) => (JSON.stringify(prev) !== JSON.stringify(validComments) ? validComments : prev));
+        const serverDeletedPosts = new Set((db.deletedPostIds || []).map(String));
+        const serverDeletedComments = new Set((db.deletedCommentIds || []).map(String));
+
+        const validServerComments = db.comments.filter(
+          (c) =>
+            c &&
+            c.id &&
+            !isDemoComment(c) &&
+            !isCommentDeletedLocally(c.id) &&
+            !isPostDeletedLocally(c.postId) &&
+            !serverDeletedComments.has(String(c.id)) &&
+            (!c.parentId || !serverDeletedComments.has(String(c.parentId))) &&
+            (!c.postId || !serverDeletedPosts.has(String(c.postId)))
+        );
+
+        const activeCurrentComments = (commentsRef.current || []).filter(
+          (c) =>
+            c &&
+            c.id &&
+            !isDemoComment(c) &&
+            !isCommentDeletedLocally(c.id) &&
+            !isPostDeletedLocally(c.postId) &&
+            !serverDeletedComments.has(String(c.id)) &&
+            (!c.parentId || !serverDeletedComments.has(String(c.parentId))) &&
+            (!c.postId || !serverDeletedPosts.has(String(c.postId)))
+        );
+
+        const pendingCreated: Comment[] = [];
+        pendingCommentWritesRef.current.forEach((entry, cid) => {
+          if (entry.expiresAt > nowMs && !isCommentDeletedLocally(cid) && !isPostDeletedLocally(entry.comment.postId)) {
+            pendingCreated.push(entry.comment);
+          }
+        });
+
+        let mergedComments = mergeComments(activeCurrentComments, validServerComments);
+        if (pendingCreated.length > 0) {
+          mergedComments = mergeComments(mergedComments, pendingCreated);
+        }
+        mergedComments = mergedComments.map((c) => {
+          const pendingLike = pendingCommentLikeWritesRef.current.get(c.id);
+          if (pendingLike && pendingLike.expiresAt > nowMs) {
+            return {
+              ...c,
+              likedBy: pendingLike.likedBy,
+              likesCount: pendingLike.likesCount,
+              likes: pendingLike.likesCount,
+              updatedAt: pendingLike.updatedAt,
+            };
+          }
+          return c;
+        });
+
+        latestMergedComments = mergedComments;
+        if (JSON.stringify(commentsRef.current) !== JSON.stringify(mergedComments)) {
+          commentsRef.current = mergedComments;
+          try {
+            localStorage.setItem('fuhsi_comments_db', JSON.stringify(mergedComments));
+          } catch {}
+          setComments(mergedComments);
+        }
+      }
+
+      // 3. Merge Posts (NEVER overwrite Firestore posts with empty/stale server array)
+      if (Array.isArray(db.posts)) {
+        const serverDeletedPosts = new Set((db.deletedPostIds || []).map(String));
+        const validServerPosts = db.posts.filter(
+          (p) =>
+            p &&
+            p.id &&
+            !isDemoPost(p) &&
+            !isPostDeletedLocally(p.id) &&
+            !serverDeletedPosts.has(String(p.id)) &&
+            !p.id.startsWith('repost_') &&
+            !(p.isRepost && p.repostedPostId)
+        );
+        const activeCurrentPosts = (postsRef.current || []).filter(
+          (p) =>
+            p &&
+            p.id &&
+            !isDemoPost(p) &&
+            !isPostDeletedLocally(p.id) &&
+            !serverDeletedPosts.has(String(p.id)) &&
+            !p.id.startsWith('repost_') &&
+            !(p.isRepost && p.repostedPostId)
+        );
+
+        const mergedPostsRaw = mergePosts(activeCurrentPosts, validServerPosts).map((p) => {
+          const pendingLike = pendingPostLikeWritesRef.current.get(p.id);
+          const withLike =
+            pendingLike && pendingLike.expiresAt > nowMs
+              ? {
+                  ...p,
+                  likedBy: pendingLike.likedBy,
+                  likesCount: pendingLike.likesCount,
+                  likes: pendingLike.likesCount,
+                  updatedAt: pendingLike.updatedAt,
+                }
+              : p;
+          const topLevelCount = latestMergedComments.filter(
+            (c) => c && c.postId === withLike.id && !c.parentId
+          ).length;
+          return {
+            ...withLike,
+            commentsCount: topLevelCount,
+            commentCount: topLevelCount,
+          };
+        });
+
+        if (JSON.stringify(postsRef.current) !== JSON.stringify(mergedPostsRaw)) {
+          postsRef.current = mergedPostsRaw;
+          try {
+            localStorage.setItem('fuhsi_posts_db', JSON.stringify(mergedPostsRaw));
+          } catch {}
+          setPosts(mergedPostsRaw);
+          setSelectedPost((prev) => {
+            if (!prev) return null;
+            return mergedPostsRaw.find((p) => p.id === prev.id) || null;
+          });
+          setModalStack((prevStack) =>
+            prevStack.map((item) => {
+              if (item.type === 'postDetail' && item.post) {
+                const match = mergedPostsRaw.find((p) => p.id === item.post.id);
+                return match ? { ...item, post: match } : item;
+              }
+              return item;
+            })
+          );
+        }
       }
 
       // 4. Sync Marketplace Approved Items
@@ -1934,12 +2177,20 @@ export const App: React.FC = () => {
           accountType: 'Guest',
         };
 
-    const { nextLikedBy } = toggleUserLike(post.likedBy, effectiveUser);
+    const latestPost = postsRef.current.find((p) => p.id === post.id) || post;
+    const { nextLikedBy } = toggleUserLike(latestPost.likedBy, effectiveUser);
     const nextCount = nextLikedBy.length;
     const nowIso = new Date().toISOString();
 
+    pendingPostLikeWritesRef.current.set(post.id, {
+      likedBy: nextLikedBy,
+      likesCount: nextCount,
+      updatedAt: nowIso,
+      expiresAt: Date.now() + 8000,
+    });
+
     const updated: Post = {
-      ...post,
+      ...latestPost,
       likedBy: nextLikedBy,
       likesCount: nextCount,
       likes: nextCount,
@@ -1948,6 +2199,7 @@ export const App: React.FC = () => {
 
     setPosts((prev) => {
       const updatedPosts = prev.map((p) => (p.id === post.id ? updated : p));
+      postsRef.current = updatedPosts;
       try {
         localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
       } catch (e) {
@@ -1956,9 +2208,7 @@ export const App: React.FC = () => {
       return updatedPosts;
     });
 
-    if (selectedPost && selectedPost.id === post.id) {
-      setSelectedPost(updated);
-    }
+    setSelectedPost((prev) => (prev && prev.id === post.id ? updated : prev));
 
     setModalStack((prevStack) =>
       prevStack.map((item) => {
@@ -1969,8 +2219,50 @@ export const App: React.FC = () => {
       })
     );
 
-    savePostToFirestore(updated).catch((err) => console.error('Error saving like to Firestore:', err));
-    pushServerDbSync({ posts: [updated] } as any);
+    const userKey = normalizeUserKey(effectiveUser.nickname) || normalizeUserKey(effectiveUser.id);
+    const userAliases = [effectiveUser.nickname, effectiveUser.id].filter(Boolean) as string[];
+
+    // Use atomic Firestore transaction so concurrent likes from different devices/accounts merge cleanly
+    togglePostLikeInFirestore(post.id, userKey, userAliases, latestPost.likedBy)
+      .then((txResult) => {
+        if (!txResult) {
+          // Fallback to full merge write if transaction couldn't run
+          savePostToFirestore(updated).catch((err) => console.error('Error saving like to Firestore:', err));
+          pushServerDbSync({ posts: [updated] } as any).catch(() => {});
+          return;
+        }
+        pendingPostLikeWritesRef.current.delete(post.id);
+        let syncedPost: Post = updated;
+        setPosts((prev) => {
+          const next = prev.map((p) => {
+            if (p.id !== post.id) return p;
+            syncedPost = {
+              ...p,
+              likedBy: txResult.likedBy,
+              likesCount: txResult.likesCount,
+              likes: txResult.likesCount,
+              updatedAt: txResult.updatedAt,
+            };
+            return syncedPost;
+          });
+          postsRef.current = next;
+          try {
+            localStorage.setItem('fuhsi_posts_db', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+        setSelectedPost((prev) => (prev && prev.id === post.id ? syncedPost : prev));
+        setModalStack((prevStack) =>
+          prevStack.map((item) =>
+            item.type === 'postDetail' && item.post.id === post.id ? { ...item, post: syncedPost } : item
+          )
+        );
+        pushServerDbSync({ posts: [syncedPost] } as any).catch(() => {});
+      })
+      .catch((err) => {
+        console.error('Error saving like to Firestore:', err);
+        pushServerDbSync({ posts: [updated] } as any).catch(() => {});
+      });
   };
 
   const handleBookmarkClick = (post: Post) => {
@@ -2357,20 +2649,24 @@ export const App: React.FC = () => {
     const targetPostId = commentToDelete?.postId || (selectedPost ? selectedPost.id : null);
 
     // 3. Derive posts commentsCount strictly from active top-level comments (0 if none)
-    let targetUpdatedPost: Post | null = null;
+    let targetTopLevelCount = 0;
     const updatedPosts = posts.map((p) => {
       const topLevelCount = updatedComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
-      const updatedP = { ...p, commentsCount: topLevelCount };
+      const updatedP = { ...p, commentsCount: topLevelCount, commentCount: topLevelCount };
       if (p.id === targetPostId) {
-        targetUpdatedPost = updatedP;
+        targetTopLevelCount = topLevelCount;
       }
       return updatedP;
     });
+    postsRef.current = updatedPosts;
+    commentsRef.current = updatedComments;
     setPosts(updatedPosts);
 
-    // Save updated target post to Firestore
-    if (targetUpdatedPost) {
-      savePostToFirestore(targetUpdatedPost).catch((err) => console.error('Error saving post commentsCount to Firestore:', err));
+    // Update only commentsCount on target post in Firestore so concurrent likes are preserved
+    if (targetPostId) {
+      updatePostCommentsCountInFirestore(targetPostId, targetTopLevelCount).catch((err) =>
+        console.error('Error updating post commentsCount in Firestore:', err)
+      );
     }
 
     // 4. Update selectedPost and modalStack
@@ -2600,11 +2896,15 @@ export const App: React.FC = () => {
     imageUrl?: string
   ) => {
     const cleanText = commentText.trim();
+    if (!cleanText && !imageUrl) return;
+
+    const nowIso = new Date().toISOString();
+    const authorNickname = (userProfile?.nickname || '').trim() || '@FUHSI_Student';
 
     const newComment: Comment = {
       id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       postId,
-      authorNickname: userProfile.nickname,
+      authorNickname,
       authorBadgeType: userProfile.badgeType,
       authorBadgeTitle: userProfile.badgeTitle,
       isVerified: userProfile.isVerified,
@@ -2612,7 +2912,8 @@ export const App: React.FC = () => {
       authorAvatarUrl: userProfile.avatarUrl,
       content: cleanText,
       imageUrl,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
+      updatedAt: nowIso,
       parentId,
       replyToNickname,
       likesCount: 0,
@@ -2621,26 +2922,26 @@ export const App: React.FC = () => {
       isLikedByMe: false,
     };
 
-    const newCommentsList = [...comments, newComment];
-    saveCommentToFirestore(newComment).catch((err) => console.error('Error saving comment to Firestore:', err));
-    pushServerDbSync({ comments: [newComment] } as any).catch(console.error);
+    pendingCommentWritesRef.current.set(newComment.id, {
+      comment: newComment,
+      expiresAt: Date.now() + 12000,
+    });
+
+    const newCommentsList = mergeComments(commentsRef.current || [], [newComment]);
+    commentsRef.current = newCommentsList;
     setComments(newCommentsList);
 
     // Only active top-level comments count toward the post's commentsCount!
     // Nested replies (!c.parentId === false) do NOT increase the post's commentsCount.
     const targetTopLevelCount = newCommentsList.filter((c) => c && c.postId === postId && !c.parentId).length;
 
-    let targetUpdatedPost: Post | null = null;
-    const updatedPosts = posts.map((p) => {
+    const updatedPosts = (postsRef.current || []).map((p) => {
       if (p.id === postId) {
-        const updatedP = { ...p, commentsCount: targetTopLevelCount };
-        targetUpdatedPost = updatedP;
-        savePostToFirestore(updatedP).catch(console.error);
-        pushServerDbSync({ posts: [updatedP] } as any).catch(console.error);
-        return updatedP;
+        return { ...p, commentsCount: targetTopLevelCount, commentCount: targetTopLevelCount };
       }
       return p;
     });
+    postsRef.current = updatedPosts;
     setPosts(updatedPosts);
 
     try {
@@ -2650,21 +2951,31 @@ export const App: React.FC = () => {
       console.error(e);
     }
 
-    if (selectedPost && selectedPost.id === postId) {
-      setSelectedPost((prev) => (prev ? { ...prev, commentsCount: targetTopLevelCount } : null));
-    }
+    setSelectedPost((prev) =>
+      prev && prev.id === postId ? { ...prev, commentsCount: targetTopLevelCount, commentCount: targetTopLevelCount } : prev
+    );
 
     setModalStack((prevStack) =>
       prevStack.map((item) => {
         if (item.type === 'postDetail' && item.post.id === postId) {
           return {
             ...item,
-            post: { ...item.post, commentsCount: targetTopLevelCount },
+            post: { ...item.post, commentsCount: targetTopLevelCount, commentCount: targetTopLevelCount },
           };
         }
         return item;
       })
     );
+
+    // Persist comment and update ONLY commentsCount on post in Firestore (never overwrite concurrent likes)
+    saveCommentToFirestore(newComment).catch((err) => console.error('Error saving comment to Firestore:', err));
+    updatePostCommentsCountInFirestore(postId, targetTopLevelCount).catch((err) =>
+      console.error('Error updating post commentsCount in Firestore:', err)
+    );
+    pushServerDbSync({
+      comments: [newComment],
+      postCommentCount: { postId, commentsCount: targetTopLevelCount },
+    } as any).catch((err) => console.error('Error syncing comment to server db:', err));
 
     // Recalculate exact points dynamically for current user and all users
     if (userProfile?.nickname) {
@@ -2696,24 +3007,73 @@ export const App: React.FC = () => {
           accountType: 'Guest',
         };
 
-    setComments((prev) =>
-      prev.map((c) => {
-        if (c.id === commentId) {
-          const { nextLikedBy } = toggleUserLike(c.likedBy, effectiveUser);
-          const nextCount = nextLikedBy.length;
-          const updated: Comment = {
-            ...c,
-            likedBy: nextLikedBy,
-            likesCount: nextCount,
-            likes: nextCount,
-          };
-          saveCommentToFirestore(updated).catch((err) => console.error('Error saving comment like to Firestore:', err));
-          pushServerDbSync({ comments: [updated] } as any);
-          return updated;
+    const latestComment = (commentsRef.current || []).find((c) => c.id === commentId);
+    if (!latestComment) return;
+
+    const { nextLikedBy } = toggleUserLike(latestComment.likedBy, effectiveUser);
+    const nextCount = nextLikedBy.length;
+    const nowIso = new Date().toISOString();
+
+    pendingCommentLikeWritesRef.current.set(commentId, {
+      likedBy: nextLikedBy,
+      likesCount: nextCount,
+      updatedAt: nowIso,
+      expiresAt: Date.now() + 8000,
+    });
+
+    const optimisticUpdated: Comment = {
+      ...latestComment,
+      likedBy: nextLikedBy,
+      likesCount: nextCount,
+      likes: nextCount,
+      updatedAt: nowIso,
+    };
+
+    setComments((prev) => {
+      const next = prev.map((c) => (c.id === commentId ? optimisticUpdated : c));
+      commentsRef.current = next;
+      try {
+        localStorage.setItem('fuhsi_comments_db', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    const userKey = normalizeUserKey(effectiveUser.nickname) || normalizeUserKey(effectiveUser.id);
+    const userAliases = [effectiveUser.nickname, effectiveUser.id].filter(Boolean) as string[];
+
+    toggleCommentLikeInFirestore(commentId, userKey, userAliases, latestComment.likedBy)
+      .then((txResult) => {
+        if (!txResult) {
+          saveCommentToFirestore(optimisticUpdated).catch((err) => console.error('Error saving comment like to Firestore:', err));
+          pushServerDbSync({ comments: [optimisticUpdated] } as any).catch(() => {});
+          return;
         }
-        return c;
+        pendingCommentLikeWritesRef.current.delete(commentId);
+        let syncedComment: Comment = optimisticUpdated;
+        setComments((prev) => {
+          const next = prev.map((c) => {
+            if (c.id !== commentId) return c;
+            syncedComment = {
+              ...c,
+              likedBy: txResult.likedBy,
+              likesCount: txResult.likesCount,
+              likes: txResult.likesCount,
+              updatedAt: txResult.updatedAt,
+            };
+            return syncedComment;
+          });
+          commentsRef.current = next;
+          try {
+            localStorage.setItem('fuhsi_comments_db', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+        pushServerDbSync({ comments: [syncedComment] } as any).catch(() => {});
       })
-    );
+      .catch((err) => {
+        console.error('Error saving comment like to Firestore:', err);
+        pushServerDbSync({ comments: [optimisticUpdated] } as any).catch(() => {});
+      });
   };
 
   const handleLogout = () => {
@@ -4378,7 +4738,7 @@ export const App: React.FC = () => {
         modalStack.map((item, idx) => {
           const stackZIndex = 70 + idx * 10;
           if (item.type === 'postDetail') {
-            const currentPost = posts.find((p) => p.id === item.post.id) || item.post;
+            const currentPost = postsWithUserBookmarkState.find((p) => p.id === item.post.id) || item.post;
             return (
               <PostDetailModal
                 key={`modal_post_${item.post.id}_${idx}`}

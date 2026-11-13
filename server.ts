@@ -155,7 +155,11 @@ function persistServerDb() {
 // Load DB on startup
 initAndLoadServerDb();
 
+let isFirestoreSyncRunning = false;
+
 async function syncFirestoreToActiveDb() {
+  if (isFirestoreSyncRunning) return;
+  isFirestoreSyncRunning = true;
   try {
     const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
     if (!fs.existsSync(configPath)) return;
@@ -166,7 +170,7 @@ async function syncFirestoreToActiveDb() {
     const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
 
     // 1. Fetch tombstones from deleted_users in Firestore
-    const delSnap = await getDocs(collection(firestoreDb, 'deleted_users')).catch(() => ({ forEach: () => {} }));
+    const delSnap = await getDocs(collection(firestoreDb, 'deleted_users')).catch(() => ({ forEach: () => {} } as any));
     const fsDeletedIds = new Set<string>((activeDb.deletedUserIds || []).map(String));
     const fsDeletedNicks = new Set<string>((activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, '')));
     delSnap.forEach((d: any) => {
@@ -181,16 +185,23 @@ async function syncFirestoreToActiveDb() {
     activeDb.deletedUserIds = Array.from(fsDeletedIds);
     activeDb.deletedUserNicknames = Array.from(fsDeletedNicks);
 
-    // 2. Fetch users and filter against tombstones
-    const snap = await getDocs(collection(firestoreDb, 'users'));
+    // 2. Fetch users, posts, comments, follows, verifications, and marketplace items in parallel
+    const [usersSnap, postsSnap, commentsSnap, followsSnap, verifsSnap, mpSnap] = await Promise.all([
+      getDocs(collection(firestoreDb, 'users')).catch(() => ({ forEach: () => {} } as any)),
+      getDocs(collection(firestoreDb, 'posts')).catch(() => ({ forEach: () => {} } as any)),
+      getDocs(collection(firestoreDb, 'comments')).catch(() => ({ forEach: () => {} } as any)),
+      getDocs(collection(firestoreDb, 'follows')).catch(() => ({ forEach: () => {} } as any)),
+      getDocs(collection(firestoreDb, 'verification_requests')).catch(() => ({ forEach: () => {} } as any)),
+      getDocs(collection(firestoreDb, 'marketplace_approved')).catch(() => ({ forEach: () => {} } as any)),
+    ]);
+
     const firestoreUsers: any[] = [];
-    snap.forEach((d) => {
+    usersSnap.forEach((d: any) => {
       const data = d.data();
       if (data && (data.nickname || data.studentEmail)) {
         const uId = String(data.id || d.id);
         const uNick = String(data.nickname || '').toLowerCase().replace(/^@/, '');
         if (fsDeletedIds.has(uId) || fsDeletedNicks.has(uNick)) {
-          // Stale user in Firestore! Clean it up permanently
           deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
         } else {
           firestoreUsers.push({ ...data, id: uId });
@@ -198,7 +209,6 @@ async function syncFirestoreToActiveDb() {
       }
     });
 
-    // Filter server DB against tombstones as well
     activeDb.users = (activeDb.users || []).filter((u: any) => {
       const uId = String(u.id || '');
       const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
@@ -208,15 +218,119 @@ async function syncFirestoreToActiveDb() {
     if (firestoreUsers.length > 0) {
       activeDb.users = mergeUsers(activeDb.users, firestoreUsers);
     }
+
+    const deletedPostSet = new Set((activeDb.deletedPostIds || []).map(String));
+    const deletedCommentSet = new Set((activeDb.deletedCommentIds || []).map(String));
+
+    const firestorePosts: any[] = [];
+    postsSnap.forEach((d: any) => {
+      const raw = d.data();
+      if (!raw) return;
+      const pId = String(raw.id || d.id);
+      if (deletedPostSet.has(pId)) return;
+      const pNick = String(raw.authorNickname || '').toLowerCase().replace(/^@/, '');
+      const pAuthorId = String(raw.authorId || '');
+      if ((pAuthorId && fsDeletedIds.has(pAuthorId)) || (pNick && fsDeletedNicks.has(pNick))) return;
+      const p = { ...raw, id: pId };
+      if (!isDemoPost(p) && !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)) {
+        delete p.isBookmarked;
+        delete p.isBookmarkedByMe;
+        delete p.isLikedByMe;
+        delete p.isRepostedByMe;
+        firestorePosts.push(p);
+      }
+    });
+
+    const firestoreComments: any[] = [];
+    commentsSnap.forEach((d: any) => {
+      const raw = d.data();
+      if (!raw) return;
+      const cId = String(raw.id || d.id);
+      if (deletedCommentSet.has(cId) || (raw.parentId && deletedCommentSet.has(String(raw.parentId)))) return;
+      if (raw.postId && deletedPostSet.has(String(raw.postId))) return;
+      const cNick = String(raw.authorNickname || '').toLowerCase().replace(/^@/, '');
+      const cAuthorId = String(raw.authorId || '');
+      if ((cAuthorId && fsDeletedIds.has(cAuthorId)) || (cNick && fsDeletedNicks.has(cNick))) return;
+      const c = { ...raw, id: cId };
+      if (!isDemoComment(c)) {
+        delete c.isLikedByMe;
+        firestoreComments.push(c);
+      }
+    });
+
+    if (firestoreComments.length > 0) {
+      activeDb.comments = mergeComments(activeDb.comments || [], firestoreComments);
+    }
+    if (firestorePosts.length > 0) {
+      activeDb.posts = mergePosts(activeDb.posts || [], firestorePosts);
+    }
+
+    // Reconcile top-level commentsCount on active posts from merged comments
+    if (Array.isArray(activeDb.posts) && Array.isArray(activeDb.comments)) {
+      const commentCountsByPost = new Map<string, number>();
+      for (const c of activeDb.comments) {
+        if (c && c.postId && !c.parentId) {
+          commentCountsByPost.set(String(c.postId), (commentCountsByPost.get(String(c.postId)) || 0) + 1);
+        }
+      }
+      activeDb.posts = activeDb.posts.map((p: any) => {
+        const count = commentCountsByPost.get(String(p.id)) || 0;
+        if (count > 0 || (p.commentsCount || 0) !== count) {
+          return { ...p, commentsCount: Math.max(count, 0), commentCount: Math.max(count, 0) };
+        }
+        return p;
+      });
+    }
+
+    const firestoreFollows: any[] = [];
+    followsSnap.forEach((d: any) => {
+      const data = d.data();
+      if (data && data.followerNickname && data.followingNickname) {
+        firestoreFollows.push({ ...data, id: data.id || d.id });
+      }
+    });
+    if (firestoreFollows.length > 0) {
+      activeDb.follows = mergeFollows(activeDb.follows || [], firestoreFollows);
+    }
+
+    const firestoreVerifs: any[] = [];
+    verifsSnap.forEach((d: any) => {
+      const data = d.data();
+      if (data && data.id && !isDemoVerificationRequest(data)) {
+        firestoreVerifs.push(data);
+      }
+    });
+    if (firestoreVerifs.length > 0) {
+      activeDb.verificationRequests = mergeVerificationRequests(activeDb.verificationRequests || [], firestoreVerifs);
+    }
+
+    const firestoreMp: any[] = [];
+    mpSnap.forEach((d: any) => {
+      const data = d.data();
+      if (data && data.id && !isDemoMarketplaceItem(data)) {
+        firestoreMp.push(data);
+      }
+    });
+    if (firestoreMp.length > 0) {
+      activeDb.marketplaceItems = mergeMarketplaceItems(activeDb.marketplaceItems || [], firestoreMp);
+    }
+
     persistServerDb();
-    console.log(`[Firestore Sync] Synced ${activeDb.users.length} active users into server DB (filtered ${fsDeletedIds.size} deleted tombstones).`);
+    console.log(
+      `[Firestore Sync] Synced ${activeDb.users.length} users, ${(activeDb.posts || []).length} posts, ${(activeDb.comments || []).length} comments into server DB.`
+    );
   } catch (err: any) {
     console.warn('[Firestore Sync] Non-critical Firestore sync notice:', err?.message || err);
+  } finally {
+    isFirestoreSyncRunning = false;
   }
 }
 
-// Kick off background Firestore sync
+// Kick off background Firestore sync on startup and keep server DB mirrored periodically
 syncFirestoreToActiveDb().catch(() => {});
+setInterval(() => {
+  syncFirestoreToActiveDb().catch(() => {});
+}, 20000);
 
 // Central DB API Endpoints
 app.get('/api/db', (req, res) => {
@@ -1048,7 +1162,26 @@ app.post('/api/db/sync', (req, res) => {
         } else {
           activeDb.comments = mergeComments(activeDb.comments, updates.comments);
         }
+        // Reconcile commentsCount on affected posts in activeDb without clobbering likedBy
+        const affectedIds = new Set(updates.comments.map((c: any) => c?.postId).filter(Boolean).map(String));
+        if (affectedIds.size > 0 && Array.isArray(activeDb.posts)) {
+          activeDb.posts = activeDb.posts.map((p: any) => {
+            if (!affectedIds.has(String(p.id))) return p;
+            const cCount = (activeDb.comments || []).filter((c: any) => c && String(c.postId) === String(p.id) && !c.parentId).length;
+            return { ...p, commentsCount: cCount, commentCount: cCount };
+          });
+        }
         changed = true;
+      }
+      if (updates.postCommentCount && updates.postCommentCount.postId) {
+        const targetId = String(updates.postCommentCount.postId);
+        const safeCount = Math.max(0, Number(updates.postCommentCount.commentsCount) || 0);
+        if (Array.isArray(activeDb.posts)) {
+          activeDb.posts = activeDb.posts.map((p: any) =>
+            String(p.id) === targetId ? { ...p, commentsCount: safeCount, commentCount: safeCount } : p
+          );
+          changed = true;
+        }
       }
       if (Array.isArray(updates.marketplaceItems)) {
         if (updates.replaceMarketplaceItems) {

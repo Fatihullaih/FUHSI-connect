@@ -76,6 +76,7 @@ export interface Comment {
   likes?: number;
   likedBy?: string[];
   isLikedByMe?: boolean;
+  updatedAt?: string;
 }
 
 export interface PollOption {
