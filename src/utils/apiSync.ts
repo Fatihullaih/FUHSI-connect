@@ -250,6 +250,18 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         })(),
         isAdmin: Boolean(primary.isAdmin || secondary.isAdmin),
         reputationScore: Math.max(primary.reputationScore || 0, secondary.reputationScore || 0),
+        lastActiveAt: (() => {
+          const pActive = primary.lastActiveAt ? Date.parse(primary.lastActiveAt) || 0 : 0;
+          const sActive = secondary.lastActiveAt ? Date.parse(secondary.lastActiveAt) || 0 : 0;
+          return pActive >= sActive ? (primary.lastActiveAt || secondary.lastActiveAt) : secondary.lastActiveAt;
+        })(),
+        isOnline: (() => {
+          const pActive = primary.lastActiveAt ? Date.parse(primary.lastActiveAt) || 0 : 0;
+          const sActive = secondary.lastActiveAt ? Date.parse(secondary.lastActiveAt) || 0 : 0;
+          if (pActive > sActive) return primary.isOnline;
+          if (sActive > pActive) return secondary.isOnline;
+          return primary.isOnline !== undefined ? primary.isOnline : secondary.isOnline;
+        })(),
         badgeType: (() => {
           if (isMod) {
             return (primary.badgeType && (primary.badgeType as any) !== 'NONE')

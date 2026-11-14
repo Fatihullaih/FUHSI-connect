@@ -286,15 +286,21 @@ export const App: React.FC = () => {
       setNotifTrigger((prev) => prev + 1);
 
       // If active user is the one deleted, log them out immediately
+      let shouldLogoutPurged = false;
       setUserProfile((curr) => {
         if (curr && (curr.id === userId || (curr.nickname && curr.nickname.toLowerCase().replace(/^@/, '') === cleanNick))) {
-          setIsLoggedIn(false);
-          setShowProfileModal(false);
-          closeModalUI();
+          shouldLogoutPurged = true;
           return EMPTY_USER_PROFILE;
         }
         return curr;
       });
+      setTimeout(() => {
+        if (shouldLogoutPurged) {
+          setIsLoggedIn(false);
+          setShowProfileModal(false);
+          closeModalUI();
+        }
+      }, 0);
     };
 
     window.addEventListener('fuhsi-theme-changed', handleThemeEvent);
@@ -866,17 +872,20 @@ export const App: React.FC = () => {
 
                 if (prev.badgeType !== authoritativeBadgeType || prev.badgeTitle !== authoritativeBadgeTitle || prev.isVerified !== authoritativeIsVerified) {
                   if (typeof window !== 'undefined') {
-                    window.dispatchEvent(
-                      new CustomEvent('fuhsi_badge_updated', {
-                        detail: {
-                          targetNickname: (finalUpdated.nickname || '').toLowerCase().replace(/^@/, ''),
-                          badgeType: authoritativeBadgeType,
-                          badgeTitle: authoritativeBadgeTitle,
-                          isVerified: authoritativeIsVerified,
-                          user: finalUpdated,
-                        },
-                      })
-                    );
+                    const targetNick = (finalUpdated.nickname || '').toLowerCase().replace(/^@/, '');
+                    setTimeout(() => {
+                      window.dispatchEvent(
+                        new CustomEvent('fuhsi_badge_updated', {
+                          detail: {
+                            targetNickname: targetNick,
+                            badgeType: authoritativeBadgeType,
+                            badgeTitle: authoritativeBadgeTitle,
+                            isVerified: authoritativeIsVerified,
+                            user: finalUpdated,
+                          },
+                        })
+                      );
+                    }, 0);
                   }
                 }
 
@@ -1098,17 +1107,19 @@ export const App: React.FC = () => {
                   localStorage.setItem('fuhsi_users_db', JSON.stringify(nextUsers));
                 }
                 if (typeof window !== 'undefined') {
-                  window.dispatchEvent(
-                    new CustomEvent('fuhsi_badge_updated', {
-                      detail: {
-                        targetNickname: cleanActiveNick,
-                        badgeType: assignedColor,
-                        badgeTitle: cleanAssignedTitle,
-                        isVerified: true,
-                        user: updatedProfile,
-                      },
-                    })
-                  );
+                  setTimeout(() => {
+                    window.dispatchEvent(
+                      new CustomEvent('fuhsi_badge_updated', {
+                        detail: {
+                          targetNickname: cleanActiveNick,
+                          badgeType: assignedColor,
+                          badgeTitle: cleanAssignedTitle,
+                          isVerified: true,
+                          user: updatedProfile,
+                        },
+                      })
+                    );
+                  }, 0);
                 }
               } catch (e) {}
               return updatedProfile;
@@ -1138,17 +1149,19 @@ export const App: React.FC = () => {
                   localStorage.setItem('fuhsi_users_db', JSON.stringify(nextUsers));
                 }
                 if (typeof window !== 'undefined') {
-                  window.dispatchEvent(
-                    new CustomEvent('fuhsi_badge_updated', {
-                      detail: {
-                        targetNickname: cleanActiveNick,
-                        badgeType: 'NONE',
-                        badgeTitle: '',
-                        isVerified: false,
-                        user: updatedProfile,
-                      },
-                    })
-                  );
+                  setTimeout(() => {
+                    window.dispatchEvent(
+                      new CustomEvent('fuhsi_badge_updated', {
+                        detail: {
+                          targetNickname: cleanActiveNick,
+                          badgeType: 'NONE',
+                          badgeTitle: '',
+                          isVerified: false,
+                          user: updatedProfile,
+                        },
+                      })
+                    );
+                  }, 0);
                 }
               } catch (e) {}
               return updatedProfile;
@@ -1275,6 +1288,11 @@ export const App: React.FC = () => {
           const mergedUsers = mergeUsers(localStoredUsers, validUsers);
           localStorage.setItem('fuhsi_users_db', JSON.stringify(mergedUsers));
           setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
+          const localSig = localStoredUsers.map((u) => `${u.id}:${u.nickname}:${u.isOnline ? 1 : 0}:${u.lastActiveAt || ''}:${u.updatedAt || ''}`).join('|');
+          const mergedSig = mergedUsers.map((u) => `${u.id}:${u.nickname}:${u.isOnline ? 1 : 0}:${u.lastActiveAt || ''}:${u.updatedAt || ''}`).join('|');
+          if (localSig !== mergedSig) {
+            setNotifTrigger((prev) => prev + 1);
+          }
 
           const activeUserJson = localStorage.getItem('fuhsi_active_user');
           if (activeUserJson) {
@@ -1306,7 +1324,6 @@ export const App: React.FC = () => {
                 pushServerDbSync({ users: [parsed] } as any).catch(console.error);
                 saveUserToFirestore(parsed).catch(console.error);
                 setUserProfile(parsed);
-                return;
               } else if (found) {
                 if (found.isApproved === false && !parsed.isAdmin) {
                   localStorage.removeItem('fuhsi_active_user');

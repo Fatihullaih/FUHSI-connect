@@ -410,6 +410,54 @@ app.get('/api/db', (req, res) => {
   return res.json({ success: true, db: activeDb });
 });
 
+let lastPresencePersistTime = 0;
+
+// Lightweight cross-device presence heartbeat endpoint (syncs online/active status via server DB even when Firestore is quota-limited)
+app.post('/api/presence', (req, res) => {
+  try {
+    const { userId, nickname, isOnline, lastActiveAt, showActiveStatus } = req.body || {};
+    const rawId = userId ? String(userId).trim() : '';
+    const cleanNick = nickname ? String(nickname).toLowerCase().replace(/^@+/, '').trim() : '';
+    if (!rawId && !cleanNick) {
+      return res.status(400).json({ success: false, error: 'User identifier required' });
+    }
+
+    const nowIso = lastActiveAt || new Date().toISOString();
+    const incomingMs = Date.parse(nowIso) || Date.now();
+    let updated = false;
+    let statusFlipped = false;
+
+    activeDb.users = (activeDb.users || []).map((u: any) => {
+      if (!u) return u;
+      const uId = String(u.id || '').trim();
+      const uNick = String(u.nickname || '').toLowerCase().replace(/^@+/, '').trim();
+      if ((rawId && uId === rawId) || (cleanNick && uNick === cleanNick)) {
+        const existingMs = u.lastActiveAt ? Date.parse(u.lastActiveAt) || 0 : 0;
+        if (incomingMs >= existingMs || isOnline === false) {
+          updated = true;
+          if (u.isOnline !== Boolean(isOnline)) statusFlipped = true;
+          return {
+            ...u,
+            isOnline: isOnline !== undefined ? Boolean(isOnline) : true,
+            lastActiveAt: incomingMs >= existingMs ? nowIso : (u.lastActiveAt || nowIso),
+            ...(showActiveStatus !== undefined ? { showActiveStatus: Boolean(showActiveStatus) } : {}),
+          };
+        }
+      }
+      return u;
+    });
+
+    if (updated && (statusFlipped || Date.now() - lastPresencePersistTime > 15000)) {
+      lastPresencePersistTime = Date.now();
+      persistServerDb();
+    }
+
+    return res.json({ success: true, updated });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Presence error' });
+  }
+});
+
 function isUsernameSuperseded(cleanUsername: string): boolean {
   if (!(activeDb as any).supersededUsernames || !(activeDb as any).supersededUsernames[cleanUsername]) {
     return false;
@@ -1206,6 +1254,18 @@ app.post('/api/db/sync', (req, res) => {
               badgeType: incoming.badgeType !== undefined ? incoming.badgeType : existing.badgeType,
               badgeTitle: incoming.badgeTitle !== undefined ? incoming.badgeTitle : existing.badgeTitle,
               reputationScore: incoming.reputationScore !== undefined ? incoming.reputationScore : existing.reputationScore,
+              lastActiveAt: (() => {
+                const exMs = existing.lastActiveAt ? Date.parse(existing.lastActiveAt) || 0 : 0;
+                const inMs = incoming.lastActiveAt ? Date.parse(incoming.lastActiveAt) || 0 : 0;
+                return inMs >= exMs ? (incoming.lastActiveAt || existing.lastActiveAt) : existing.lastActiveAt;
+              })(),
+              isOnline: (() => {
+                const exMs = existing.lastActiveAt ? Date.parse(existing.lastActiveAt) || 0 : 0;
+                const inMs = incoming.lastActiveAt ? Date.parse(incoming.lastActiveAt) || 0 : 0;
+                if (inMs > exMs) return incoming.isOnline;
+                if (exMs > inMs) return existing.isOnline;
+                return incoming.isOnline !== undefined ? incoming.isOnline : existing.isOnline;
+              })(),
               updatedAt: incoming.updatedAt || new Date().toISOString(),
             });
           } else {

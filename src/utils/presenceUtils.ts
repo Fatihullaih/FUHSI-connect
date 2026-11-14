@@ -82,8 +82,10 @@ export function isUserOnline(user: UserProfile | { lastActiveAt?: string; isOnli
   return Boolean(user.isOnline);
 }
 
+let lastFirestorePresenceSyncMs = 0;
+
 /**
- * Updates the current active user's presence in local storage and Firestore
+ * Updates the current active user's presence in local storage, central server DB, and Firestore
  */
 export function updateActiveUserPresence(user: UserProfile | null | undefined, isOnline: boolean = true): void {
   if (!user || !user.nickname) return;
@@ -133,15 +135,33 @@ export function updateActiveUserPresence(user: UserProfile | null | undefined, i
     console.error('Error updating user presence in users db:', e);
   }
 
-  // 3. Save to Firestore for real-time synchronization across devices
-  const userPayload: UserProfile = {
-    ...user,
-    lastActiveAt: nowIso,
-    isOnline: isOnline,
-  };
-  saveUserToFirestore(userPayload).catch((err) => {
-    console.error('Error syncing presence to Firestore:', err);
-  });
+  // 3. Sync lightweight presence to central server DB (works across devices even when Firestore quota is exhausted)
+  if (typeof fetch !== 'undefined') {
+    fetch('/api/presence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify({
+        userId: user.id,
+        nickname: user.nickname,
+        isOnline,
+        lastActiveAt: nowIso,
+        showActiveStatus: user.showActiveStatus,
+      }),
+    }).catch(() => {});
+  }
+
+  // 4. Sync to Firestore (throttled every 45s unless signing off/unloading)
+  const nowMs = Date.now();
+  if (!isOnline || nowMs - lastFirestorePresenceSyncMs >= 45000) {
+    lastFirestorePresenceSyncMs = nowMs;
+    const userPayload: UserProfile = {
+      ...user,
+      lastActiveAt: nowIso,
+      isOnline: isOnline,
+    };
+    saveUserToFirestore(userPayload).catch(() => {});
+  }
 
   // Dispatch local window event so other components immediately react
   if (typeof window !== 'undefined') {
