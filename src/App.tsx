@@ -629,7 +629,7 @@ export const App: React.FC = () => {
     // Seed initial data to Firestore if Firestore is empty
     const initialUsers = getStoredUsers();
     seedFirestoreInitialDataIfNeeded(initialUsers, posts).catch((err) =>
-      console.error('Firestore seed check failed:', err)
+      console.warn('Firestore seed check skipped:', err?.message || err)
     );
 
     // 0. Subscribe Deleted Users (Tombstones) in real-time from Firestore across all devices

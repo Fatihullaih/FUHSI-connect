@@ -157,9 +157,16 @@ function persistServerDb() {
 initAndLoadServerDb();
 
 let isFirestoreSyncRunning = false;
+let firestoreQuotaPausedUntil = 0;
+
+function isFirestoreQuotaError(err: any): boolean {
+  const msg = String(err?.code || err?.message || err || '').toLowerCase();
+  return msg.includes('quota') || msg.includes('resource-exhausted');
+}
 
 async function syncFirestoreToActiveDb() {
   if (isFirestoreSyncRunning) return;
+  if (Date.now() < firestoreQuotaPausedUntil) return;
   isFirestoreSyncRunning = true;
   try {
     const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
@@ -170,8 +177,25 @@ async function syncFirestoreToActiveDb() {
     const app = !getApps().length ? initializeApp(config) : getApps()[0];
     const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
 
+    let hitQuota = false;
+    const safeGetDocs = async (colName: string) => {
+      try {
+        return await getDocs(collection(firestoreDb, colName));
+      } catch (err: any) {
+        if (isFirestoreQuotaError(err)) {
+          hitQuota = true;
+        }
+        return { forEach: () => {} } as any;
+      }
+    };
+
     // 1. Fetch tombstones from deleted_users in Firestore
-    const delSnap = await getDocs(collection(firestoreDb, 'deleted_users')).catch(() => ({ forEach: () => {} } as any));
+    const delSnap = await safeGetDocs('deleted_users');
+    if (hitQuota) {
+      firestoreQuotaPausedUntil = Date.now() + 60 * 60 * 1000;
+      console.warn('[Firestore Sync] Daily Firestore read quota reached. Pausing server-side Firestore polling for 60 minutes and serving from local central DB.');
+      return;
+    }
     const fsDeletedIds = new Set<string>((activeDb.deletedUserIds || []).map(String));
     const fsDeletedNicks = new Set<string>((activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, '')));
     delSnap.forEach((d: any) => {
@@ -188,15 +212,20 @@ async function syncFirestoreToActiveDb() {
 
     // 2. Fetch users, posts, comments, follows, verifications, marketplace items, direct messages, and notifications in parallel
     const [usersSnap, postsSnap, commentsSnap, followsSnap, verifsSnap, mpSnap, dmsSnap, notifsSnap] = await Promise.all([
-      getDocs(collection(firestoreDb, 'users')).catch(() => ({ forEach: () => {} } as any)),
-      getDocs(collection(firestoreDb, 'posts')).catch(() => ({ forEach: () => {} } as any)),
-      getDocs(collection(firestoreDb, 'comments')).catch(() => ({ forEach: () => {} } as any)),
-      getDocs(collection(firestoreDb, 'follows')).catch(() => ({ forEach: () => {} } as any)),
-      getDocs(collection(firestoreDb, 'verification_requests')).catch(() => ({ forEach: () => {} } as any)),
-      getDocs(collection(firestoreDb, 'marketplace_approved')).catch(() => ({ forEach: () => {} } as any)),
-      getDocs(collection(firestoreDb, 'direct_messages')).catch(() => ({ forEach: () => {} } as any)),
-      getDocs(collection(firestoreDb, 'notifications')).catch(() => ({ forEach: () => {} } as any)),
+      safeGetDocs('users'),
+      safeGetDocs('posts'),
+      safeGetDocs('comments'),
+      safeGetDocs('follows'),
+      safeGetDocs('verification_requests'),
+      safeGetDocs('marketplace_approved'),
+      safeGetDocs('direct_messages'),
+      safeGetDocs('notifications'),
     ]);
+    if (hitQuota) {
+      firestoreQuotaPausedUntil = Date.now() + 60 * 60 * 1000;
+      console.warn('[Firestore Sync] Daily Firestore read quota reached. Pausing server-side Firestore polling for 60 minutes and serving from local central DB.');
+      return;
+    }
 
     const firestoreUsers: any[] = [];
     usersSnap.forEach((d: any) => {
@@ -368,11 +397,13 @@ async function syncFirestoreToActiveDb() {
   }
 }
 
-// Kick off background Firestore sync on startup and keep server DB mirrored periodically
-syncFirestoreToActiveDb().catch(() => {});
+// Only hydrate from Firestore on cold startup when local DB lacks users/posts, and avoid aggressive background polling that burns daily Firestore read quotas
+if ((activeDb.users || []).length <= 1 || (activeDb.posts || []).length === 0) {
+  syncFirestoreToActiveDb().catch(() => {});
+}
 setInterval(() => {
   syncFirestoreToActiveDb().catch(() => {});
-}, 20000);
+}, 30 * 60 * 1000);
 
 // Central DB API Endpoints
 app.get('/api/db', (req, res) => {

@@ -10,7 +10,8 @@ import {
   query,
   where,
   runTransaction,
-  arrayUnion
+  arrayUnion,
+  limit
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup, CampusNotification } from '../types';
@@ -985,28 +986,54 @@ export async function fetchPostByIdFromFirestore(postId: string): Promise<Post |
   return null;
 }
 
+function isFirestoreQuotaError(err: any): boolean {
+  const msg = String(err?.code || err?.message || err || '').toLowerCase();
+  return msg.includes('quota') || msg.includes('resource-exhausted');
+}
+
+let firestoreSeedCheckedThisSession = false;
+
 /**
  * Initial seed check: if Firestore is empty, seed initial users & posts into Firestore
  */
 export async function seedFirestoreInitialDataIfNeeded(initialUsers: UserProfile[], initialPosts: Post[]) {
+  if (firestoreSeedCheckedThisSession) return;
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('fuhsi_firestore_seeded_v1') === 'true') {
+      firestoreSeedCheckedThisSession = true;
+      return;
+    }
+  } catch {}
+  firestoreSeedCheckedThisSession = true;
+
   try {
     const validUsers = (initialUsers || []).filter((u) => !isDemoUser(u) && !isDemoNickname(u.nickname));
-    const usersSnap = await getDocs(collection(db, USERS_COL));
+    const usersSnap = await getDocs(query(collection(db, USERS_COL), limit(1)));
     if (usersSnap.empty && validUsers.length > 0) {
       console.log('Seeding initial non-demo users to Firestore...');
       await saveUsersBatchToFirestore(validUsers);
     }
 
     const validPosts = (initialPosts || []).filter((p) => !isDemoPost(p));
-    const postsSnap = await getDocs(collection(db, POSTS_COL));
+    const postsSnap = await getDocs(query(collection(db, POSTS_COL), limit(1)));
     if (postsSnap.empty && validPosts.length > 0) {
       console.log('Seeding initial non-demo posts to Firestore...');
       for (const p of validPosts) {
         await savePostToFirestore(p);
       }
     }
-  } catch (err) {
-    console.error('Error seeding initial Firestore data:', err);
+
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('fuhsi_firestore_seeded_v1', 'true');
+      }
+    } catch {}
+  } catch (err: any) {
+    if (isFirestoreQuotaError(err)) {
+      console.warn('Firestore daily read quota exceeded; continuing with central server fallback:', err?.message || err);
+    } else {
+      console.warn('Initial Firestore seed check notice:', err?.message || err);
+    }
   }
 }
 
@@ -1154,7 +1181,7 @@ export function subscribeDirectMessagesByConversation(
         onUpdate(list);
       },
       (err) => {
-        console.error(`Firestore error subscribing to direct messages for ${conversationId}:`, err);
+        console.warn(`Firestore direct messages subscription fallback for ${conversationId}:`, err?.message || err);
         if (onError) onError(err);
       }
     );
