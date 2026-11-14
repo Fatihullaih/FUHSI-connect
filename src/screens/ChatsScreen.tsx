@@ -7,6 +7,7 @@ import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { isGuestAccount, isModulaAccount, isUserPermanentlyDeleted } from '../utils/userDbUtils';
 import { isUserFollowing, getStoredFollows } from '../utils/followUtils';
+import { mergeDirectMessages } from '../utils/apiSync';
 import { 
   getStoredDirectMessages, 
   getUserConversations, 
@@ -441,6 +442,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     window.addEventListener('fuhsi_conversation_deleted', handleUpdate);
     window.addEventListener('fuhsi_chat_restriction_updated', handleUpdate);
     window.addEventListener('fuhsi_group_updated', handleUpdate);
+    window.addEventListener('fuhsi_groups_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
 
     const unsubGroups = subscribeChatGroups((firestoreGroups) => {
@@ -458,6 +460,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       window.removeEventListener('fuhsi_conversation_deleted', handleUpdate);
       window.removeEventListener('fuhsi_chat_restriction_updated', handleUpdate);
       window.removeEventListener('fuhsi_group_updated', handleUpdate);
+      window.removeEventListener('fuhsi_groups_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
       clearInterval(timer);
       if (unsubGroups) unsubGroups();
@@ -576,61 +579,82 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
       return;
     }
 
+    const getConvMsgsFromStorage = () =>
+      getStoredDirectMessages()
+        .filter((m) => {
+          if (!m) return false;
+          const matchesConv = (m.conversationId || getConversationId(m.senderNickname, m.receiverNickname)) === activeConvId || m.groupId === activeConvId;
+          return matchesConv;
+        })
+        .sort((a, b) => {
+          const tA = parseMessageTimestampMs(a);
+          const tB = parseMessageTimestampMs(b);
+          if (tA !== tB) return tA - tB;
+          return (a.id || '').localeCompare(b.id || '');
+        });
+
     // 1. Populate cached local messages
-    const localMsgs = getStoredDirectMessages()
-      .filter((m) => {
-        if (!m) return false;
-        const matchesConv = (m.conversationId || getConversationId(m.senderNickname, m.receiverNickname)) === activeConvId || m.groupId === activeConvId;
-        return matchesConv;
-      })
-      .sort((a, b) => {
-        const tA = parseMessageTimestampMs(a);
-        const tB = parseMessageTimestampMs(b);
-        if (tA !== tB) return tA - tB;
-        return (a.id || '').localeCompare(b.id || '');
-      });
-    setActiveMessages(localMsgs);
+    setActiveMessages(getConvMsgsFromStorage());
 
     // Mark incoming messages as read by this user
     markConversationMessagesAsRead(activeConvId, myNickname);
+    if (activeConvId.startsWith('group_')) {
+      markGroupMessagesAsRead(activeConvId, myNickname);
+    }
 
-    // 2. Subscribe to Firestore real-time messages for this conversation
+    // 2. Also react immediately whenever App-level Firestore or server sync updates DMs
+    const handleStorageMsgUpdate = () => {
+      const latestForConv = getConvMsgsFromStorage();
+      setActiveMessages((prev) => {
+        const merged = mergeDirectMessages(prev, latestForConv);
+        return merged.sort((a, b) => {
+          const tA = parseMessageTimestampMs(a);
+          const tB = parseMessageTimestampMs(b);
+          if (tA !== tB) return tA - tB;
+          return (a.id || '').localeCompare(b.id || '');
+        });
+      });
+
+      const hasUnread = latestForConv.some(
+        (m) =>
+          (normalizeNickname(m.receiverNickname) === cleanMyNickname && !m.isRead) ||
+          ((m.isGroupMessage || activeConvId.startsWith('group_')) &&
+            normalizeNickname(m.senderNickname) !== cleanMyNickname &&
+            (!m.readByUsers || !m.readByUsers.some((u) => normalizeNickname(u) === cleanMyNickname)))
+      );
+      if (hasUnread) {
+        markConversationMessagesAsRead(activeConvId, myNickname);
+        if (activeConvId.startsWith('group_')) {
+          markGroupMessagesAsRead(activeConvId, myNickname);
+        }
+      }
+    };
+    window.addEventListener('fuhsi_direct_message_updated', handleStorageMsgUpdate);
+
+    // 3. Subscribe to Firestore real-time messages for this conversation
     const unsubscribe = subscribeDirectMessagesByConversation(
       activeConvId,
       (firestoreMsgs) => {
         if (firestoreMsgs && firestoreMsgs.length > 0) {
-          // Merge incoming Firestore messages into local storage so utils can find them
+          // Merge incoming Firestore messages into local storage safely (preserving readByUsers/deletes/reactions)
           try {
             const stored = getStoredDirectMessages();
-            const storedMap = new Map<string, DirectMessage>();
-            stored.forEach((m) => storedMap.set(m.id, m));
-            let sChanged = false;
-            firestoreMsgs.forEach((fm) => {
-              const existing = storedMap.get(fm.id);
-              if (!existing || JSON.stringify(existing) !== JSON.stringify(fm)) {
-                storedMap.set(fm.id, fm);
-                sChanged = true;
-              }
-            });
-            if (sChanged) {
-              localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(Array.from(storedMap.values())));
+            const mergedStored = mergeDirectMessages(stored, firestoreMsgs);
+            if (JSON.stringify(mergedStored) !== JSON.stringify(stored)) {
+              localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(mergedStored));
             }
           } catch (err) {
             console.error(err);
           }
 
           setActiveMessages((prev) => {
-            const map = new Map<string, DirectMessage>();
-            prev.forEach((m) => map.set(m.id, m));
-            firestoreMsgs.forEach((m) => map.set(m.id, m));
-            const list = Array.from(map.values());
-            list.sort((a, b) => {
+            const list = mergeDirectMessages(prev, firestoreMsgs);
+            return list.sort((a, b) => {
               const tA = parseMessageTimestampMs(a);
               const tB = parseMessageTimestampMs(b);
               if (tA !== tB) return tA - tB;
               return (a.id || '').localeCompare(b.id || '');
             });
-            return list;
           });
 
           // Check if any incoming message to me is unread, and mark as read
@@ -652,6 +676,7 @@ export const ChatsScreen: React.FC<ChatsScreenProps> = ({
     );
 
     return () => {
+      window.removeEventListener('fuhsi_direct_message_updated', handleStorageMsgUpdate);
       unsubscribe();
     };
   }, [activeConvId]);

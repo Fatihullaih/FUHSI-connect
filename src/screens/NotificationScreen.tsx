@@ -214,7 +214,20 @@ export const NotificationScreen: React.FC<NotificationScreenProps> = ({
       }
     }
 
-    // 4. Any other kind of notification opens in a modal so it can be read clearly
+    // 4. Post-related notifications (likes / comments / replies) open the target post directly when available
+    if (n.postId) {
+      const targetPost = allPosts.find((p) => p && p.id === n.postId);
+      if (targetPost && onSelectPost) {
+        onSelectPost(targetPost);
+        return;
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('fuhsi_open_post_modal', { detail: { postId: n.postId } }));
+        if (targetPost) return;
+      }
+    }
+
+    // 5. Any other kind of notification opens in a modal so it can be read clearly
     setSelectedNotifForModal({
       ...n,
       isRead: true,

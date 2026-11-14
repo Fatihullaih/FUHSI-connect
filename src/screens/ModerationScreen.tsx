@@ -3,14 +3,14 @@ import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeT
 import { getStoredUsers, saveStoredUsers, isGuestAccount, isModulaAccount, markUserPermanentlyDeleted, purgeAccountPermanently, purgeAccountPermanentlyAsync, updateUserBadgeAndVerification } from '../utils/userDbUtils';
 import { pushServerDbSync, fetchServerDb, mergeUsers } from '../utils/apiSync';
 import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
-import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User, Loader2 } from 'lucide-react';
+import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User, Loader2, Megaphone } from 'lucide-react';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { FUHSI_DEPARTMENTS } from '../components/AuthModal';
 import { AdminTradeDesk } from '../components/AdminTradeDesk';
 import { AdminChatReportsDesk } from '../components/AdminChatReportsDesk';
 import { INITIAL_VERIFICATION_CANDIDATES, INITIAL_USER_PROFILE } from '../data/initialData';
-import { sendUserNotification, normalizeNickname, formatMessageTime } from '../utils/messagingUtils';
+import { sendUserNotification, sendBroadcastNotification, normalizeNickname, formatMessageTime } from '../utils/messagingUtils';
 import { useAdminPendingCounts } from '../utils/adminAlertUtils';
 
 interface ModerationScreenProps {
@@ -362,12 +362,58 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
     reports
   );
 
-  // Direct Official Updates / Messages State (strictly Notifications, not Chat)
+  // Direct Official Updates / Broadcast Notifications State (strictly Notifications, not Chat)
   const [queryModalUser, setQueryModalUser] = useState<{ nickname: string; realName?: string; email?: string } | null>(null);
   const [queryCategory, setQueryCategory] = useState('Official Notice');
   const [querySubject, setQuerySubject] = useState('');
   const [queryMessage, setQueryMessage] = useState('');
   const [queryToast, setQueryToast] = useState<string | null>(null);
+  const [broadcastAudience, setBroadcastAudience] = useState<'ALL' | 'SINGLE'>('ALL');
+  const [broadcastTargetNick, setBroadcastTargetNick] = useState('');
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+
+  const handleDispatchOfficialBroadcast = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanTitle = broadcastTitle.trim() || 'Official Platform Update';
+    const cleanMsg = broadcastMessage.trim();
+    if (!cleanMsg) return;
+
+    const nowIso = new Date().toISOString();
+    if (broadcastAudience === 'ALL') {
+      const notif: CampusNotification = {
+        id: `official_all_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'OFFICIAL',
+        title: cleanTitle,
+        message: cleanMsg,
+        timestamp: nowIso,
+        isRead: false,
+      };
+      sendBroadcastNotification(notif);
+      setQueryToast('✓ Official broadcast notification sent to all students & members across devices!');
+    } else {
+      const cleanTarget = normalizeNickname(broadcastTargetNick);
+      if (!cleanTarget) {
+        setQueryToast('Please enter a valid @username to send a direct notification.');
+        return;
+      }
+      const notif: CampusNotification = {
+        id: `official_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'ADMIN',
+        title: cleanTitle,
+        message: cleanMsg,
+        timestamp: nowIso,
+        isRead: false,
+      };
+      sendUserNotification(cleanTarget, notif);
+      setQueryToast(`✓ Official notification dispatched to @${cleanTarget} across devices!`);
+    }
+
+    setBroadcastTitle('');
+    setBroadcastMessage('');
+    if (broadcastAudience === 'SINGLE') setBroadcastTargetNick('');
+    setTimeout(() => setQueryToast(null), 4500);
+  };
 
   const handleOpenQueryModal = (nick: string, realName?: string, email?: string, defaultSubject?: string) => {
     setQueryModalUser({ nickname: nick, realName, email });
@@ -477,36 +523,18 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       saveStoredUsers(updatedList);
       setAllUsersList(updatedList);
 
-      // Send standard in-app notification: "Account Recovered"
+      // Send standard in-app notification: "Account Recovered" (Firestore + Server DB + local)
       const cleanNick = nick ? nick.toLowerCase().replace(/^@/, '') : '';
       if (cleanNick) {
-        const notifKey = `fuhsi_user_notifications_${cleanNick}`;
-        const recoveryMsg = {
+        const recoveryMsg: CampusNotification = {
           id: `appr_notif_${Date.now()}`,
           type: 'VERIFICATION',
           title: 'Account Recovered',
           message: 'Your account has been verified and approved. We are sorry for the inconvenience.',
-          timestamp: 'Just now',
+          timestamp: new Date().toISOString(),
           isRead: false,
         };
-        let existingNotifs = [];
-        try {
-          const storedNotifs = localStorage.getItem(notifKey);
-          if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-        } catch (e) {
-          console.error(e);
-        }
-        const updatedNotifs = [recoveryMsg, ...existingNotifs];
-        localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
-        pushServerDbSync({ notifications: { [cleanNick]: updatedNotifs } } as any).catch(() => {});
-
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent('fuhsi_notification_received', {
-              detail: { targetNickname: cleanNick, notif: recoveryMsg },
-            })
-          );
-        }
+        sendUserNotification(cleanNick, recoveryMsg);
       }
 
       // Update active user profile in localStorage if it matches
@@ -902,6 +930,99 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
             </div>
           </button>
         </div>
+      </div>
+
+      {/* OFFICIAL UPDATES & CAMPUS NOTIFICATIONS DESK */}
+      <div id="official-updates-desk" className="bg-white rounded-2xl p-4 sm:p-5 border border-teal-200 shadow-sm space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
+              <Megaphone className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="font-extrabold text-slate-900 text-sm">Official Updates & Campus Notifications</h2>
+              <p className="text-[11px] text-slate-500">
+                Deliver real-time notifications across all student devices — either campus-wide or to a specific account.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleDispatchOfficialBroadcast} className="space-y-3 text-xs">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setBroadcastAudience('ALL')}
+              className={`px-3 py-1.5 rounded-xl font-bold border transition-all cursor-pointer ${
+                broadcastAudience === 'ALL'
+                  ? 'bg-teal-700 text-white border-teal-700 shadow-xs'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              All Students & Members
+            </button>
+            <button
+              type="button"
+              onClick={() => setBroadcastAudience('SINGLE')}
+              className={`px-3 py-1.5 rounded-xl font-bold border transition-all cursor-pointer ${
+                broadcastAudience === 'SINGLE'
+                  ? 'bg-teal-700 text-white border-teal-700 shadow-xs'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              Specific Student (@username)
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {broadcastAudience === 'SINGLE' && (
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Recipient Username</label>
+                <input
+                  type="text"
+                  value={broadcastTargetNick}
+                  onChange={(e) => setBroadcastTargetNick(e.target.value)}
+                  placeholder="e.g. @nurse_ada"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
+                  required
+                />
+              </div>
+            )}
+            <div className={broadcastAudience === 'ALL' ? 'sm:col-span-2' : ''}>
+              <label className="block font-bold text-slate-700 mb-1">Notification Title</label>
+              <input
+                type="text"
+                value={broadcastTitle}
+                onChange={(e) => setBroadcastTitle(e.target.value)}
+                placeholder="e.g. Important Campus Announcement"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">Notification Message</label>
+            <textarea
+              value={broadcastMessage}
+              onChange={(e) => setBroadcastMessage(e.target.value)}
+              placeholder="Write the official update or alert to push to students' Notification inbox..."
+              rows={3}
+              className="w-full rounded-xl border border-slate-300 p-3 text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
+              required
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={!broadcastMessage.trim() || (broadcastAudience === 'SINGLE' && !broadcastTargetNick.trim())}
+              className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-extrabold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+            >
+              <Send size={13} />
+              <span>{broadcastAudience === 'ALL' ? 'Send Broadcast Notification' : 'Send Direct Notification'}</span>
+            </button>
+          </div>
+        </form>
       </div>
 
       {/* PENDING & REGISTERED STUDENT ACCOUNT MANAGEMENT DESK */}

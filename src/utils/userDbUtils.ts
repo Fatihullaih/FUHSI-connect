@@ -1,7 +1,7 @@
 import { UserProfile, BadgeType, VerificationRequest } from '../types';
 import { INITIAL_USER_PROFILE } from '../data/initialData';
 import { pushServerDbSync, mergeUsers } from './apiSync';
-import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore, savePostToFirestore, saveCommentToFirestore, deleteUserFromFirestore } from '../lib/firestoreSync';
+import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore, savePostToFirestore, saveCommentToFirestore, deleteUserFromFirestore, saveNotificationToFirestore } from '../lib/firestoreSync';
 import { isDemoUser } from './postGenerator';
 import { getUserBadgeInfo, normalizeBadgeColor } from './verificationUtils';
 
@@ -1450,19 +1450,24 @@ export function sendVerificationNotification(
       ? `Congratulations! Your verification details have been updated. Your profile now displays your updated verification badge (${assignedColor}) across the platform.`
       : `Congratulations! Your verification has been approved, and you have been awarded the ${assignedColor} badge. Your badge is now visible across the platform.`;
 
+    const nowIso = new Date(now).toISOString();
     const verifNotif = {
       id: `verif_notif_${now}_${Math.random().toString(36).substring(2, 6)}`,
       type: 'VERIFICATION',
       title,
       message,
-      timestamp: 'Just now',
+      timestamp: nowIso,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      targetNickname: cleanTarget,
       isRead: false,
       _actionTimestamp: now,
     };
 
     const updatedNotifs = [verifNotif, ...existingNotifs];
     localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
-    pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
+    saveNotificationToFirestore(cleanTarget, verifNotif).catch(() => {});
+    pushServerDbSync({ notifications: { [cleanTarget]: [verifNotif] } } as any).catch(() => {});
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(

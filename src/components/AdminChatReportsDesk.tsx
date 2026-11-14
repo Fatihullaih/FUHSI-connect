@@ -4,6 +4,7 @@ import {
   getStoredChatReports, 
   updateChatReportStatus, 
   sendDirectMessage,
+  sendUserNotification,
   formatMessageTime 
 } from '../utils/messagingUtils';
 import { applyChatRestriction } from '../utils/safetyFilter';
@@ -128,6 +129,14 @@ export const AdminChatReportsDesk: React.FC<AdminChatReportsDeskProps> = () => {
     };
 
     sendDirectMessage(dm);
+    sendUserNotification(targetUser, {
+      id: `conduct_adv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'OFFICIAL',
+      title: `⚠️ ${warningSubject.trim() || 'Campus Conduct Advisory'}`,
+      message: warningMessage.trim(),
+      timestamp: new Date().toISOString(),
+      isRead: false,
+    });
     updateChatReportStatus(
       warningModalReport.id,
       'RESOLVED',
@@ -168,6 +177,14 @@ export const AdminChatReportsDesk: React.FC<AdminChatReportsDeskProps> = () => {
       timestamp: new Date().toISOString(),
     };
     sendDirectMessage(dm);
+    sendUserNotification(cleanNick, {
+      id: `chat_restr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'OFFICIAL',
+      title: '⚠️ Chat Restriction Applied',
+      message: `Your chat privileges have been temporarily restricted for ${restrictDays} day(s). Reason: ${restrictReason}.`,
+      timestamp: now.toISOString(),
+      isRead: false,
+    });
 
     updateChatReportStatus(
       restrictModalReport.id,

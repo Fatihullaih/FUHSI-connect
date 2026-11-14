@@ -25,6 +25,7 @@ import {
   mergeVerifCandidates,
   mergeDirectMessages,
   mergeFollows,
+  mergeNotifications,
   uploadAvatarToServer,
   markPostPermanentlyDeleted,
   markCommentPermanentlyDeleted,
@@ -39,6 +40,8 @@ import {
   subscribeVerificationRequests,
   subscribeMarketplaceApproved,
   subscribeAllDirectMessages,
+  subscribeChatGroups,
+  subscribeUserNotifications,
   subscribeFollows,
   getPostFromFirestore,
   savePostToFirestore,
@@ -93,7 +96,8 @@ import { VerificationBadge } from './components/VerificationBadge';
 import { AvatarIcon } from './components/AvatarIcon';
 import { DynamicFeedIcon, LeaderboardIcon, StorefrontIcon } from './components/NavIcons';
 import { Smartphone, Search, Bell, Trophy, LogIn, LogOut, User, Shield, X, ArrowLeft, Sparkles, CheckCircle2, Users, Sun, Moon, MessageCircle } from 'lucide-react';
-import { getUserNotifications, getReadNotificationIds, getUserConversations, getDistinctUnreadSendersCount, sendUserNotification } from './utils/messagingUtils';
+import { getUserNotifications, getReadNotificationIds, setReadNotificationId, getUserConversations, getDistinctUnreadSendersCount, sendUserNotification, getStoredDirectMessages } from './utils/messagingUtils';
+import { mergeFirestoreGroupsIntoStorage } from './utils/groupUtils';
 import { updateActiveUserPresence } from './utils/presenceUtils';
 import { isUserMatchingAudience } from './utils/audienceUtils';
 
@@ -434,6 +438,8 @@ export const App: React.FC = () => {
   postsRef.current = posts;
   const commentsRef = useRef<Comment[]>(comments);
   commentsRef.current = comments;
+  const userProfileRef = useRef<UserProfile>(userProfile);
+  userProfileRef.current = userProfile;
 
   const pendingCommentWritesRef = useRef<Map<string, { comment: Comment; expiresAt: number }>>(new Map());
   const pendingPostLikeWritesRef = useRef<
@@ -1161,15 +1167,23 @@ export const App: React.FC = () => {
       setMarketplaceItems(validItems);
     });
 
-    // 6. Subscribe Direct Messages in real-time
+    // 6. Subscribe Direct Messages in real-time (merge non-destructively so local/in-flight messages are preserved)
     const unsubDirectMessages = subscribeAllDirectMessages((fsDirectMessages) => {
       if (!isMounted) return;
       const validMsgs = (fsDirectMessages || []).filter((d) => !isDemoDirectMessage(d));
-      localStorage.setItem('fuhsi_direct_messages_db', JSON.stringify(validMsgs));
+      const merged = mergeDirectMessages(getStoredDirectMessages(), validMsgs);
+      localStorage.setItem('fuhsi_direct_messages_db', JSON.stringify(merged));
       setNotifTrigger((prev) => prev + 1);
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated'));
       }
+    });
+
+    // 6b. Subscribe Chat Groups in real-time so unread group counts stay accurate across all tabs
+    const unsubChatGroups = subscribeChatGroups((fsGroups) => {
+      if (!isMounted) return;
+      mergeFirestoreGroupsIntoStorage(fsGroups || []);
+      setNotifTrigger((prev) => prev + 1);
     });
 
     // 7. Subscribe Following & Followers in real-time
@@ -1189,9 +1203,61 @@ export const App: React.FC = () => {
       unsubVerifs();
       unsubMarketplace();
       unsubDirectMessages();
+      unsubChatGroups();
       unsubFollows();
     };
   }, []);
+
+  // Real-time Firestore listener for current user's platform notifications & broadcasts
+  useEffect(() => {
+    const activeNick = userProfile?.nickname;
+    if (!isLoggedIn || !activeNick) return;
+    const cleanNick = activeNick.toLowerCase().replace(/^@+/, '').trim();
+    if (!cleanNick || cleanNick.startsWith('guest_')) return;
+
+    let isActive = true;
+    const unsubNotifs = subscribeUserNotifications(cleanNick, (fsNotifs) => {
+      if (!isActive || !Array.isArray(fsNotifs)) return;
+      try {
+        const readMap = getReadNotificationIds(cleanNick);
+        const existingLocal = getUserNotifications(cleanNick);
+        const merged = mergeNotifications(existingLocal, fsNotifs).map((n) => {
+          const isBroadcast = n.targetNickname === '__all__';
+          const readByUsers = Array.isArray(n.readByUsers) ? n.readByUsers.map((u) => u.toLowerCase().replace(/^@/, '').trim()) : [];
+          const remoteRead = isBroadcast ? readByUsers.includes(cleanNick) : Boolean(n.isRead || readByUsers.includes(cleanNick));
+          if (remoteRead && !readMap[n.id]) {
+            setReadNotificationId(cleanNick, n.id, true);
+          }
+          const effectiveRead = Boolean(readMap[n.id] || remoteRead);
+          return { ...n, isRead: effectiveRead };
+        });
+
+        const userOnly = merged.filter((n) => n.targetNickname !== '__all__');
+        const broadcasts = merged.filter((n) => n.targetNickname === '__all__');
+        localStorage.setItem(`fuhsi_user_notifications_${cleanNick}`, JSON.stringify(userOnly));
+        if (broadcasts.length > 0) {
+          const existingBroadRaw = localStorage.getItem('fuhsi_broadcast_notifications');
+          const existingBroad = existingBroadRaw ? JSON.parse(existingBroadRaw) : [];
+          localStorage.setItem(
+            'fuhsi_broadcast_notifications',
+            JSON.stringify(mergeNotifications(Array.isArray(existingBroad) ? existingBroad : [], broadcasts))
+          );
+        }
+
+        setNotifTrigger((prev) => prev + 1);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname: cleanNick } }));
+        }
+      } catch (e) {
+        console.error('Error merging Firestore notifications:', e);
+      }
+    });
+
+    return () => {
+      isActive = false;
+      unsubNotifs();
+    };
+  }, [userProfile?.nickname, isLoggedIn]);
 
   // Periodic Cross-Device Central Database Synchronizer
   useEffect(() => {
@@ -1528,14 +1594,65 @@ export const App: React.FC = () => {
         setReports((prev) => (JSON.stringify(prev) !== JSON.stringify(db.reports) ? db.reports : prev));
       }
 
-      // 8. Sync Direct Messages
+      // 8. Sync Direct Messages (merge so real-time/in-flight messages are never wiped out)
       if (Array.isArray(db.directMessages)) {
         const validDms = db.directMessages.filter((d) => !isDemoDirectMessage(d));
-        localStorage.setItem('fuhsi_direct_messages_db', JSON.stringify(validDms));
-        setNotifTrigger((prev) => prev + 1);
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated'));
+        if (validDms.length > 0) {
+          const existingLocal = getStoredDirectMessages();
+          const mergedDms = mergeDirectMessages(existingLocal, validDms);
+          if (JSON.stringify(mergedDms) !== JSON.stringify(existingLocal)) {
+            localStorage.setItem('fuhsi_direct_messages_db', JSON.stringify(mergedDms));
+            setNotifTrigger((prev) => prev + 1);
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated'));
+            }
+          }
         }
+      }
+
+      // 8b. Sync Platform Notifications (user-specific + campus-wide __all__ broadcasts)
+      if (db.notifications && typeof db.notifications === 'object') {
+        try {
+          const activeNick = userProfileRef.current?.nickname;
+          const cleanActiveNick = activeNick ? activeNick.toLowerCase().replace(/^@+/, '').trim() : '';
+          let notifChanged = false;
+
+          const serverBroadcasts = Array.isArray((db.notifications as any)['__all__'])
+            ? (db.notifications as any)['__all__']
+            : [];
+          if (serverBroadcasts.length > 0) {
+            const bRaw = localStorage.getItem('fuhsi_broadcast_notifications');
+            const localBroadcasts = bRaw ? JSON.parse(bRaw) : [];
+            const mergedBroadcasts = mergeNotifications(Array.isArray(localBroadcasts) ? localBroadcasts : [], serverBroadcasts);
+            if (JSON.stringify(mergedBroadcasts) !== JSON.stringify(localBroadcasts)) {
+              localStorage.setItem('fuhsi_broadcast_notifications', JSON.stringify(mergedBroadcasts));
+              notifChanged = true;
+            }
+          }
+
+          if (cleanActiveNick && !cleanActiveNick.startsWith('guest_')) {
+            const serverUserNotifs = Array.isArray((db.notifications as any)[cleanActiveNick])
+              ? (db.notifications as any)[cleanActiveNick]
+              : [];
+            if (serverUserNotifs.length > 0) {
+              const uKey = `fuhsi_user_notifications_${cleanActiveNick}`;
+              const uRaw = localStorage.getItem(uKey);
+              const localUserNotifs = uRaw ? JSON.parse(uRaw) : [];
+              const mergedUserNotifs = mergeNotifications(Array.isArray(localUserNotifs) ? localUserNotifs : [], serverUserNotifs);
+              if (JSON.stringify(mergedUserNotifs) !== JSON.stringify(localUserNotifs)) {
+                localStorage.setItem(uKey, JSON.stringify(mergedUserNotifs));
+                notifChanged = true;
+              }
+            }
+          }
+
+          if (notifChanged) {
+            setNotifTrigger((prev) => prev + 1);
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname: cleanActiveNick } }));
+            }
+          }
+        } catch (e) {}
       }
 
       // 9. Sync Following & Followers
@@ -2178,9 +2295,31 @@ export const App: React.FC = () => {
         };
 
     const latestPost = postsRef.current.find((p) => p.id === post.id) || post;
+    const wasAlreadyLiked = isItemLikedByUser(latestPost, effectiveUser);
     const { nextLikedBy } = toggleUserLike(latestPost.likedBy, effectiveUser);
     const nextCount = nextLikedBy.length;
     const nowIso = new Date().toISOString();
+
+    if (!wasAlreadyLiked) {
+      const actorHandle = effectiveUser.nickname?.startsWith('@') ? effectiveUser.nickname : `@${effectiveUser.nickname}`;
+      const actorClean = normalizeUserKey(effectiveUser.nickname) || normalizeUserKey(effectiveUser.id);
+      const authorClean = normalizeUserKey(latestPost.authorNickname);
+      if (authorClean && actorClean && authorClean !== actorClean && actorClean !== 'guest_user' && authorClean !== 'guest_user') {
+        const snippet = (latestPost.content || latestPost.text || '').trim().slice(0, 65);
+        sendUserNotification(authorClean, {
+          id: `notif_like_post_${latestPost.id}_${actorClean}`,
+          type: 'LIKE',
+          title: 'New Like on Your Post',
+          message: snippet
+            ? `${actorHandle} liked your post: "${snippet}${snippet.length >= 65 ? '...' : ''}"`
+            : `${actorHandle} liked your post.`,
+          timestamp: nowIso,
+          isRead: false,
+          postId: latestPost.id,
+          senderNickname: actorHandle,
+        });
+      }
+    }
 
     pendingPostLikeWritesRef.current.set(post.id, {
       likedBy: nextLikedBy,
@@ -2977,6 +3116,47 @@ export const App: React.FC = () => {
       postCommentCount: { postId, commentsCount: targetTopLevelCount },
     } as any).catch((err) => console.error('Error syncing comment to server db:', err));
 
+    // Send cross-device COMMENT/REPLY notifications to post author and parent comment author
+    try {
+      const targetPost = (postsRef.current || []).find((p) => p.id === postId);
+      const actorClean = normalizeUserKey(authorNickname);
+      const postAuthorClean = normalizeUserKey(targetPost?.authorNickname);
+      const replyTargetClean = normalizeUserKey(replyToNickname);
+      const preview = cleanText ? cleanText.slice(0, 75) : 'Shared an image';
+
+      if (postAuthorClean && actorClean && postAuthorClean !== actorClean && postAuthorClean !== 'guest_user') {
+        sendUserNotification(postAuthorClean, {
+          id: `notif_comment_${newComment.id}`,
+          type: 'COMMENT',
+          title: parentId ? 'New Reply on Your Post' : 'New Comment on Your Post',
+          message: `${authorNickname} ${parentId ? 'replied' : 'commented'}: "${preview}${cleanText.length > 75 ? '...' : ''}"`,
+          timestamp: nowIso,
+          isRead: false,
+          postId,
+          senderNickname: authorNickname,
+        });
+      }
+
+      if (
+        replyTargetClean &&
+        actorClean &&
+        replyTargetClean !== actorClean &&
+        replyTargetClean !== postAuthorClean &&
+        replyTargetClean !== 'guest_user'
+      ) {
+        sendUserNotification(replyTargetClean, {
+          id: `notif_reply_${newComment.id}_${replyTargetClean}`,
+          type: 'COMMENT',
+          title: 'New Reply to Your Comment',
+          message: `${authorNickname} replied to your comment: "${preview}${cleanText.length > 75 ? '...' : ''}"`,
+          timestamp: nowIso,
+          isRead: false,
+          postId,
+          senderNickname: authorNickname,
+        });
+      }
+    } catch (e) {}
+
     // Recalculate exact points dynamically for current user and all users
     if (userProfile?.nickname) {
       const newScore = calculateUserPoints(userProfile.nickname, userProfile, updatedPosts, newCommentsList, reports);
@@ -3010,9 +3190,31 @@ export const App: React.FC = () => {
     const latestComment = (commentsRef.current || []).find((c) => c.id === commentId);
     if (!latestComment) return;
 
+    const wasAlreadyLiked = isItemLikedByUser(latestComment, effectiveUser);
     const { nextLikedBy } = toggleUserLike(latestComment.likedBy, effectiveUser);
     const nextCount = nextLikedBy.length;
     const nowIso = new Date().toISOString();
+
+    if (!wasAlreadyLiked) {
+      const actorHandle = effectiveUser.nickname?.startsWith('@') ? effectiveUser.nickname : `@${effectiveUser.nickname}`;
+      const actorClean = normalizeUserKey(effectiveUser.nickname) || normalizeUserKey(effectiveUser.id);
+      const authorClean = normalizeUserKey(latestComment.authorNickname);
+      if (authorClean && actorClean && authorClean !== actorClean && actorClean !== 'guest_user' && authorClean !== 'guest_user') {
+        const snippet = (latestComment.content || '').trim().slice(0, 65);
+        sendUserNotification(authorClean, {
+          id: `notif_like_comment_${commentId}_${actorClean}`,
+          type: 'LIKE',
+          title: 'New Like on Your Comment',
+          message: snippet
+            ? `${actorHandle} liked your comment: "${snippet}${snippet.length >= 65 ? '...' : ''}"`
+            : `${actorHandle} liked your comment.`,
+          timestamp: nowIso,
+          isRead: false,
+          postId: latestComment.postId,
+          senderNickname: actorHandle,
+        });
+      }
+    }
 
     pendingCommentLikeWritesRef.current.set(commentId, {
       likedBy: nextLikedBy,
@@ -3949,10 +4151,9 @@ export const App: React.FC = () => {
       return updatedList;
     });
 
-    // 2. Send notification to applicant
+    // 2. Send notification to applicant (Firestore + Server DB + local)
     try {
-      const notifKey = `fuhsi_user_notifications_${cleanTarget}`;
-      const declineNotif = {
+      const declineNotif: CampusNotification = {
         id: `verif_dec_${Date.now()}`,
         type: 'ADMIN',
         title: 'Verification Request Declined',
@@ -3960,17 +4161,11 @@ export const App: React.FC = () => {
         timestamp: new Date().toISOString(),
         isRead: false,
       };
-      let existingNotifs = [];
-      const storedNotifs = localStorage.getItem(notifKey);
-      if (storedNotifs) existingNotifs = JSON.parse(storedNotifs);
-      const updatedNotifs = [declineNotif, ...existingNotifs];
-      localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
-      pushServerDbSync({ notifications: { [cleanTarget]: updatedNotifs } } as any).catch(() => {});
+      sendUserNotification(cleanTarget, declineNotif);
     } catch (e) {}
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_verifications_updated', { detail: { nickname: targetApplicantNick } }));
-      window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname: targetApplicantNick } }));
     }
   };
 
@@ -4657,6 +4852,18 @@ export const App: React.FC = () => {
             }}
             allUsers={allUsers && allUsers.length > 0 ? allUsers : getStoredUsers()}
             allFollows={allFollows}
+            onOpenAdminConsole={(_section, tab) => {
+              handleNavChange(6);
+              if (tab === 'OFFICIAL_UPDATES') {
+                setTimeout(() => {
+                  window.dispatchEvent(
+                    new CustomEvent('fuhsi_open_admin_desk', {
+                      detail: { deskId: 'official-updates-desk' },
+                    })
+                  );
+                }, 120);
+              }
+            }}
           />
         )}
 

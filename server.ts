@@ -17,6 +17,7 @@ import {
   mergeChatReports,
   mergeChatRestrictions,
   mergeFollows,
+  mergeNotifications,
 } from './src/utils/apiSync';
 import { normalizeMatricNumber } from './src/utils/matricValidation';
 import {
@@ -185,14 +186,16 @@ async function syncFirestoreToActiveDb() {
     activeDb.deletedUserIds = Array.from(fsDeletedIds);
     activeDb.deletedUserNicknames = Array.from(fsDeletedNicks);
 
-    // 2. Fetch users, posts, comments, follows, verifications, and marketplace items in parallel
-    const [usersSnap, postsSnap, commentsSnap, followsSnap, verifsSnap, mpSnap] = await Promise.all([
+    // 2. Fetch users, posts, comments, follows, verifications, marketplace items, direct messages, and notifications in parallel
+    const [usersSnap, postsSnap, commentsSnap, followsSnap, verifsSnap, mpSnap, dmsSnap, notifsSnap] = await Promise.all([
       getDocs(collection(firestoreDb, 'users')).catch(() => ({ forEach: () => {} } as any)),
       getDocs(collection(firestoreDb, 'posts')).catch(() => ({ forEach: () => {} } as any)),
       getDocs(collection(firestoreDb, 'comments')).catch(() => ({ forEach: () => {} } as any)),
       getDocs(collection(firestoreDb, 'follows')).catch(() => ({ forEach: () => {} } as any)),
       getDocs(collection(firestoreDb, 'verification_requests')).catch(() => ({ forEach: () => {} } as any)),
       getDocs(collection(firestoreDb, 'marketplace_approved')).catch(() => ({ forEach: () => {} } as any)),
+      getDocs(collection(firestoreDb, 'direct_messages')).catch(() => ({ forEach: () => {} } as any)),
+      getDocs(collection(firestoreDb, 'notifications')).catch(() => ({ forEach: () => {} } as any)),
     ]);
 
     const firestoreUsers: any[] = [];
@@ -315,9 +318,48 @@ async function syncFirestoreToActiveDb() {
       activeDb.marketplaceItems = mergeMarketplaceItems(activeDb.marketplaceItems || [], firestoreMp);
     }
 
+    const firestoreDms: any[] = [];
+    dmsSnap.forEach((d: any) => {
+      const raw = d.data();
+      if (!raw) return;
+      const msg = { ...raw, id: raw.id || d.id };
+      if (!isDemoDirectMessage(msg)) {
+        const sNick = String(msg.senderNickname || '').toLowerCase().replace(/^@/, '');
+        const rNick = String(msg.receiverNickname || '').toLowerCase().replace(/^@/, '');
+        if ((msg.senderId && fsDeletedIds.has(String(msg.senderId))) || (msg.receiverId && fsDeletedIds.has(String(msg.receiverId)))) return;
+        if ((sNick && fsDeletedNicks.has(sNick)) || (rNick && fsDeletedNicks.has(rNick))) return;
+        firestoreDms.push(msg);
+      }
+    });
+    if (firestoreDms.length > 0) {
+      activeDb.directMessages = mergeDirectMessages(activeDb.directMessages || [], firestoreDms);
+    }
+
+    const fsNotifBuckets: Record<string, any[]> = {};
+    notifsSnap.forEach((d: any) => {
+      const raw = d.data();
+      if (!raw) return;
+      const nId = String(raw.id || d.id);
+      if (raw.type === 'DIRECT_MESSAGE' || nId.startsWith('notif_dm_')) return;
+      const rawTarget = String(raw.targetNickname || '').trim();
+      if (!rawTarget) return;
+      const bucket = rawTarget === '__all__' ? '__all__' : rawTarget.toLowerCase().replace(/^@+/, '');
+      if (!bucket) return;
+      if (!fsNotifBuckets[bucket]) fsNotifBuckets[bucket] = [];
+      fsNotifBuckets[bucket].push({ ...raw, id: nId, targetNickname: bucket });
+    });
+    if (Object.keys(fsNotifBuckets).length > 0) {
+      const currentNotifs = activeDb.notifications || {};
+      const nextNotifs: Record<string, any[]> = { ...currentNotifs };
+      for (const [bucket, incomingList] of Object.entries(fsNotifBuckets)) {
+        nextNotifs[bucket] = mergeNotifications(currentNotifs[bucket] || [], incomingList);
+      }
+      activeDb.notifications = nextNotifs;
+    }
+
     persistServerDb();
     console.log(
-      `[Firestore Sync] Synced ${activeDb.users.length} users, ${(activeDb.posts || []).length} posts, ${(activeDb.comments || []).length} comments into server DB.`
+      `[Firestore Sync] Synced ${activeDb.users.length} users, ${(activeDb.posts || []).length} posts, ${(activeDb.comments || []).length} comments, ${(activeDb.directMessages || []).length} DMs into server DB.`
     );
   } catch (err: any) {
     console.warn('[Firestore Sync] Non-critical Firestore sync notice:', err?.message || err);
@@ -1276,7 +1318,15 @@ app.post('/api/db/sync', (req, res) => {
         changed = true;
       }
       if (updates.notifications && typeof updates.notifications === 'object') {
-        activeDb.notifications = { ...(activeDb.notifications || {}), ...updates.notifications };
+        const currentNotifs = activeDb.notifications || {};
+        const nextNotifs: Record<string, any[]> = { ...currentNotifs };
+        for (const [rawKey, incomingList] of Object.entries(updates.notifications)) {
+          if (!Array.isArray(incomingList)) continue;
+          const cleanKey = rawKey === '__all__' ? '__all__' : String(rawKey).trim().toLowerCase().replace(/^@+/, '');
+          if (!cleanKey) continue;
+          nextNotifs[cleanKey] = mergeNotifications(currentNotifs[cleanKey] || [], incomingList);
+        }
+        activeDb.notifications = nextNotifs;
         changed = true;
       }
 

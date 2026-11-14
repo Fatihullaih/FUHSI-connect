@@ -1,4 +1,4 @@
-import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, ChatConversation, ChatReport, FollowRecord } from '../types';
+import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, ChatConversation, ChatReport, FollowRecord, CampusNotification } from '../types';
 import { normalizeMatricNumber } from './matricValidation';
 import { normalizeBadgeColor } from './verificationUtils';
 import {
@@ -577,29 +577,125 @@ export function mergeVerifCandidates(a: any[] = [], b: any[] = []): any[] {
   return Array.from(map.values());
 }
 
+function normalizeHandleList(list: any): string[] {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'string') continue;
+    const norm = item.toLowerCase().replace(/^@/, '').trim();
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(norm);
+  }
+  return out;
+}
+
+function getDmTimeMs(m: { timestamp?: any; id?: string }): number {
+  if (typeof m.timestamp === 'number' && !isNaN(m.timestamp)) return m.timestamp;
+  if (typeof m.timestamp === 'string') {
+    const parsed = Date.parse(m.timestamp);
+    if (!isNaN(parsed)) return parsed;
+  }
+  if (typeof m.id === 'string') {
+    const match = m.id.match(/(?:dm|msg|sys_group)_(\d{10,14})/);
+    if (match && match[1]) {
+      const n = parseInt(match[1], 10);
+      if (!isNaN(n)) return n;
+    }
+  }
+  return 0;
+}
+
 export function mergeDirectMessages(a: DirectMessage[] = [], b: DirectMessage[] = []): DirectMessage[] {
   const map = new Map<string, DirectMessage>();
-  a.forEach((m) => m?.id && map.set(m.id, { ...m }));
-  b.forEach((m) => {
-    if (m?.id) {
-      const existing = map.get(m.id);
-      if (existing) {
-        map.set(m.id, {
-          ...existing,
-          ...m,
-          isRead: Boolean(existing.isRead || m.isRead),
-          readAt: m.readAt || existing.readAt,
-        });
-      } else {
-        map.set(m.id, { ...m });
+  const processMsg = (m: DirectMessage) => {
+    if (!m?.id || isDemoDirectMessage(m)) return;
+    const existing = map.get(m.id);
+    if (!existing) {
+      map.set(m.id, {
+        ...m,
+        readByUsers: Array.isArray(m.readByUsers) ? normalizeHandleList(m.readByUsers) : m.readByUsers,
+        deletedForUsers: Array.isArray(m.deletedForUsers) ? normalizeHandleList(m.deletedForUsers) : m.deletedForUsers,
+      });
+    } else {
+      const mergedReadBy = normalizeHandleList([...(existing.readByUsers || []), ...(m.readByUsers || [])]);
+      const mergedDeletedFor = normalizeHandleList([...(existing.deletedForUsers || []), ...(m.deletedForUsers || [])]);
+      const isDeletedForEveryone = Boolean(existing.isDeletedForEveryone || m.isDeletedForEveryone);
+
+      let mergedReactions: Record<string, string[]> | undefined = existing.reactions || m.reactions;
+      if (existing.reactions && m.reactions) {
+        mergedReactions = { ...existing.reactions };
+        for (const [emoji, users] of Object.entries(m.reactions)) {
+          const prevUsers = mergedReactions[emoji] || [];
+          const combined = Array.from(new Set([...prevUsers, ...(Array.isArray(users) ? users : [])]));
+          if (combined.length > 0) mergedReactions[emoji] = combined;
+        }
       }
+
+      map.set(m.id, {
+        ...existing,
+        ...m,
+        text: isDeletedForEveryone ? '🚫 This message was deleted' : (m.text || existing.text),
+        isDeletedForEveryone,
+        isRead: Boolean(existing.isRead || m.isRead),
+        readAt: m.readAt || existing.readAt,
+        readByUsers: mergedReadBy.length > 0 ? mergedReadBy : undefined,
+        deletedForUsers: mergedDeletedFor.length > 0 ? mergedDeletedFor : undefined,
+        reactions: mergedReactions,
+      });
     }
-  });
+  };
+  a.forEach(processMsg);
+  b.forEach(processMsg);
   return Array.from(map.values()).sort((x, y) => {
-    const tX = isNaN(new Date(x.timestamp).getTime()) ? 0 : new Date(x.timestamp).getTime();
-    const tY = isNaN(new Date(y.timestamp).getTime()) ? 0 : new Date(y.timestamp).getTime();
-    return tX - tY;
+    const tX = getDmTimeMs(x);
+    const tY = getDmTimeMs(y);
+    if (tX !== tY) return tX - tY;
+    return (x.id || '').localeCompare(y.id || '');
   });
+}
+
+function getNotifTimeMs(n: { createdAt?: string; updatedAt?: string; timestamp?: string; _actionTimestamp?: number }): number {
+  if (typeof n._actionTimestamp === 'number' && !isNaN(n._actionTimestamp)) return n._actionTimestamp;
+  for (const val of [n.updatedAt, n.createdAt, n.timestamp]) {
+    if (typeof val === 'string' && val.trim()) {
+      const parsed = Date.parse(val);
+      if (!isNaN(parsed)) return parsed;
+    }
+  }
+  return 0;
+}
+
+export function mergeNotifications(a: CampusNotification[] = [], b: CampusNotification[] = []): CampusNotification[] {
+  const map = new Map<string, CampusNotification>();
+  const processNotif = (n: any) => {
+    if (!n || !n.id) return;
+    if (n.type === 'DIRECT_MESSAGE' || (typeof n.id === 'string' && n.id.startsWith('notif_dm_'))) return;
+    const existing = map.get(n.id);
+    if (!existing) {
+      const readByUsers = normalizeHandleList(n.readByUsers);
+      map.set(n.id, {
+        ...n,
+        ...(readByUsers.length > 0 ? { readByUsers } : {}),
+      });
+    } else {
+      const readByUsers = normalizeHandleList([...(existing.readByUsers || []), ...(n.readByUsers || [])]);
+      const exTime = getNotifTimeMs(existing as any);
+      const nTime = getNotifTimeMs(n as any);
+      const primary = nTime >= exTime ? n : existing;
+      const secondary = nTime >= exTime ? existing : n;
+      map.set(n.id, {
+        ...secondary,
+        ...primary,
+        isRead: Boolean(existing.isRead || n.isRead),
+        ...(readByUsers.length > 0 ? { readByUsers } : {}),
+      });
+    }
+  };
+  a.forEach(processNotif);
+  b.forEach(processNotif);
+  return Array.from(map.values()).sort((x, y) => getNotifTimeMs(y as any) - getNotifTimeMs(x as any));
 }
 
 export function mergeChatConversations(a: ChatConversation[] = [], b: ChatConversation[] = []): ChatConversation[] {

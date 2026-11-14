@@ -1,6 +1,11 @@
 import { DirectMessage, ChatConversation, CampusNotification, ChatReport, PreservedChatMessage } from '../types';
-import { pushServerDbSync } from './apiSync';
-import { saveDirectMessageToFirestore } from '../lib/firestoreSync';
+import { pushServerDbSync, mergeDirectMessages, mergeNotifications } from './apiSync';
+import {
+  saveDirectMessageToFirestore,
+  saveNotificationToFirestore,
+  markNotificationReadInFirestore,
+  markAllNotificationsReadInFirestore,
+} from '../lib/firestoreSync';
 import { evaluateChatMessage } from './safetyFilter';
 import { isUserPermanentlyDeleted, isModulaAccount } from './userDbUtils';
 
@@ -324,8 +329,11 @@ export function getUserConversations(userNickname: string): ChatConversation[] {
       if (!existing) {
         convMap.set(convId, { otherUser: other, lastMsg: msg, count: 1 });
       } else {
-        // Keep the latest message
-        convMap.set(convId, { otherUser: other, lastMsg: msg, count: existing.count + 1 });
+        // Keep the chronologically latest message
+        const msgTime = parseMessageTimestampMs(msg);
+        const exTime = parseMessageTimestampMs(existing.lastMsg);
+        const latestMsg = msgTime >= exTime ? msg : existing.lastMsg;
+        convMap.set(convId, { otherUser: other, lastMsg: latestMsg, count: existing.count + 1 });
       }
     }
   });
@@ -645,7 +653,7 @@ export function sendDirectMessage(msg: DirectMessage): {
   };
 
   const allMessages = getStoredDirectMessages();
-  const updatedMessages = [...allMessages, safeMsg];
+  const updatedMessages = mergeDirectMessages(allMessages, [safeMsg]);
   
   try {
     localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
@@ -698,9 +706,9 @@ export function sendDirectMessage(msg: DirectMessage): {
 
   // Note: Normal chat messages belong exclusively to Chat/Conversations and are NOT sent to Notifications.
 
-  // Push sync to server
+  // Push delta sync to server (server merges cleanly with mergeDirectMessages)
   try {
-    pushServerDbSync({ directMessages: updatedMessages } as any).catch(console.error);
+    pushServerDbSync({ directMessages: [safeMsg] } as any).catch(console.error);
   } catch (e) {
     console.error(e);
   }
@@ -838,6 +846,11 @@ export function markConversationMessagesAsRead(conversationId: string, readerNic
       console.error('Error storing updated direct messages:', e);
     }
 
+    const readUpdatedMsgs = updatedMessages.filter((msg) => {
+      const msgConvId = msg.conversationId || getConversationId(msg.senderNickname, msg.receiverNickname);
+      return msgConvId === conversationId || (msg.isGroupMessage && msg.groupId === conversationId);
+    });
+
     // Reset unread count for this conversation in conversations list
     try {
       const storedConvs = getStoredConversations();
@@ -848,7 +861,7 @@ export function markConversationMessagesAsRead(conversationId: string, readerNic
         return c;
       });
       localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(updatedConvs));
-      pushServerDbSync({ directMessages: updatedMessages, chatConversations: updatedConvs } as any).catch(console.error);
+      pushServerDbSync({ directMessages: readUpdatedMsgs, chatConversations: updatedConvs } as any).catch(console.error);
     } catch (e) {
       console.error(e);
     }
@@ -955,35 +968,48 @@ export function getUserNotifications(nickname: string): CampusNotification[] {
   const key = `fuhsi_user_notifications_${clean}`;
   try {
     const stored = localStorage.getItem(key);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        // Strictly filter out ordinary chat messages and deprecated redundant verification removal notices
-        const validNotifs = parsed.filter((n) => {
-          if (isChatMessageNotification(n)) return false;
-          const t = String(n?.title || '').toLowerCase();
-          const m = String(n?.message || '').toLowerCase();
-          if (t === 'verification update' || t.includes('verification update')) {
-            return false;
-          }
-          if (
-            m.includes('verification status has been reviewed') ||
-            m.includes('has been reviewed and updated') ||
-            m.includes('the verification badge has been removed from your account')
-          ) {
-            return false;
-          }
-          return true;
-        });
-        // If stale chat notifications were purged, clean up localStorage
-        if (validNotifs.length !== parsed.length) {
-          try {
-            localStorage.setItem(key, JSON.stringify(validNotifs));
-          } catch (e) {}
-        }
-        return validNotifs;
+    const broadcastRaw = localStorage.getItem('fuhsi_broadcast_notifications');
+    const parsedUser = stored ? JSON.parse(stored) : [];
+    const parsedBroadcast = broadcastRaw ? JSON.parse(broadcastRaw) : [];
+
+    const combinedRaw = mergeNotifications(
+      Array.isArray(parsedUser) ? parsedUser : [],
+      Array.isArray(parsedBroadcast) ? parsedBroadcast : []
+    );
+
+    // Strictly filter out ordinary chat messages and deprecated redundant verification removal notices
+    const validNotifs = combinedRaw.filter((n) => {
+      if (isChatMessageNotification(n)) return false;
+      const t = String(n?.title || '').toLowerCase();
+      const m = String(n?.message || '').toLowerCase();
+      if (t === 'verification update' || t.includes('verification update')) {
+        return false;
       }
+      if (
+        m.includes('verification status has been reviewed') ||
+        m.includes('has been reviewed and updated') ||
+        m.includes('the verification badge has been removed from your account')
+      ) {
+        return false;
+      }
+      return true;
+    }).map((n) => {
+      if (n.targetNickname === '__all__') {
+        const readUsers = Array.isArray(n.readByUsers) ? n.readByUsers.map((u) => normalizeNickname(u)) : [];
+        return {
+          ...n,
+          isRead: readUsers.includes(clean),
+        };
+      }
+      return n;
+    });
+
+    if (Array.isArray(parsedUser) && validNotifs.length !== parsedUser.length) {
+      try {
+        localStorage.setItem(key, JSON.stringify(validNotifs));
+      } catch (e) {}
     }
+    return validNotifs;
   } catch (err) {
     console.error('Error reading user notifications:', err);
   }
@@ -991,7 +1017,8 @@ export function getUserNotifications(nickname: string): CampusNotification[] {
 }
 
 /**
- * Send a platform notification to a specific user (chat messages are strictly prohibited here)
+ * Send a platform notification to a specific user or all campus users ('__all__')
+ * (chat messages are strictly prohibited here)
  */
 export function sendUserNotification(targetNickname: string, notif: CampusNotification): void {
   if (!targetNickname || !notif) return;
@@ -1000,30 +1027,59 @@ export function sendUserNotification(targetNickname: string, notif: CampusNotifi
     return;
   }
 
-  const clean = normalizeNickname(targetNickname);
-  const key = `fuhsi_user_notifications_${clean}`;
-  
+  const rawTarget = targetNickname.trim();
+  const isBroadcast = rawTarget === '__all__';
+  const clean = isBroadcast ? '__all__' : normalizeNickname(rawTarget);
+  if (!clean) return;
+
+  const nowIso = new Date().toISOString();
+  const isoTimestamp =
+    notif.createdAt ||
+    (notif.timestamp && !isNaN(Date.parse(notif.timestamp)) ? notif.timestamp : nowIso);
+
   const preparedNotif: CampusNotification = {
     ...notif,
-    timestamp: notif.timestamp ? formatMessageTime(notif.timestamp) : formatMessageTime(),
+    targetNickname: clean,
+    timestamp: isoTimestamp,
+    createdAt: isoTimestamp,
+    updatedAt: notif.updatedAt || nowIso,
+    isRead: Boolean(notif.isRead),
   };
 
   try {
-    const current = getUserNotifications(targetNickname);
-    // Deduplicate identical notifications within short timeframe
-    const exists = current.some((n) => n.id === preparedNotif.id);
-    if (!exists) {
-      const updated = [preparedNotif, ...current];
+    if (isBroadcast) {
+      const bKey = 'fuhsi_broadcast_notifications';
+      const existingRaw = localStorage.getItem(bKey);
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const updated = mergeNotifications(Array.isArray(existing) ? existing : [], [preparedNotif]);
+      localStorage.setItem(bKey, JSON.stringify(updated));
+    } else {
+      const key = `fuhsi_user_notifications_${clean}`;
+      const current = getUserNotifications(clean);
+      const updated = mergeNotifications(current, [preparedNotif]);
       localStorage.setItem(key, JSON.stringify(updated));
     }
   } catch (err) {
     console.error('Error storing user notification:', err);
   }
 
+  // Persist to Firestore & central server DB for cross-device delivery
+  saveNotificationToFirestore(clean, preparedNotif).catch((err) => {
+    console.error('Error saving notification to Firestore:', err);
+  });
+  pushServerDbSync({ notifications: { [clean]: [preparedNotif] } } as any).catch(() => {});
+
   // Dispatch window event for live badges
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname, notif: preparedNotif } }));
+    window.dispatchEvent(new CustomEvent('fuhsi_notification_received', { detail: { targetNickname: clean, notif: preparedNotif } }));
   }
+}
+
+/**
+ * Send a campus-wide broadcast notification to all students & members
+ */
+export function sendBroadcastNotification(notif: CampusNotification): void {
+  sendUserNotification('__all__', notif);
 }
 
 /**
@@ -1035,9 +1091,21 @@ export function markNotificationAsRead(nickname: string, notifId: string): void 
   const key = `fuhsi_user_notifications_${clean}`;
   try {
     const current = getUserNotifications(nickname);
-    const updated = current.map((n) => (n.id === notifId ? { ...n, isRead: true } : n));
+    let targetNotif: CampusNotification | undefined;
+    const updated = current.map((n) => {
+      if (n.id !== notifId) return n;
+      const readByUsers = Array.from(new Set([...(n.readByUsers || []).map((u) => normalizeNickname(u)), clean].filter(Boolean)));
+      targetNotif = { ...n, isRead: true, readByUsers, updatedAt: new Date().toISOString() };
+      return targetNotif;
+    });
     localStorage.setItem(key, JSON.stringify(updated));
     setReadNotificationId(nickname, notifId, true);
+
+    markNotificationReadInFirestore(notifId, clean).catch(() => {});
+    if (targetNotif) {
+      const bucketKey = targetNotif.targetNickname === '__all__' ? '__all__' : clean;
+      pushServerDbSync({ notifications: { [bucketKey]: [targetNotif] } } as any).catch(() => {});
+    }
   } catch (err) {
     console.error('Error marking notification read:', err);
   }
@@ -1056,10 +1124,24 @@ export function markAllNotificationsAsRead(nickname: string): void {
   const key = `fuhsi_user_notifications_${clean}`;
   try {
     const current = getUserNotifications(nickname);
-    const updated = current.map((n) => ({ ...n, isRead: true }));
+    const nowIso = new Date().toISOString();
+    const updated = current.map((n) => {
+      const readByUsers = Array.from(new Set([...(n.readByUsers || []).map((u) => normalizeNickname(u)), clean].filter(Boolean)));
+      return { ...n, isRead: true, readByUsers, updatedAt: nowIso };
+    });
     localStorage.setItem(key, JSON.stringify(updated));
     const allIds = current.map((n) => n.id);
     setAllNotificationIdsRead(nickname, allIds);
+
+    markAllNotificationsReadInFirestore(allIds, clean).catch(() => {});
+    const userOnlyNotifs = updated.filter((n) => n.targetNickname !== '__all__');
+    const broadcastNotifs = updated.filter((n) => n.targetNickname === '__all__');
+    const payload: Record<string, CampusNotification[]> = {};
+    if (userOnlyNotifs.length > 0) payload[clean] = userOnlyNotifs;
+    if (broadcastNotifs.length > 0) payload['__all__'] = broadcastNotifs;
+    if (Object.keys(payload).length > 0) {
+      pushServerDbSync({ notifications: payload } as any).catch(() => {});
+    }
   } catch (err) {
     console.error('Error marking all notifications read:', err);
   }
@@ -1130,7 +1212,7 @@ export function reactToDirectMessage(
   if (updatedMsg) {
     localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
     saveDirectMessageToFirestore(updatedMsg).catch(console.error);
-    pushServerDbSync({ directMessages: updatedMessages } as any).catch(console.error);
+    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch(console.error);
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated', { detail: updatedMsg }));
@@ -1181,7 +1263,7 @@ export function deleteDirectMessageForMe(
   if (updatedMsg) {
     localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
     saveDirectMessageToFirestore(updatedMsg).catch(console.error);
-    pushServerDbSync({ directMessages: updatedMessages } as any).catch(console.error);
+    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch(console.error);
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated', { detail: updatedMsg }));
@@ -1230,7 +1312,7 @@ export function deleteDirectMessageForEveryone(
   if (updatedMsg) {
     localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
     saveDirectMessageToFirestore(updatedMsg).catch(console.error);
-    pushServerDbSync({ directMessages: updatedMessages } as any).catch(console.error);
+    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch(console.error);
 
     // Also update conversations if this was the last message
     try {
@@ -1272,6 +1354,7 @@ export function clearConversationHistoryForUser(
     const allMessages = getStoredDirectMessages();
     let changed = false;
 
+    const modifiedMessages: DirectMessage[] = [];
     const updatedMessages = allMessages.map((m) => {
       const isTarget =
         m.conversationId === conversationOrGroupId ||
@@ -1284,6 +1367,7 @@ export function clearConversationHistoryForUser(
           deletedFor.push(cleanUser);
           changed = true;
           const updatedMsg = { ...m, deletedForUsers: deletedFor };
+          modifiedMessages.push(updatedMsg);
           saveDirectMessageToFirestore(updatedMsg).catch(console.error);
           return updatedMsg;
         }
@@ -1293,7 +1377,7 @@ export function clearConversationHistoryForUser(
 
     if (changed) {
       localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
-      pushServerDbSync({ directMessages: updatedMessages } as any).catch(console.error);
+      pushServerDbSync({ directMessages: modifiedMessages } as any).catch(console.error);
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated'));

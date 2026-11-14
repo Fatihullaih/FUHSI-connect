@@ -229,6 +229,27 @@
         "deletedAt": { "type": "string" }
       },
       "required": ["deletedAt"]
+    },
+    "notifications": {
+      "title": "notifications",
+      "description": "Cross-device platform notifications targeted at individual students or broadcast to all users (__all__)",
+      "properties": {
+        "id": { "type": "string" },
+        "targetNickname": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "readByUsers": { "type": "array", "items": { "type": "string" } },
+        "postId": { "type": "string" },
+        "senderNickname": { "type": "string" },
+        "actionType": { "type": "string" },
+        "itemId": { "type": "string" }
+      },
+      "required": ["id", "targetNickname", "type", "title", "message"]
     }
   }
 }

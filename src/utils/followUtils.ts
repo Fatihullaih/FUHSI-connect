@@ -1,5 +1,7 @@
 import { FollowRecord, CampusNotification } from '../types';
 import { isDemoNickname } from './postGenerator';
+import { saveNotificationToFirestore } from '../lib/firestoreSync';
+import { pushServerDbSync } from './apiSync';
 
 const FOLLOWS_STORAGE_KEY = 'fuhsi_user_follows_v1';
 
@@ -382,20 +384,30 @@ export function recordFollowNotification(
     userNotifs = [notifToPersist, ...userNotifs];
   }
 
+  const syncedNotif: CampusNotification = {
+    ...notifToPersist,
+    targetNickname: cleanTarget,
+    createdAt: notifToPersist.timestamp,
+    updatedAt: new Date().toISOString(),
+  };
+
   try {
     localStorage.setItem(targetKey, JSON.stringify(userNotifs));
   } catch (e) {
     console.error('Error saving follower notification:', e);
   }
 
+  saveNotificationToFirestore(cleanTarget, syncedNotif).catch(() => {});
+  pushServerDbSync({ notifications: { [cleanTarget]: [syncedNotif] } } as any).catch(() => {});
+
   // Dispatch custom event to notify listeners
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent('fuhsi_notification_received', {
-        detail: { targetNickname: cleanTarget, notif: notifToPersist },
+        detail: { targetNickname: cleanTarget, notif: syncedNotif },
       })
     );
   }
 
-  return notifToPersist;
+  return syncedNotif;
 }

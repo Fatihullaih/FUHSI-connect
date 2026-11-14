@@ -494,6 +494,10 @@ export interface CampusNotification {
   message: string;
   timestamp: string;
   isRead: boolean;
+  targetNickname?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  readByUsers?: string[];
   targetDepartment?: string;
   postId?: string;
   senderNickname?: string;

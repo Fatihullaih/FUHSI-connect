@@ -9,10 +9,11 @@ import {
   writeBatch,
   query,
   where,
-  runTransaction
+  runTransaction,
+  arrayUnion
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup } from '../types';
+import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup, CampusNotification } from '../types';
 import { isDemoUser, isDemoPost, isDemoNickname, isDemoComment, isDemoVerificationRequest, isDemoMarketplaceItem, isDemoDirectMessage } from '../utils/postGenerator';
 import { isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
 import { mergeUsers, isPostDeletedLocally, isCommentDeletedLocally } from '../utils/apiSync';
@@ -30,6 +31,7 @@ const HELPDESK_COL = 'helpdesk_inquiries';
 const VERIF_CANDIDATES_COL = 'verif_candidates';
 const DIRECT_MESSAGES_COL = 'direct_messages';
 const CHAT_GROUPS_COL = 'chat_groups';
+const NOTIFICATIONS_COL = 'notifications';
 const FOLLOWS_COL = 'follows';
 const SETTINGS_COL = 'settings';
 const VERIFICATION_SETTINGS_DOC = 'verification_settings';
@@ -1136,7 +1138,8 @@ export function subscribeDirectMessagesByConversation(
       (snapshot) => {
         const list: DirectMessage[] = [];
         snapshot.forEach((docSnap) => {
-          const msg = docSnap.data() as DirectMessage;
+          const raw = docSnap.data() as DirectMessage;
+          const msg: DirectMessage = { ...raw, id: raw?.id || docSnap.id };
           if (!isDemoDirectMessage(msg)) {
             list.push(msg);
           }
@@ -1165,12 +1168,18 @@ export function subscribeDirectMessagesByConversation(
 /**
  * Save single direct message to Firestore
  */
-export async function saveDirectMessageToFirestore(msg: DirectMessage): Promise<void> {
-  if (!msg || !msg.id || isDemoDirectMessage(msg)) return;
+export async function saveDirectMessageToFirestore(msg: DirectMessage): Promise<boolean> {
+  if (!msg || !msg.id || isDemoDirectMessage(msg)) return false;
   try {
-    await setDoc(doc(db, DIRECT_MESSAGES_COL, msg.id), sanitizeForFirestore(msg), { merge: true });
+    const cleanMsg: any = sanitizeForFirestore(msg);
+    if (cleanMsg.senderAvatarUrl && String(cleanMsg.senderAvatarUrl).length > 150000) {
+      delete cleanMsg.senderAvatarUrl;
+    }
+    await setDoc(doc(db, DIRECT_MESSAGES_COL, msg.id), cleanMsg, { merge: true });
+    return true;
   } catch (err) {
     console.error('Error saving direct message to Firestore:', err);
+    return false;
   }
 }
 
@@ -1219,7 +1228,8 @@ export function subscribeAllDirectMessages(onUpdate: (messages: DirectMessage[])
     (snapshot) => {
       const list: DirectMessage[] = [];
       snapshot.forEach((docSnap) => {
-        const msg = docSnap.data() as DirectMessage;
+        const raw = docSnap.data() as DirectMessage;
+        const msg: DirectMessage = { ...raw, id: raw?.id || docSnap.id };
         if (!isDemoDirectMessage(msg)) {
           list.push(msg);
         }
@@ -1351,7 +1361,8 @@ export function subscribeChatGroups(onUpdate: (groups: ChatGroup[]) => void) {
       (snapshot) => {
         const list: ChatGroup[] = [];
         snapshot.forEach((docSnap) => {
-          const group = docSnap.data() as ChatGroup;
+          const raw = docSnap.data() as ChatGroup;
+          const group: ChatGroup = { ...raw, id: raw?.id || docSnap.id };
           if (group && group.id && !group.isDeleted) {
             list.push(group);
           }
@@ -1371,12 +1382,18 @@ export function subscribeChatGroups(onUpdate: (groups: ChatGroup[]) => void) {
 /**
  * Save single chat group to Firestore
  */
-export async function saveChatGroupToFirestore(group: ChatGroup): Promise<void> {
-  if (!group || !group.id) return;
+export async function saveChatGroupToFirestore(group: ChatGroup): Promise<boolean> {
+  if (!group || !group.id) return false;
   try {
-    await setDoc(doc(db, CHAT_GROUPS_COL, group.id), sanitizeForFirestore(group), { merge: true });
+    const cleanGroup: any = sanitizeForFirestore(group);
+    if (cleanGroup.avatarUrl && String(cleanGroup.avatarUrl).length > 150000) {
+      delete cleanGroup.avatarUrl;
+    }
+    await setDoc(doc(db, CHAT_GROUPS_COL, group.id), cleanGroup, { merge: true });
+    return true;
   } catch (err) {
     console.error('Error saving chat group to Firestore:', err);
+    return false;
   }
 }
 
@@ -1389,6 +1406,150 @@ export async function deleteChatGroupFromFirestore(groupId: string): Promise<voi
     await deleteDoc(doc(db, CHAT_GROUPS_COL, groupId));
   } catch (err) {
     console.error('Error deleting chat group from Firestore:', err);
+  }
+}
+
+/**
+ * Normalize notification target handle ('__all__' preserved, user handles lowercased without '@')
+ */
+function normalizeNotifTarget(target: string): string {
+  const raw = (target || '').trim();
+  if (raw === '__all__') return '__all__';
+  return raw.toLowerCase().replace(/^@+/, '');
+}
+
+/**
+ * Save a platform notification to Firestore for cross-device delivery
+ */
+export async function saveNotificationToFirestore(
+  targetNicknameOrAll: string,
+  notif: CampusNotification
+): Promise<boolean> {
+  if (!targetNicknameOrAll || !notif || !notif.id) return false;
+  if (notif.type === 'DIRECT_MESSAGE' || notif.id.startsWith('notif_dm_')) return false;
+  const cleanTarget = normalizeNotifTarget(targetNicknameOrAll);
+  if (!cleanTarget) return false;
+
+  try {
+    const nowIso = new Date().toISOString();
+    const validIso =
+      notif.createdAt ||
+      (notif.timestamp && !isNaN(Date.parse(notif.timestamp)) ? notif.timestamp : nowIso);
+    const cleanNotif = sanitizeForFirestore({
+      ...notif,
+      id: notif.id,
+      targetNickname: cleanTarget,
+      timestamp: validIso,
+      createdAt: validIso,
+      updatedAt: notif.updatedAt || nowIso,
+      readByUsers: Array.isArray(notif.readByUsers) ? notif.readByUsers : [],
+    });
+    await setDoc(doc(db, NOTIFICATIONS_COL, notif.id), cleanNotif, { merge: true });
+    return true;
+  } catch (err) {
+    console.error('Error saving notification to Firestore:', err);
+    return false;
+  }
+}
+
+/**
+ * Subscribe in real-time to all notifications for a user (including campus-wide __all__ broadcasts)
+ */
+export function subscribeUserNotifications(
+  userNickname: string,
+  onUpdate: (notifications: CampusNotification[]) => void
+) {
+  const cleanNick = normalizeNotifTarget(userNickname);
+  if (!cleanNick || cleanNick === '__all__') {
+    return () => {};
+  }
+
+  try {
+    const q = query(
+      collection(db, NOTIFICATIONS_COL),
+      where('targetNickname', 'in', [cleanNick, '__all__'])
+    );
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const list: CampusNotification[] = [];
+        snapshot.forEach((docSnap) => {
+          const raw = docSnap.data() as CampusNotification;
+          if (!raw) return;
+          if (raw.type === 'DIRECT_MESSAGE' || (raw.id && raw.id.startsWith('notif_dm_'))) return;
+          const readUsers = Array.isArray(raw.readByUsers)
+            ? raw.readByUsers.map((u) => String(u).toLowerCase().replace(/^@/, '').trim())
+            : [];
+          const isBroadcast = raw.targetNickname === '__all__';
+          const perUserIsRead = isBroadcast
+            ? readUsers.includes(cleanNick)
+            : Boolean(raw.isRead || readUsers.includes(cleanNick));
+          list.push({
+            ...raw,
+            id: raw.id || docSnap.id,
+            isRead: perUserIsRead,
+          });
+        });
+        list.sort((a, b) => {
+          const tA = Date.parse(a.updatedAt || a.createdAt || a.timestamp || '') || 0;
+          const tB = Date.parse(b.updatedAt || b.createdAt || b.timestamp || '') || 0;
+          return tB - tA;
+        });
+        onUpdate(list);
+      },
+      (err) => {
+        console.warn('Firestore user notifications subscription warning:', err?.message || err);
+      }
+    );
+  } catch (err) {
+    console.error('Failed to subscribe to user notifications:', err);
+    return () => {};
+  }
+}
+
+/**
+ * Mark a notification as read in Firestore for a specific user (safe for both targeted and __all__ broadcasts)
+ */
+export async function markNotificationReadInFirestore(
+  notifId: string,
+  userNickname: string
+): Promise<void> {
+  const cleanNick = normalizeNotifTarget(userNickname);
+  if (!notifId || !cleanNick || cleanNick === '__all__') return;
+  try {
+    const ref = doc(db, NOTIFICATIONS_COL, notifId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const data = snap.data() as CampusNotification;
+    const patch: Record<string, any> = {
+      readByUsers: arrayUnion(cleanNick),
+      updatedAt: new Date().toISOString(),
+    };
+    if (data?.targetNickname !== '__all__') {
+      patch.isRead = true;
+    }
+    await setDoc(ref, patch, { merge: true });
+  } catch (err) {
+    console.warn('Could not mark notification read in Firestore:', err);
+  }
+}
+
+/**
+ * Mark multiple notifications as read in Firestore for a specific user
+ */
+export async function markAllNotificationsReadInFirestore(
+  notifIds: string[],
+  userNickname: string
+): Promise<void> {
+  const cleanNick = normalizeNotifTarget(userNickname);
+  if (!cleanNick || cleanNick === '__all__' || !Array.isArray(notifIds) || notifIds.length === 0) return;
+  const uniqueIds = Array.from(new Set(notifIds.filter(Boolean)));
+  try {
+    await Promise.all(
+      uniqueIds.map((id) => markNotificationReadInFirestore(id, cleanNick))
+    );
+  } catch (err) {
+    console.warn('Could not mark all notifications read in Firestore:', err);
   }
 }
 
