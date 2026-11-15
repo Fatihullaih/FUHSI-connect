@@ -12,7 +12,7 @@ import {
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
 import { useAdminPendingCounts } from './utils/adminAlertUtils';
-import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, purgeAccountPermanentlyAsync, syncDeletedTombstones, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate, sendVerificationNotification, sendVerificationRevokedNotification } from './utils/userDbUtils';
+import { getApprovedMembersCount, getStoredUsers, saveStoredUsers, upsertUser, isGuestAccount, isUserPermanentlyDeleted, markUserPermanentlyDeleted, purgeAccountPermanently, purgeAccountPermanentlyAsync, syncDeletedTombstones, isModulaAccount, sanitizeModulaProfile, sanitizeUserProfile, formatJoinDate, sendVerificationNotification, sendVerificationRevokedNotification, normalizeNicknameHandle, resolveUserIdentity, getUserAllHandleAliases, doesRecordBelongToUser } from './utils/userDbUtils';
 import {
   fetchServerDb,
   pushServerDbSync,
@@ -100,6 +100,79 @@ import { getUserNotifications, getReadNotificationIds, setReadNotificationId, ge
 import { mergeFirestoreGroupsIntoStorage } from './utils/groupUtils';
 import { updateActiveUserPresence } from './utils/presenceUtils';
 import { isUserMatchingAudience } from './utils/audienceUtils';
+
+const reconcilePostAuthorWithUsers = (post: Post, usersList: UserProfile[]): Post => {
+  if (!post || !Array.isArray(usersList) || usersList.length === 0) return post;
+  let changed = false;
+  let nextPost: Post = post;
+
+  const resolved = resolveUserIdentity(
+    { userId: (post as any).authorId, nickname: post.authorNickname || (post as any).nickname },
+    usersList
+  );
+  if (resolved) {
+    const nextAuthorId = (post as any).authorId || resolved.id;
+    const nextNick = resolved.nickname || post.authorNickname;
+    if ((nextAuthorId && (post as any).authorId !== nextAuthorId) || (nextNick && post.authorNickname !== nextNick)) {
+      nextPost = {
+        ...nextPost,
+        ...(nextAuthorId ? { authorId: nextAuthorId } : {}),
+        authorNickname: nextNick,
+      };
+      changed = true;
+    }
+  }
+
+  if (nextPost.quotedPost) {
+    const nextQuoted = reconcilePostAuthorWithUsers(nextPost.quotedPost, usersList);
+    if (nextQuoted !== nextPost.quotedPost) {
+      nextPost = { ...nextPost, quotedPost: nextQuoted };
+      changed = true;
+    }
+  }
+  if (nextPost.repostedPost) {
+    const nextReposted = reconcilePostAuthorWithUsers(nextPost.repostedPost, usersList);
+    if (nextReposted !== nextPost.repostedPost) {
+      nextPost = { ...nextPost, repostedPost: nextReposted };
+      changed = true;
+    }
+  }
+
+  return changed ? nextPost : post;
+};
+
+const reconcileCommentAuthorWithUsers = (comment: Comment, usersList: UserProfile[]): Comment => {
+  if (!comment || !Array.isArray(usersList) || usersList.length === 0) return comment;
+  let changed = false;
+  let nextComment: Comment = comment;
+
+  const resolved = resolveUserIdentity(
+    { userId: (comment as any).authorId, nickname: comment.authorNickname },
+    usersList
+  );
+  if (resolved) {
+    const nextAuthorId = (comment as any).authorId || resolved.id;
+    const nextNick = resolved.nickname || comment.authorNickname;
+    if ((nextAuthorId && (comment as any).authorId !== nextAuthorId) || (nextNick && comment.authorNickname !== nextNick)) {
+      nextComment = {
+        ...nextComment,
+        ...(nextAuthorId ? { authorId: nextAuthorId } : {}),
+        authorNickname: nextNick,
+      };
+      changed = true;
+    }
+  }
+
+  if (comment.replyToNickname) {
+    const resolvedReply = resolveUserIdentity(comment.replyToNickname, usersList);
+    if (resolvedReply && resolvedReply.nickname && resolvedReply.nickname !== comment.replyToNickname) {
+      nextComment = { ...nextComment, replyToNickname: resolvedReply.nickname };
+      changed = true;
+    }
+  }
+
+  return changed ? nextComment : comment;
+};
 
 export const App: React.FC = () => {
   // Navigation State
@@ -709,6 +782,22 @@ export const App: React.FC = () => {
       setAppTotalMembers(mergedUsers.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
       setNotifTrigger((prev) => prev + 1);
 
+      // Reconcile existing posts and comments with any updated user handles
+      const curPostsForRec = postsRef.current || [];
+      const recPostsFromUsers = curPostsForRec.map((p) => reconcilePostAuthorWithUsers(p, mergedUsers));
+      if (recPostsFromUsers.some((p, i) => p !== curPostsForRec[i])) {
+        postsRef.current = recPostsFromUsers;
+        try { localStorage.setItem('fuhsi_posts_db', JSON.stringify(recPostsFromUsers)); } catch {}
+        setPosts(recPostsFromUsers);
+      }
+      const curCommentsForRec = commentsRef.current || [];
+      const recCommentsFromUsers = curCommentsForRec.map((c) => reconcileCommentAuthorWithUsers(c, mergedUsers));
+      if (recCommentsFromUsers.some((c, i) => c !== curCommentsForRec[i])) {
+        commentsRef.current = recCommentsFromUsers;
+        try { localStorage.setItem('fuhsi_comments_db', JSON.stringify(recCommentsFromUsers)); } catch {}
+        setComments(recCommentsFromUsers);
+      }
+
       // Reconcile active logged-in user profile
       const activeUserJson = localStorage.getItem('fuhsi_active_user');
       if (activeUserJson) {
@@ -937,13 +1026,17 @@ export const App: React.FC = () => {
 
       const currentComments = Array.isArray(commentsRef.current) ? commentsRef.current : [];
       const mergedWithLocal = mergePosts(withPendingLikes, []);
+      const storedUsersNow = getStoredUsers();
       const reconciledPosts = mergedWithLocal.map((p) => {
         const topLevelCount = currentComments.filter((c) => c && c.postId === p.id && !c.parentId).length;
-        return {
-          ...p,
-          commentsCount: topLevelCount,
-          commentCount: topLevelCount,
-        };
+        return reconcilePostAuthorWithUsers(
+          {
+            ...p,
+            commentsCount: topLevelCount,
+            commentCount: topLevelCount,
+          },
+          storedUsersNow
+        );
       });
 
       postsRef.current = reconciledPosts;
@@ -1013,7 +1106,10 @@ export const App: React.FC = () => {
         return c;
       });
 
-      const validComments = mergeComments(withPendingLikes, stillPendingComments);
+      const storedUsersNow = getStoredUsers();
+      const validComments = mergeComments(withPendingLikes, stillPendingComments).map((c) =>
+        reconcileCommentAuthorWithUsers(c, storedUsersNow)
+      );
       commentsRef.current = validComments;
       try {
         localStorage.setItem('fuhsi_comments_db', JSON.stringify(validComments));
@@ -1280,6 +1376,30 @@ export const App: React.FC = () => {
       const db = await fetchServerDb();
       if (!db || !isMounted) return;
 
+      // 0. Sync superseded username mapping from central server
+      if ((db as any).supersededUsernames && typeof (db as any).supersededUsernames === 'object') {
+        try {
+          const rawLocalSup = localStorage.getItem('fuhsi_superseded_usernames');
+          const localSup = rawLocalSup ? JSON.parse(rawLocalSup) : {};
+          const mergedSup: Record<string, any> = {
+            ...(localSup && typeof localSup === 'object' ? localSup : {}),
+            ...(db as any).supersededUsernames,
+          };
+          const activeUsersForPrune = Array.isArray(db.users) && db.users.length > 0 ? db.users : getStoredUsers();
+          Object.keys(mergedSup).forEach((oldKey) => {
+            const entry = mergedSup[oldKey];
+            if (!entry) return;
+            const owner = activeUsersForPrune.find(
+              (u) => entry.userId && u.id && String(u.id).trim() === String(entry.userId).trim()
+            );
+            if (owner && normalizeNicknameHandle(owner.nickname) === normalizeNicknameHandle(oldKey)) {
+              delete mergedSup[oldKey];
+            }
+          });
+          localStorage.setItem('fuhsi_superseded_usernames', JSON.stringify(mergedSup));
+        } catch {}
+      }
+
       // 1. Sync Users List
       if (Array.isArray(db.users) && db.users.length > 0) {
         const validUsers = db.users.filter((u) => !isDemoUser(u) && !isDemoNickname(u.nickname));
@@ -1292,6 +1412,22 @@ export const App: React.FC = () => {
           const mergedSig = mergedUsers.map((u) => `${u.id}:${u.nickname}:${u.isOnline ? 1 : 0}:${u.lastActiveAt || ''}:${u.updatedAt || ''}`).join('|');
           if (localSig !== mergedSig) {
             setNotifTrigger((prev) => prev + 1);
+          }
+
+          // Reconcile current posts and comments if user handles shifted
+          const curPostsRec = postsRef.current || [];
+          const nextRecPosts = curPostsRec.map((p) => reconcilePostAuthorWithUsers(p, mergedUsers));
+          if (nextRecPosts.some((p, i) => p !== curPostsRec[i])) {
+            postsRef.current = nextRecPosts;
+            try { localStorage.setItem('fuhsi_posts_db', JSON.stringify(nextRecPosts)); } catch {}
+            setPosts(nextRecPosts);
+          }
+          const curCommentsRec = commentsRef.current || [];
+          const nextRecComments = curCommentsRec.map((c) => reconcileCommentAuthorWithUsers(c, mergedUsers));
+          if (nextRecComments.some((c, i) => c !== curCommentsRec[i])) {
+            commentsRef.current = nextRecComments;
+            try { localStorage.setItem('fuhsi_comments_db', JSON.stringify(nextRecComments)); } catch {}
+            setComments(nextRecComments);
           }
 
           const activeUserJson = localStorage.getItem('fuhsi_active_user');
@@ -1492,18 +1628,20 @@ export const App: React.FC = () => {
         if (pendingCreated.length > 0) {
           mergedComments = mergeComments(mergedComments, pendingCreated);
         }
+        const serverUsersList = getStoredUsers();
         mergedComments = mergedComments.map((c) => {
           const pendingLike = pendingCommentLikeWritesRef.current.get(c.id);
-          if (pendingLike && pendingLike.expiresAt > nowMs) {
-            return {
-              ...c,
-              likedBy: pendingLike.likedBy,
-              likesCount: pendingLike.likesCount,
-              likes: pendingLike.likesCount,
-              updatedAt: pendingLike.updatedAt,
-            };
-          }
-          return c;
+          const withLike =
+            pendingLike && pendingLike.expiresAt > nowMs
+              ? {
+                  ...c,
+                  likedBy: pendingLike.likedBy,
+                  likesCount: pendingLike.likesCount,
+                  likes: pendingLike.likesCount,
+                  updatedAt: pendingLike.updatedAt,
+                }
+              : c;
+          return reconcileCommentAuthorWithUsers(withLike, serverUsersList);
         });
 
         latestMergedComments = mergedComments;
@@ -1540,6 +1678,7 @@ export const App: React.FC = () => {
             !(p.isRepost && p.repostedPostId)
         );
 
+        const serverUsersForPosts = getStoredUsers();
         const mergedPostsRaw = mergePosts(activeCurrentPosts, validServerPosts).map((p) => {
           const pendingLike = pendingPostLikeWritesRef.current.get(p.id);
           const withLike =
@@ -1555,11 +1694,14 @@ export const App: React.FC = () => {
           const topLevelCount = latestMergedComments.filter(
             (c) => c && c.postId === withLike.id && !c.parentId
           ).length;
-          return {
-            ...withLike,
-            commentsCount: topLevelCount,
-            commentCount: topLevelCount,
-          };
+          return reconcilePostAuthorWithUsers(
+            {
+              ...withLike,
+              commentsCount: topLevelCount,
+              commentCount: topLevelCount,
+            },
+            serverUsersForPosts
+          );
         });
 
         if (JSON.stringify(postsRef.current) !== JSON.stringify(mergedPostsRaw)) {
@@ -2035,34 +2177,45 @@ export const App: React.FC = () => {
   }, [openSettingsVerification]);
 
   const openAuthorProfile = useCallback((post: Post) => {
-    const targetNick = (post.authorNickname || (post as any).nickname || '').toLowerCase().replace(/^@/, '');
-    const myNick = (userProfile?.nickname || '').toLowerCase().replace(/^@/, '');
+    const rawTargetNick = post.authorNickname || (post as any).nickname || '';
+    const targetAuthorId = (post as any).authorId ? String((post as any).authorId).trim() : undefined;
+    const storedUsers = getStoredUsers();
+    const resolvedUser = resolveUserIdentity(
+      { userId: targetAuthorId, nickname: rawTargetNick },
+      storedUsers
+    );
+
+    const isSelf =
+      Boolean(userProfile?.id && resolvedUser?.id && userProfile.id === resolvedUser.id) ||
+      Boolean(userProfile?.id && targetAuthorId && userProfile.id === targetAuthorId) ||
+      doesRecordBelongToUser(
+        { authorId: targetAuthorId, authorNickname: rawTargetNick },
+        userProfile,
+        userProfile?.nickname
+      );
 
     // If the clicked profile is the current user's own profile, open My Profile directly
-    if (myNick && targetNick === myNick) {
+    if (isSelf) {
       openProfileModal();
       return;
     }
 
     let enrichedPost = { ...post };
-    try {
-      const storedUsers = localStorage.getItem('fuhsi_users_db');
-      if (storedUsers) {
-        const userList = JSON.parse(storedUsers);
-        if (Array.isArray(userList)) {
-          const found = userList.find((u: any) => u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === targetNick);
-          if (found) {
-            enrichedPost.authorAvatarKey = found.avatarKey || post.authorAvatarKey || 'caduceus';
-            enrichedPost.authorAvatarUrl = found.avatarUrl || post.authorAvatarUrl;
-            enrichedPost.authorBadgeType = found.badgeType || post.authorBadgeType || 'NONE';
-            enrichedPost.authorBadgeTitle = found.badgeTitle || post.authorBadgeTitle || '';
-            (enrichedPost as any).authorIsVerified = found.isVerified ?? post.isVerified;
-            enrichedPost.authorPoints = calculateUserPoints(found.nickname, found, posts, comments, reports);
-          }
-        }
-      }
-    } catch (e) {
-      console.error(e);
+    if (resolvedUser) {
+      enrichedPost.authorId = resolvedUser.id;
+      enrichedPost.authorNickname = resolvedUser.nickname || rawTargetNick;
+      enrichedPost.authorAvatarKey = resolvedUser.avatarKey || post.authorAvatarKey || 'caduceus';
+      enrichedPost.authorAvatarUrl = resolvedUser.avatarUrl || post.authorAvatarUrl;
+      enrichedPost.authorBadgeType = resolvedUser.badgeType || post.authorBadgeType || 'NONE';
+      enrichedPost.authorBadgeTitle = resolvedUser.badgeTitle || post.authorBadgeTitle || '';
+      (enrichedPost as any).authorIsVerified = resolvedUser.isVerified ?? post.isVerified;
+      enrichedPost.authorPoints = calculateUserPoints(
+        resolvedUser.nickname,
+        resolvedUser,
+        postsRef.current || posts,
+        commentsRef.current || comments,
+        reports
+      );
     }
 
     setSelectedAuthorPost(enrichedPost);
@@ -2070,7 +2223,7 @@ export const App: React.FC = () => {
     try {
       window.history.pushState({ type: 'modal', modalType: 'authorProfile', id: enrichedPost.id, time: Date.now() }, '');
     } catch (e) { console.error(e); }
-  }, [userProfile?.nickname, openProfileModal]);
+  }, [userProfile, openProfileModal, reports]);
 
   const openCreatePostModal = useCallback(() => {
     setShowCreatePostModal(true);
@@ -2655,6 +2808,7 @@ export const App: React.FC = () => {
 
     const quotePost: Post = {
       id: `quote_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      authorId: userProfile.id,
       authorNickname: myNick,
       authorAvatarKey: userProfile.avatarKey || 'caduceus',
       authorAvatarUrl: userProfile.avatarUrl,
@@ -3010,6 +3164,7 @@ export const App: React.FC = () => {
 
     const newPost: Post = {
       id: `post_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      authorId: userProfile.id,
       authorNickname: userProfile.nickname,
       authorBadgeType: userProfile.badgeType,
       authorBadgeTitle: userProfile.badgeTitle,
@@ -3075,6 +3230,7 @@ export const App: React.FC = () => {
     const newComment: Comment = {
       id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       postId,
+      authorId: userProfile.id,
       authorNickname,
       authorBadgeType: userProfile.badgeType,
       authorBadgeTitle: userProfile.badgeTitle,
@@ -4381,15 +4537,14 @@ export const App: React.FC = () => {
 
     const formattedNick = rawNick.startsWith('@') ? rawNick : `@${rawNick}`;
 
-    // Verify nickname is not already used by another account
-    const cleanNewNick = formattedNick.toLowerCase().replace(/^@/, '');
-    const currentNickClean = (userProfile.nickname || '').toLowerCase().replace(/^@/, '');
+    const cleanNewNick = normalizeNicknameHandle(formattedNick);
+    const currentNickClean = normalizeNicknameHandle(userProfile.nickname);
     if (cleanNewNick !== currentNickClean) {
       const storedUsers = getStoredUsers();
       const existing = storedUsers.find(
         (u) =>
           u.id !== userProfile.id &&
-          (u.nickname || '').toLowerCase().replace(/^@/, '') === cleanNewNick
+          normalizeNicknameHandle(u.nickname) === cleanNewNick
       );
       if (existing) {
         return `Error: The handle "${formattedNick}" is already taken by another student. Please choose a different username.`;
@@ -4398,10 +4553,24 @@ export const App: React.FC = () => {
 
     const newAvatarUrl = avatarUrl !== undefined ? avatarUrl : userProfile.avatarUrl;
     const newAvatarKey = avatarKey || userProfile.avatarKey || 'caduceus';
+    const nowIso = new Date().toISOString();
+
+    const prevNickSet = new Set<string>();
+    if (Array.isArray(userProfile.previousNicknames)) {
+      userProfile.previousNicknames.forEach((p) => {
+        const cleanPrev = normalizeNicknameHandle(p);
+        if (cleanPrev && cleanPrev !== cleanNewNick) prevNickSet.add(cleanPrev);
+      });
+    }
+    if (currentNickClean && currentNickClean !== cleanNewNick) {
+      prevNickSet.add(currentNickClean);
+    }
+    const updatedPreviousNicknames = Array.from(prevNickSet);
 
     const updated: UserProfile = sanitizeModulaProfile({
       ...userProfile,
       nickname: formattedNick,
+      previousNicknames: updatedPreviousNicknames,
       realName: realName !== undefined ? realName.trim() : userProfile.realName,
       realNameHidden: realName !== undefined ? realName.trim() : userProfile.realNameHidden,
       studentEmail: studentEmail !== undefined ? studentEmail.trim() : userProfile.studentEmail,
@@ -4414,7 +4583,7 @@ export const App: React.FC = () => {
       bio: (bio !== undefined ? bio.trim() : (userProfile.bio || '')).slice(0, 50),
       avatarKey: newAvatarKey,
       avatarUrl: newAvatarUrl,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
     });
 
     // Mark recent save timestamp to shield local state against stale race-condition server syncs
@@ -4423,11 +4592,53 @@ export const App: React.FC = () => {
       localStorage.setItem('fuhsi_last_profile_save', String(Date.now()));
     } catch (e) {}
 
-    // 1. Update React state
+    // 1. Update superseded registry BEFORE updating React/DB state so all resolvers immediately see the alias link
+    const isUsernameChanged = cleanNewNick !== currentNickClean;
+    if (isUsernameChanged && userProfile.id && !isModulaAccount(userProfile)) {
+      try {
+        const rawSup = localStorage.getItem('fuhsi_superseded_usernames');
+        const superseded = rawSup ? JSON.parse(rawSup) : {};
+        Object.keys(superseded).forEach((k) => {
+          const entry = superseded[k];
+          if (!entry) return;
+          if (
+            (entry.userId && entry.userId === userProfile.id) ||
+            normalizeNicknameHandle(entry.newNickname) === currentNickClean
+          ) {
+            superseded[k] = {
+              ...entry,
+              newNickname: formattedNick,
+              userId: userProfile.id,
+              changedAt: nowIso,
+            };
+          }
+        });
+        updatedPreviousNicknames.forEach((alias) => {
+          superseded[alias] = {
+            newNickname: formattedNick,
+            userId: userProfile.id,
+            changedAt: nowIso,
+          };
+        });
+        if (cleanNewNick && superseded[cleanNewNick]) {
+          delete superseded[cleanNewNick];
+        }
+        localStorage.setItem('fuhsi_superseded_usernames', JSON.stringify(superseded));
+
+        ['fuhsi_last_login_username', 'fuhsi_remembered_username', 'fuhsi_recent_login_handle'].forEach((k) => {
+          const val = localStorage.getItem(k);
+          if (val && normalizeNicknameHandle(val) === currentNickClean) {
+            localStorage.setItem(k, formattedNick);
+          }
+        });
+      } catch (e) {}
+    }
+
+    const aliasSet = getUserAllHandleAliases(updated, userProfile.nickname);
+
+    // 2. Update React state & persist active user
     setUserProfile(updated);
     setNotifTrigger((prev) => prev + 1);
-
-    // 2. Persist active user to localStorage
     try {
       localStorage.setItem('fuhsi_active_user', JSON.stringify(updated));
     } catch (e) {
@@ -4438,7 +4649,7 @@ export const App: React.FC = () => {
     try {
       upsertUser(updated);
 
-      if (cleanNewNick !== currentNickClean && userProfile.id && !isModulaAccount(userProfile)) {
+      if (isUsernameChanged && userProfile.id && !isModulaAccount(userProfile)) {
         fetch('/api/users/change-username', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4446,27 +4657,11 @@ export const App: React.FC = () => {
             userId: userProfile.id,
             newNickname: formattedNick,
             oldNickname: userProfile.nickname,
+            previousNicknames: updatedPreviousNicknames,
+            avatarKey: newAvatarKey,
+            avatarUrl: newAvatarUrl,
           }),
         }).catch((err) => console.warn('Server username change sync notice:', err));
-
-        // Record in client-side superseded registry and clean old cached identifier references
-        try {
-          const rawSup = localStorage.getItem('fuhsi_superseded_usernames');
-          const superseded = rawSup ? JSON.parse(rawSup) : {};
-          superseded[currentNickClean] = {
-            newNickname: formattedNick,
-            userId: userProfile.id,
-            changedAt: new Date().toISOString(),
-          };
-          localStorage.setItem('fuhsi_superseded_usernames', JSON.stringify(superseded));
-
-          ['fuhsi_last_login_username', 'fuhsi_remembered_username', 'fuhsi_recent_login_handle'].forEach((k) => {
-            const val = localStorage.getItem(k);
-            if (val && val.toLowerCase().replace(/^@/, '') === currentNickClean) {
-              localStorage.setItem(k, formattedNick);
-            }
-          });
-        } catch (e) {}
       }
 
       saveUserToFirestore(updated, currentNickClean).catch((err) => {
@@ -4482,68 +4677,234 @@ export const App: React.FC = () => {
       console.warn('User profile update persistence notice:', e);
     }
 
-    // 4. Propagate updated avatar and nickname across existing user posts and comments
-    const oldNick = currentNickClean;
-    const newNick = cleanNewNick;
+    // 4. Propagate updated identity, handle, and avatar across ALL existing posts (including embedded quoted/reposted posts) and comments
+    const rewritePostRecord = (p: Post): { post: Post; touched: boolean } => {
+      let touched = false;
+      let nextP = { ...p };
 
-    const syncedProfilePosts: Post[] = [];
-    let fullUpdatedPostsForServer: Post[] | null = null;
-    setPosts((prev) => {
-      const updatedPosts = prev.map((p) => {
-        const pNick = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '');
-        if (pNick === oldNick || pNick === newNick) {
-          const updatedPost = {
-            ...p,
-            authorNickname: formattedNick,
-            authorAvatarKey: newAvatarKey,
-            authorAvatarUrl: newAvatarUrl,
-          };
-          syncedProfilePosts.push(updatedPost);
-          return updatedPost;
+      if (doesRecordBelongToUser(p as any, updated, userProfile.nickname)) {
+        nextP = {
+          ...nextP,
+          authorId: updated.id,
+          authorNickname: formattedNick,
+          authorAvatarKey: newAvatarKey,
+          authorAvatarUrl: newAvatarUrl,
+        };
+        touched = true;
+      }
+
+      if (isUsernameChanged) {
+        if (Array.isArray(p.likedBy) && p.likedBy.some((k) => aliasSet.has(normalizeNicknameHandle(k)))) {
+          nextP.likedBy = Array.from(
+            new Set(
+              p.likedBy.map((k) => (aliasSet.has(normalizeNicknameHandle(k)) ? cleanNewNick : k))
+            )
+          );
+          touched = true;
         }
-        return p;
-      });
-      fullUpdatedPostsForServer = updatedPosts;
-      try {
-        localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
-      } catch (e) {}
-      return updatedPosts;
+        if (Array.isArray(p.bookmarkedBy) && p.bookmarkedBy.some((k) => aliasSet.has(normalizeNicknameHandle(k)))) {
+          nextP.bookmarkedBy = Array.from(
+            new Set(
+              p.bookmarkedBy.map((k) => (aliasSet.has(normalizeNicknameHandle(k)) ? cleanNewNick : k))
+            )
+          );
+          touched = true;
+        }
+        if (Array.isArray(p.repostedBy) && p.repostedBy.some((k) => aliasSet.has(normalizeNicknameHandle(k)))) {
+          nextP.repostedBy = Array.from(
+            new Set(
+              p.repostedBy.map((k) => (aliasSet.has(normalizeNicknameHandle(k)) ? formattedNick : k))
+            )
+          );
+          touched = true;
+        }
+        if (
+          Array.isArray(p.repostRecords) &&
+          p.repostRecords.some((r) => r && aliasSet.has(normalizeNicknameHandle(r.userNickname)))
+        ) {
+          nextP.repostRecords = p.repostRecords.map((r) =>
+            r && aliasSet.has(normalizeNicknameHandle(r.userNickname))
+              ? { ...r, userNickname: formattedNick }
+              : r
+          );
+          touched = true;
+        }
+      }
+
+      if (p.quotedPost) {
+        const qRes = rewritePostRecord(p.quotedPost);
+        if (qRes.touched) {
+          nextP.quotedPost = qRes.post;
+          touched = true;
+        }
+      }
+      if (p.repostedPost) {
+        const rRes = rewritePostRecord(p.repostedPost);
+        if (rRes.touched) {
+          nextP.repostedPost = rRes.post;
+          touched = true;
+        }
+      }
+
+      if (touched) {
+        nextP.updatedAt = nowIso;
+      }
+      return { post: touched ? nextP : p, touched };
+    };
+
+    const currentPostsList = postsRef.current || posts;
+    const syncedProfilePosts: Post[] = [];
+    const updatedPostsList = currentPostsList.map((p) => {
+      const res = rewritePostRecord(p);
+      if (res.touched) syncedProfilePosts.push(res.post);
+      return res.post;
     });
+    postsRef.current = updatedPostsList;
+    setPosts(updatedPostsList);
+    try {
+      localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPostsList));
+    } catch (e) {}
+
+    setSelectedPost((prev) => (prev ? updatedPostsList.find((p) => p.id === prev.id) || rewritePostRecord(prev).post : null));
+    setSelectedAuthorPost((prev) => (prev ? rewritePostRecord(prev).post : null));
+    setModalStack((prevStack) =>
+      prevStack.map((item) => {
+        if (item.type === 'postDetail' && item.post) {
+          const match = updatedPostsList.find((p) => p.id === item.post.id) || rewritePostRecord(item.post).post;
+          return { ...item, post: match };
+        }
+        if (item.type === 'authorProfile' && item.post) {
+          return { ...item, post: rewritePostRecord(item.post).post };
+        }
+        return item;
+      })
+    );
+
+    const currentCommentsList = commentsRef.current || comments;
+    const syncedProfileComments: Comment[] = [];
+    const updatedCommentsList = currentCommentsList.map((c) => {
+      let touched = false;
+      let nextC = { ...c };
+      if (doesRecordBelongToUser(c as any, updated, userProfile.nickname)) {
+        nextC = {
+          ...nextC,
+          authorId: updated.id,
+          authorNickname: formattedNick,
+          authorAvatarKey: newAvatarKey,
+          authorAvatarUrl: newAvatarUrl,
+        };
+        touched = true;
+      }
+      if (isUsernameChanged) {
+        if (c.replyToNickname && aliasSet.has(normalizeNicknameHandle(c.replyToNickname))) {
+          nextC.replyToNickname = formattedNick;
+          touched = true;
+        }
+        if (Array.isArray(c.likedBy) && c.likedBy.some((k) => aliasSet.has(normalizeNicknameHandle(k)))) {
+          nextC.likedBy = Array.from(
+            new Set(c.likedBy.map((k) => (aliasSet.has(normalizeNicknameHandle(k)) ? cleanNewNick : k)))
+          );
+          touched = true;
+        }
+      }
+      if (touched) {
+        nextC.updatedAt = nowIso;
+        syncedProfileComments.push(nextC);
+        return nextC;
+      }
+      return c;
+    });
+    commentsRef.current = updatedCommentsList;
+    setComments(updatedCommentsList);
+    try {
+      localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedCommentsList));
+    } catch (e) {}
+
+    // 4b. Cascade username change across follows, verifications, marketplace, bookmarks & local notifications
+    if (isUsernameChanged) {
+      const updatedFollows = allFollows.map((f) => {
+        const f1Changed = aliasSet.has(normalizeNicknameHandle(f.followerNickname));
+        const f2Changed = aliasSet.has(normalizeNicknameHandle(f.followingNickname));
+        if (!f1Changed && !f2Changed) return f;
+        return {
+          ...f,
+          followerNickname: f1Changed ? formattedNick : f.followerNickname,
+          followingNickname: f2Changed ? formattedNick : f.followingNickname,
+        };
+      });
+      setAllFollows(updatedFollows);
+      saveStoredFollows(updatedFollows);
+      pushServerDbSync({ follows: updatedFollows, replaceFollows: true } as any).catch(() => {});
+
+      const updatedVerifs = verificationRequests.map((v) =>
+        aliasSet.has(normalizeNicknameHandle(v.applicantNickname))
+          ? { ...v, applicantNickname: formattedNick }
+          : v
+      );
+      setVerificationRequests(updatedVerifs);
+      try { localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedVerifs)); } catch {}
+
+      const updatedMarketplace = marketplaceItems.map((m) =>
+        aliasSet.has(normalizeNicknameHandle(m.sellerNickname))
+          ? { ...m, sellerNickname: formattedNick }
+          : m
+      );
+      setMarketplaceItems(updatedMarketplace);
+      try { localStorage.setItem('fuhsi_marketplace_approved_db', JSON.stringify(updatedMarketplace)); } catch {}
+
+      const updatedPendingMarketplace = pendingMarketplaceItems.map((m) =>
+        aliasSet.has(normalizeNicknameHandle(m.sellerNickname))
+          ? { ...m, sellerNickname: formattedNick }
+          : m
+      );
+      setPendingMarketplaceItems(updatedPendingMarketplace);
+      try { localStorage.setItem('fuhsi_marketplace_pending_db', JSON.stringify(updatedPendingMarketplace)); } catch {}
+
+      if (currentNickClean && cleanNewNick) {
+        setUserBookmarksMap((prevMap) => {
+          const merged = new Set<string>(prevMap[cleanNewNick] || []);
+          aliasSet.forEach((alias) => {
+            if (Array.isArray(prevMap[alias])) {
+              prevMap[alias].forEach((id) => merged.add(id));
+            }
+          });
+          const nextMap = { ...prevMap, [cleanNewNick]: Array.from(merged) };
+          aliasSet.forEach((alias) => {
+            if (alias !== cleanNewNick) delete nextMap[alias];
+          });
+          return nextMap;
+        });
+
+        try {
+          const oldNotifRaw = localStorage.getItem(`fuhsi_user_notifications_${currentNickClean}`);
+          const newNotifRaw = localStorage.getItem(`fuhsi_user_notifications_${cleanNewNick}`);
+          if (oldNotifRaw) {
+            const oldList = JSON.parse(oldNotifRaw);
+            const newList = newNotifRaw ? JSON.parse(newNotifRaw) : [];
+            const combined = mergeNotifications(Array.isArray(newList) ? newList : [], Array.isArray(oldList) ? oldList : [])
+              .map((n: any) => ({ ...n, targetNickname: cleanNewNick }));
+            localStorage.setItem(`fuhsi_user_notifications_${cleanNewNick}`, JSON.stringify(combined));
+            localStorage.removeItem(`fuhsi_user_notifications_${currentNickClean}`);
+          }
+          const oldReadRaw = localStorage.getItem(`fuhsi_notifications_read_${currentNickClean}`);
+          if (oldReadRaw) {
+            const newReadRaw = localStorage.getItem(`fuhsi_notifications_read_${cleanNewNick}`);
+            const mergedRead = {
+              ...(newReadRaw ? JSON.parse(newReadRaw) : {}),
+              ...JSON.parse(oldReadRaw),
+            };
+            localStorage.setItem(`fuhsi_notifications_read_${cleanNewNick}`, JSON.stringify(mergedRead));
+            localStorage.removeItem(`fuhsi_notifications_read_${currentNickClean}`);
+          }
+        } catch {}
+      }
+    }
+
     setTimeout(() => {
       syncedProfilePosts.forEach((p) => savePostToFirestore(p).catch((err) => console.warn('Firestore profile post sync notice:', err)));
-      if (fullUpdatedPostsForServer) {
-        pushServerDbSync({ posts: fullUpdatedPostsForServer, replacePosts: true } as any).catch((err) => console.warn('Server posts sync notice:', err));
-      }
-    }, 0);
-
-    const syncedProfileComments: Comment[] = [];
-    let fullUpdatedCommentsForServer: Comment[] | null = null;
-    setComments((prev) => {
-      const updatedComments = prev.map((c) => {
-        const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
-        if (cNick === oldNick || cNick === newNick) {
-          const updatedComment = {
-            ...c,
-            authorNickname: formattedNick,
-            authorAvatarKey: newAvatarKey,
-            authorAvatarUrl: newAvatarUrl,
-          };
-          syncedProfileComments.push(updatedComment);
-          return updatedComment;
-        }
-        return c;
-      });
-      fullUpdatedCommentsForServer = updatedComments;
-      try {
-        localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
-      } catch (e) {}
-      return updatedComments;
-    });
-    setTimeout(() => {
+      pushServerDbSync({ posts: updatedPostsList, replacePosts: true } as any).catch((err) => console.warn('Server posts sync notice:', err));
       syncedProfileComments.forEach((c) => saveCommentToFirestore(c).catch((err) => console.warn('Firestore profile comment sync notice:', err)));
-      if (fullUpdatedCommentsForServer) {
-        pushServerDbSync({ comments: fullUpdatedCommentsForServer, replaceComments: true } as any).catch((err) => console.warn('Server comments sync notice:', err));
-      }
+      pushServerDbSync({ comments: updatedCommentsList, replaceComments: true } as any).catch((err) => console.warn('Server comments sync notice:', err));
     }, 0);
 
     // 5. Broadcast profile updated event
@@ -5092,6 +5453,7 @@ export const App: React.FC = () => {
                 onAuthorClick={(author) => {
                   const dummyPost: Post = {
                     id: `author_${author.nickname}`,
+                    authorId: author.authorId || author.id,
                     authorNickname: author.nickname,
                     authorAvatarKey: author.avatarKey || 'caduceus',
                     authorAvatarUrl: author.avatarUrl,
@@ -5116,17 +5478,22 @@ export const App: React.FC = () => {
           }
 
           if (item.type === 'authorProfile') {
+            const matchedAuthor = resolveUserIdentity(
+              { userId: (item.post as any).authorId, nickname: item.post.authorNickname || (item.post as any).nickname },
+              allUsers
+            );
             return (
               <AuthorProfileModal
-                key={`modal_author_${item.post.id || item.post.authorNickname}_${idx}`}
-                authorNickname={item.post.authorNickname || (item.post as any).nickname || 'Student'}
-                authorAvatarKey={item.post.authorAvatarKey || 'caduceus'}
-                authorAvatarUrl={item.post.authorAvatarUrl}
-                authorBadgeType={item.post.authorBadgeType as BadgeType}
-                authorBadgeTitle={item.post.authorBadgeTitle}
-                authorBio={allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (item.post.authorNickname || (item.post as any).nickname || '').toLowerCase().replace(/^@/, ''))?.bio}
+                key={`modal_author_${matchedAuthor?.id || item.post.id || item.post.authorNickname}_${idx}`}
+                authorId={(item.post as any).authorId || matchedAuthor?.id}
+                authorNickname={matchedAuthor?.nickname || item.post.authorNickname || (item.post as any).nickname || 'Student'}
+                authorAvatarKey={matchedAuthor?.avatarKey || item.post.authorAvatarKey || 'caduceus'}
+                authorAvatarUrl={matchedAuthor?.avatarUrl ?? item.post.authorAvatarUrl}
+                authorBadgeType={(matchedAuthor?.badgeType || item.post.authorBadgeType) as BadgeType}
+                authorBadgeTitle={matchedAuthor?.badgeTitle || item.post.authorBadgeTitle}
+                authorBio={matchedAuthor?.bio}
                 authorPoints={item.post.authorPoints}
-                authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (item.post.authorNickname || '').toLowerCase().replace(/^@/, '')))}
+                authorJoinedDate={formatJoinDate(matchedAuthor)}
                 currentUserNickname={userProfile?.nickname || ''}
                 userProfile={userProfile}
                 allPosts={postsWithUserBookmarkState}
@@ -5381,39 +5748,47 @@ export const App: React.FC = () => {
           )}
 
           {/* Author Profile Details Modal (When clicking author name or avatar) */}
-          {selectedAuthorPost && (
-            <AuthorProfileModal
-              authorNickname={selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || 'Student'}
-              authorAvatarKey={selectedAuthorPost.authorAvatarKey || 'caduceus'}
-              authorAvatarUrl={selectedAuthorPost.authorAvatarUrl}
-              authorBadgeType={selectedAuthorPost.authorBadgeType as BadgeType}
-              authorBadgeTitle={selectedAuthorPost.authorBadgeTitle}
-              authorBio={allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || '').toLowerCase().replace(/^@/, ''))?.bio}
-              authorPoints={selectedAuthorPost.authorPoints}
-              authorJoinedDate={formatJoinDate(allUsers.find((u) => (u.nickname || '').toLowerCase().replace(/^@/, '') === (selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || '').toLowerCase().replace(/^@/, '')))}
-              currentUserNickname={userProfile?.nickname || ''}
-              userProfile={userProfile}
-              allPosts={postsWithUserBookmarkState}
-              allComments={comments}
-              allFollows={allFollows}
-              allUsers={allUsers}
-              zIndex={70}
-              onClose={closeModalUI}
-              onLikeClick={handleLikeClick}
-              onBookmarkClick={handleBookmarkClick}
-              onDeletePost={handleDeletePost}
-              onDeleteComment={handleDeleteComment}
-              onAuthorClick={openAuthorProfile}
-              onCommentClick={openPostDetail}
-              onToggleFollow={handleToggleFollow}
-              onRepost={handleRepost}
-              onUndoRepost={handleUndoRepost}
-              onQuote={handleQuotePost}
-              onStartChat={(recipientNickname, avatarKey, avatarUrl) => {
-                handleStartChat(recipientNickname, avatarKey, avatarUrl);
-              }}
-            />
-          )}
+          {selectedAuthorPost && (() => {
+            const matchedAuthor = resolveUserIdentity(
+              { userId: (selectedAuthorPost as any).authorId, nickname: selectedAuthorPost.authorNickname || selectedAuthorPost.nickname },
+              allUsers
+            );
+            return (
+              <AuthorProfileModal
+                authorId={(selectedAuthorPost as any).authorId || matchedAuthor?.id}
+                authorNickname={matchedAuthor?.nickname || selectedAuthorPost.authorNickname || selectedAuthorPost.nickname || 'Student'}
+                authorAvatarKey={matchedAuthor?.avatarKey || selectedAuthorPost.authorAvatarKey || 'caduceus'}
+                authorAvatarUrl={matchedAuthor?.avatarUrl ?? selectedAuthorPost.authorAvatarUrl}
+                authorBadgeType={(matchedAuthor?.badgeType || selectedAuthorPost.authorBadgeType) as BadgeType}
+                authorBadgeTitle={matchedAuthor?.badgeTitle || selectedAuthorPost.authorBadgeTitle}
+                authorBio={matchedAuthor?.bio}
+                authorPoints={selectedAuthorPost.authorPoints}
+                authorJoinedDate={formatJoinDate(matchedAuthor)}
+                currentUserNickname={userProfile?.nickname || ''}
+                userProfile={userProfile}
+                allPosts={postsWithUserBookmarkState}
+                allComments={comments}
+                allFollows={allFollows}
+                allUsers={allUsers}
+                zIndex={70}
+                onClose={closeModalUI}
+                onLikeClick={handleLikeClick}
+                onBookmarkClick={handleBookmarkClick}
+                onDeletePost={handleDeletePost}
+                onDeleteComment={handleDeleteComment}
+                onEditPost={handleEditPost}
+                onAuthorClick={openAuthorProfile}
+                onCommentClick={openPostDetail}
+                onToggleFollow={handleToggleFollow}
+                onRepost={handleRepost}
+                onUndoRepost={handleUndoRepost}
+                onQuote={handleQuotePost}
+                onStartChat={(recipientNickname, avatarKey, avatarUrl) => {
+                  handleStartChat(recipientNickname, avatarKey, avatarUrl);
+                }}
+              />
+            );
+          })()}
 
           {/* Followers / Connections Directory Modal */}
           {showFollowersDirectoryModal && (
@@ -5479,6 +5854,7 @@ export const App: React.FC = () => {
               onAuthorClick={(author) => {
                 const dummyPost: Post = {
                   id: `author_${author.nickname}`,
+                  authorId: author.authorId || author.id,
                   authorNickname: author.nickname,
                   authorAvatarKey: author.avatarKey || 'caduceus',
                   authorAvatarUrl: author.avatarUrl,

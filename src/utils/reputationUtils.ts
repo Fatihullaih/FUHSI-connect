@@ -1,6 +1,6 @@
 import { Post, Comment, UserProfile, Report } from '../types';
 import { isDemoUser, isDemoNickname, isDemoPost, isDemoComment } from './postGenerator';
-import { isGuestAccount, isModulaAccount } from './userDbUtils';
+import { isGuestAccount, isModulaAccount, resolveUserIdentity, getUserAllHandleAliases, doesRecordBelongToUser, normalizeNicknameHandle } from './userDbUtils';
 import { isPostDeletedLocally, isCommentDeletedLocally } from './apiSync';
 
 /**
@@ -68,10 +68,21 @@ export const calculateUserPoints = (
 ): number => {
   if (!nickname) return REPUTATION_RULES.PROFILE_COMPLETION;
 
-  const normTarget = nickname.toLowerCase().replace(/^@/, '').trim();
+  const normTarget = normalizeNicknameHandle(nickname);
   if (normTarget === 'modula' || isModulaAccount(nickname) || isModulaAccount(userProfile)) {
     return 0;
   }
+
+  const resolvedTargetUser = resolveUserIdentity(
+    { userId: userProfile?.id, nickname },
+    userProfile && userProfile.id ? [userProfile as UserProfile] : undefined
+  ) || userProfile;
+  const targetAliases = getUserAllHandleAliases(resolvedTargetUser, nickname);
+  if (normTarget) targetAliases.add(normTarget);
+  const isTargetAlias = (h?: string | null) => {
+    const clean = normalizeNicknameHandle(h);
+    return Boolean(clean && targetAliases.has(clean));
+  };
 
   let points = 0;
 
@@ -91,13 +102,11 @@ export const calculateUserPoints = (
     points += REPUTATION_RULES.PROFILE_COMPLETION;
   }
 
-  // Find all threads created by this user
+  // Find all threads created by this user across all handle aliases & authorId
   const myPosts = (allPosts || []).filter((p) => {
-    const author = (p.authorNickname || p.nickname || (p as any).customNickname || '')
-      .toLowerCase()
-      .replace(/^@/, '')
-      .trim();
-    return author === normTarget;
+    if (doesRecordBelongToUser(p, resolvedTargetUser, nickname)) return true;
+    const author = normalizeNicknameHandle(p.authorNickname || p.nickname || (p as any).customNickname || '');
+    return Boolean(author && targetAliases.has(author));
   });
 
   // 2. Create a quality post (+2 per post)
@@ -111,8 +120,8 @@ export const calculateUserPoints = (
     let likesFromOthers = 0;
     if (Array.isArray(p.likedBy) && p.likedBy.length > 0) {
       likesFromOthers = p.likedBy.filter((k) => {
-        const norm = (k || '').toLowerCase().replace(/^@/, '').trim();
-        return norm && norm !== normTarget;
+        const norm = normalizeNicknameHandle(k);
+        return norm && !targetAliases.has(norm);
       }).length;
     } else {
       const totalLikes = p.likesCount ?? p.upvotes ?? 0;
@@ -130,9 +139,9 @@ export const calculateUserPoints = (
     // Only active top-level comments from other users
     (allComments || []).forEach((c) => {
       if (c && c.postId === p.id && !c.parentId) {
-        const commentAuthor = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-        if (commentAuthor && commentAuthor !== normTarget) {
-          otherCommentsCount++;
+        if (!doesRecordBelongToUser(c, resolvedTargetUser, nickname) && !isTargetAlias(c.authorNickname)) {
+          const commentAuthor = normalizeNicknameHandle(c.authorNickname);
+          if (commentAuthor) otherCommentsCount++;
         }
       }
     });
@@ -147,8 +156,8 @@ export const calculateUserPoints = (
     if (Array.isArray(p.repostedBy) && p.repostedBy.length > 0) {
       const uniqueOthers = new Set(
         p.repostedBy
-          .map((k) => (k || '').toLowerCase().replace(/^@/, '').trim())
-          .filter((k) => k && k !== normTarget)
+          .map((k) => normalizeNicknameHandle(k))
+          .filter((k) => k && !targetAliases.has(k))
       );
       count = uniqueOthers.size;
     } else {
@@ -162,17 +171,13 @@ export const calculateUserPoints = (
   const uniquePeerPostsReposted = new Set<string>();
   (allPosts || []).forEach((p) => {
     if (!p) return;
-    const authorNorm = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
-    if (authorNorm === normTarget) return; // Cannot earn points for reposting own post
+    if (doesRecordBelongToUser(p, resolvedTargetUser, nickname) || isTargetAlias(p.authorNickname || p.nickname)) return;
 
     // Check if user is in repostedBy
-    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => {
-      return (k || '').toLowerCase().replace(/^@/, '').trim() === normTarget;
-    });
+    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => isTargetAlias(k));
 
     // Or if this is a repost post created by target user referencing this peer post
-    const isMyRepostItem = p.isRepost && (p.reposterNickname || p.authorNickname || '')
-      .toLowerCase().replace(/^@/, '').trim() === normTarget;
+    const isMyRepostItem = p.isRepost && isTargetAlias(p.reposterNickname || p.authorNickname);
 
     if (inRepostedBy || (isMyRepostItem && p.repostedPostId)) {
       uniquePeerPostsReposted.add(p.repostedPostId || p.id);
@@ -195,8 +200,7 @@ export const calculateUserPoints = (
 
   // - Multiple valid reports (-20)
   const validReportsForUser = (allReports || []).filter((r) => {
-    const reporter = (r.reporterNickname || '').toLowerCase().replace(/^@/, '').trim();
-    return reporter !== normTarget;
+    return !isTargetAlias(r.reporterNickname);
   }).length;
 
   if (validReportsForUser >= 2 || (userProfile?.strikes && userProfile.strikes >= 2)) {
@@ -231,7 +235,7 @@ export const getUserPointsBreakdown = (
     };
   }
 
-  const normTarget = nickname.toLowerCase().replace(/^@/, '').trim();
+  const normTarget = normalizeNicknameHandle(nickname);
   if (normTarget === 'modula' || isModulaAccount(nickname) || isModulaAccount(userProfile)) {
     return {
       profileCompletion: 0,
@@ -245,6 +249,17 @@ export const getUserPointsBreakdown = (
       total: 0,
     };
   }
+
+  const resolvedTargetUser = resolveUserIdentity(
+    { userId: userProfile?.id, nickname },
+    userProfile && userProfile.id ? [userProfile as UserProfile] : undefined
+  ) || userProfile;
+  const targetAliases = getUserAllHandleAliases(resolvedTargetUser, nickname);
+  if (normTarget) targetAliases.add(normTarget);
+  const isTargetAlias = (h?: string | null) => {
+    const clean = normalizeNicknameHandle(h);
+    return Boolean(clean && targetAliases.has(clean));
+  };
 
   const isProfileComplete = Boolean(
     userProfile?.nickname ||
@@ -260,11 +275,8 @@ export const getUserPointsBreakdown = (
   const profilePts = isProfileComplete ? REPUTATION_RULES.PROFILE_COMPLETION : 0;
 
   const myPosts = (allPosts || []).filter((p) => {
-    const author = (p.authorNickname || p.nickname || (p as any).customNickname || '')
-      .toLowerCase()
-      .replace(/^@/, '')
-      .trim();
-    return author === normTarget;
+    if (doesRecordBelongToUser(p, resolvedTargetUser, nickname)) return true;
+    return isTargetAlias(p.authorNickname || p.nickname || (p as any).customNickname);
   });
 
   const validPosts = myPosts.filter((p) => p.status !== 'Removed');
@@ -274,8 +286,8 @@ export const getUserPointsBreakdown = (
   myPosts.forEach((p) => {
     if (Array.isArray(p.likedBy) && p.likedBy.length > 0) {
       totalLikesFromOthers += p.likedBy.filter((k) => {
-        const norm = (k || '').toLowerCase().replace(/^@/, '').trim();
-        return norm && norm !== normTarget;
+        const norm = normalizeNicknameHandle(k);
+        return norm && !targetAliases.has(norm);
       }).length;
     } else {
       const totalLikes = p.likesCount ?? p.upvotes ?? 0;
@@ -289,9 +301,8 @@ export const getUserPointsBreakdown = (
   myPosts.forEach((p) => {
     (allComments || []).forEach((c) => {
       if (c && c.postId === p.id && !c.parentId) {
-        const commentAuthor = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-        if (commentAuthor && commentAuthor !== normTarget) {
-          totalCommentsFromOthers++;
+        if (!doesRecordBelongToUser(c, resolvedTargetUser, nickname) && !isTargetAlias(c.authorNickname)) {
+          if (normalizeNicknameHandle(c.authorNickname)) totalCommentsFromOthers++;
         }
       }
     });
@@ -303,8 +314,8 @@ export const getUserPointsBreakdown = (
     if (Array.isArray(p.repostedBy) && p.repostedBy.length > 0) {
       const uniqueOthers = new Set(
         p.repostedBy
-          .map((k) => (k || '').toLowerCase().replace(/^@/, '').trim())
-          .filter((k) => k && k !== normTarget)
+          .map((k) => normalizeNicknameHandle(k))
+          .filter((k) => k && !targetAliases.has(k))
       );
       totalRepostsReceived += uniqueOthers.size;
     } else {
@@ -316,14 +327,10 @@ export const getUserPointsBreakdown = (
   const uniquePeerPostsReposted = new Set<string>();
   (allPosts || []).forEach((p) => {
     if (!p) return;
-    const authorNorm = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
-    if (authorNorm === normTarget) return;
+    if (doesRecordBelongToUser(p, resolvedTargetUser, nickname) || isTargetAlias(p.authorNickname || p.nickname)) return;
 
-    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => {
-      return (k || '').toLowerCase().replace(/^@/, '').trim() === normTarget;
-    });
-    const isMyRepostItem = p.isRepost && (p.reposterNickname || p.authorNickname || '')
-      .toLowerCase().replace(/^@/, '').trim() === normTarget;
+    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => isTargetAlias(k));
+    const isMyRepostItem = p.isRepost && isTargetAlias(p.reposterNickname || p.authorNickname);
 
     if (inRepostedBy || (isMyRepostItem && p.repostedPostId)) {
       uniquePeerPostsReposted.add(p.repostedPostId || p.id);
@@ -344,8 +351,7 @@ export const getUserPointsBreakdown = (
   });
 
   const validReportsForUser = (allReports || []).filter((r) => {
-    const reporter = (r.reporterNickname || '').toLowerCase().replace(/^@/, '').trim();
-    return reporter !== normTarget;
+    return !isTargetAlias(r.reporterNickname);
   }).length;
 
   let reportPenalties = 0;
@@ -478,24 +484,29 @@ export function calculateWeeklyUserPoints(
 
   const currentWindow = customWindow || getWeeklyRankingWindow();
   const { startMs, endMs } = currentWindow;
-  const normTarget = nickname.toLowerCase().replace(/^@/, '').trim();
+  const normTarget = normalizeNicknameHandle(nickname);
   if (normTarget === 'modula' || isModulaAccount(nickname) || isModulaAccount(userProfile)) {
     return 0;
   }
 
+  const resolvedTargetUser = resolveUserIdentity(
+    { userId: userProfile?.id, nickname },
+    userProfile && userProfile.id ? [userProfile as UserProfile] : undefined
+  ) || userProfile;
+  const targetAliases = getUserAllHandleAliases(resolvedTargetUser, nickname);
+  if (normTarget) targetAliases.add(normTarget);
+  const isTargetAlias = (h?: string | null) => {
+    const clean = normalizeNicknameHandle(h);
+    return Boolean(clean && targetAliases.has(clean));
+  };
+
   let points = 0;
 
-  // IMPORTANT: Profile completion points (+20) are excluded from weekly rankings.
-  // Profile completion points belong exclusively to all-time reputation (calculateUserPoints).
-
-  // Find all active, non-deleted posts by this user
+  // Find all active, non-deleted posts by this user (including across username edits)
   const myPosts = (allPosts || []).filter((p) => {
     if (!isPostActiveAndValid(p)) return false;
-    const author = (p.authorNickname || p.nickname || (p as any).customNickname || '')
-      .toLowerCase()
-      .replace(/^@/, '')
-      .trim();
-    return author === normTarget;
+    if (doesRecordBelongToUser(p, resolvedTargetUser, nickname)) return true;
+    return isTargetAlias(p.authorNickname || p.nickname || (p as any).customNickname);
   });
 
   // 1. Posts created within current Sunday-Saturday window (+2 per post)
@@ -516,8 +527,8 @@ export function calculateWeeklyUserPoints(
     let likesCount = 0;
     if (Array.isArray(p.likedBy) && p.likedBy.length > 0) {
       likesCount = p.likedBy.filter((k) => {
-        const norm = (k || '').toLowerCase().replace(/^@/, '').trim();
-        return norm && norm !== normTarget;
+        const norm = normalizeNicknameHandle(k);
+        return norm && !targetAliases.has(norm);
       }).length;
     } else {
       const totalLikes = p.likesCount ?? p.upvotes ?? 0;
@@ -536,9 +547,8 @@ export function calculateWeeklyUserPoints(
     if (commentTime >= startMs && commentTime <= endMs) {
       const targetPost = myPosts.find((p) => p.id === c.postId);
       if (targetPost) {
-        const commentAuthor = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-        if (commentAuthor && commentAuthor !== normTarget) {
-          points += REPUTATION_RULES.RECEIVE_COMMENT;
+        if (!doesRecordBelongToUser(c, resolvedTargetUser, nickname) && !isTargetAlias(c.authorNickname)) {
+          if (normalizeNicknameHandle(c.authorNickname)) points += REPUTATION_RULES.RECEIVE_COMMENT;
         }
       }
     }
@@ -552,8 +562,8 @@ export function calculateWeeklyUserPoints(
       if (Array.isArray(p.repostedBy) && p.repostedBy.length > 0) {
         const uniqueOthers = new Set(
           p.repostedBy
-            .map((k) => (k || '').toLowerCase().replace(/^@/, '').trim())
-            .filter((k) => k && k !== normTarget)
+            .map((k) => normalizeNicknameHandle(k))
+            .filter((k) => k && !targetAliases.has(k))
         );
         count = uniqueOthers.size;
       } else {
@@ -567,16 +577,12 @@ export function calculateWeeklyUserPoints(
   const weeklyPeerPostsReposted = new Set<string>();
   (allPosts || []).forEach((p) => {
     if (!isPostActiveAndValid(p)) return;
-    const authorNorm = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
-    if (authorNorm === normTarget) return;
+    if (doesRecordBelongToUser(p, resolvedTargetUser, nickname) || isTargetAlias(p.authorNickname || p.nickname)) return;
 
     const postTime = parseItemTimestamp(p);
     const isThisWeek = postTime >= startMs && postTime <= endMs;
-    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => {
-      return (k || '').toLowerCase().replace(/^@/, '').trim() === normTarget;
-    });
-    const isMyRepostItem = p.isRepost && (p.reposterNickname || p.authorNickname || '')
-      .toLowerCase().replace(/^@/, '').trim() === normTarget;
+    const inRepostedBy = Array.isArray(p.repostedBy) && p.repostedBy.some((k) => isTargetAlias(k));
+    const isMyRepostItem = p.isRepost && isTargetAlias(p.reposterNickname || p.authorNickname);
 
     if ((inRepostedBy || isMyRepostItem) && isThisWeek) {
       weeklyPeerPostsReposted.add(p.repostedPostId || p.id);
@@ -585,10 +591,7 @@ export function calculateWeeklyUserPoints(
   points += weeklyPeerPostsReposted.size * REPUTATION_RULES.PERFORM_REPOST;
 
   // 6. Penalties for violations occurring this week
-  (allPosts || []).forEach((p) => {
-    if (!p) return;
-    const author = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '').trim();
-    if (author !== normTarget) return;
+  myPosts.forEach((p) => {
     const postTime = parseItemTimestamp(p);
     if (postTime >= startMs && postTime <= endMs) {
       const flagReason = (p.flagReason || '').toLowerCase();

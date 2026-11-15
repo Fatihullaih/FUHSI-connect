@@ -4,7 +4,7 @@ import { PostCard } from '../components/PostCard';
 import { generateMorePosts, isDemoPost } from '../utils/postGenerator';
 import { getTimestampMs } from '../utils/dateUtils';
 import { isUserFollowing, normalizeHandle, getStoredFollows } from '../utils/followUtils';
-import { findUserByNickname, isModulaAccount } from '../utils/userDbUtils';
+import { findUserByNickname, isModulaAccount, doesRecordBelongToUser } from '../utils/userDbUtils';
 import { 
   Loader2,
   RefreshCw,
@@ -182,21 +182,21 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
 
       // Author and admins can always see the post
       const isMyPost = Boolean(
-        currentNick &&
-        post.authorNickname &&
-        normalizeHandle(post.authorNickname) === normalizeHandle(currentNick)
+        currentUserObj &&
+        doesRecordBelongToUser(post, currentUserObj, currentNick)
       );
       if (isMyPost || currentUserObj?.isAdmin) return true;
 
       // Check if post author account is private or post audience is followers-only
-      const authorUser = findUserByNickname(post.authorNickname);
+      const authorUser = findUserByNickname(post.authorNickname, (post as any).authorId);
+      const effectiveAuthorHandle = authorUser?.nickname || post.authorNickname;
       const isAuthorPrivate = Boolean(authorUser?.isPrivate);
 
       if (isAuthorPrivate) {
         if (!currentNick) return false;
         const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
-        const isFollowing = isUserFollowing(currentNick, post.authorNickname, effectiveFollows);
-        const hasFollowedBack = isUserFollowing(post.authorNickname, currentNick, effectiveFollows);
+        const isFollowing = isUserFollowing(currentNick, effectiveAuthorHandle, effectiveFollows);
+        const hasFollowedBack = isUserFollowing(effectiveAuthorHandle, currentNick, effectiveFollows);
         // Requirement: Posts and replies are hidden until the private author follows the viewer back
         return isFollowing && hasFollowedBack;
       }
@@ -204,7 +204,7 @@ export const FeedScreen: React.FC<FeedScreenProps> = ({
       if (post.audience === 'followers') {
         if (!currentNick) return false;
         const effectiveFollows = allFollows && allFollows.length > 0 ? allFollows : getStoredFollows();
-        const isFollowing = isUserFollowing(currentNick, post.authorNickname, effectiveFollows);
+        const isFollowing = isUserFollowing(currentNick, effectiveAuthorHandle, effectiveFollows);
         return isFollowing;
       }
 

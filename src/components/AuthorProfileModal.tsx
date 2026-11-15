@@ -9,7 +9,7 @@ import { useBackHandler, NAV_PRIORITY, pushNavState, navigateBack } from '../uti
 import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { calculateUserPoints } from '../utils/reputationUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount, findUserByNickname, isModulaAccount, formatJoinDate, isUserPermanentlyDeleted } from '../utils/userDbUtils';
+import { isGuestAccount, findUserByNickname, isModulaAccount, formatJoinDate, isUserPermanentlyDeleted, resolveUserIdentity, getUserAllHandleAliases, doesRecordBelongToUser, normalizeNicknameHandle } from '../utils/userDbUtils';
 import { isUserFollowing, getFollowersCount, getFollowingCount, normalizeHandle } from '../utils/followUtils';
 import { canViewerSeeOnlineStatus, isUserOnline } from '../utils/presenceUtils';
 import { LinkifiedText } from './LinkifiedText';
@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 
 interface AuthorProfileModalProps {
+  authorId?: string;
   authorNickname: string;
   authorAvatarKey?: string;
   authorAvatarUrl?: string;
@@ -66,6 +67,7 @@ interface AuthorProfileModalProps {
 
 export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => {
   const {
+    authorId,
     authorNickname,
     authorAvatarKey = 'caduceus',
     authorAvatarUrl,
@@ -143,16 +145,6 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     pushNavState({ type: 'author_followers', author: authorNickname, tab });
   };
 
-  // Derive username format
-  const username = authorNickname.startsWith('@') 
-    ? authorNickname 
-    : `@${authorNickname.replace(/\s+/g, '_').toLowerCase()}`;
-
-  const normAuthor = authorNickname ? authorNickname.toLowerCase().replace(/^@/, '').trim() : '';
-  const normCurrentUser = (currentUserNickname || userProfile?.nickname || '').toLowerCase().replace(/^@/, '').trim();
-  const isViewingSelf = Boolean(normCurrentUser && normAuthor === normCurrentUser);
-  const effectivePosts = (allPosts && allPosts.length > 0) ? allPosts : posts;
-
   const [profileTick, setProfileTick] = useState(0);
   useEffect(() => {
     const handleProfileUpdate = () => {
@@ -168,23 +160,36 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     };
   }, []);
 
-  // Resolve freshest author profile from database, allUsers, userProfile, or storage
+  // Resolve freshest author profile across current/previous handles and account ID
   const authorProfileUser = useMemo(() => {
-    if (isViewingSelf && userProfile) {
+    const resolved = resolveUserIdentity({ userId: authorId, nickname: authorNickname }, allUsers);
+    if (resolved) return resolved;
+    const rawClean = normalizeNicknameHandle(authorNickname);
+    const selfAliases = userProfile ? getUserAllHandleAliases(userProfile) : new Set<string>();
+    if (userProfile && ((authorId && userProfile.id === authorId) || (rawClean && selfAliases.has(rawClean)))) {
       return userProfile;
     }
-    const fromDb = findUserByNickname(authorNickname);
-    if (fromDb) {
-      return fromDb;
-    }
-    if (allUsers && allUsers.length > 0) {
-      const match = allUsers.find(
-        (u) => (u.nickname || '').toLowerCase().replace(/^@/, '').trim() === normAuthor
-      );
-      if (match) return match;
-    }
     return undefined;
-  }, [isViewingSelf, userProfile, allUsers, normAuthor, authorNickname, profileTick]);
+  }, [authorId, authorNickname, allUsers, userProfile, profileTick]);
+
+  const effectiveAuthorNickname = authorProfileUser?.nickname || authorNickname;
+  const username = effectiveAuthorNickname.startsWith('@')
+    ? effectiveAuthorNickname
+    : `@${effectiveAuthorNickname.replace(/\s+/g, '_').toLowerCase()}`;
+
+  const normAuthor = normalizeNicknameHandle(effectiveAuthorNickname);
+  const normCurrentUser = normalizeNicknameHandle(currentUserNickname || userProfile?.nickname || '');
+  const isViewingSelf = Boolean(
+    (authorProfileUser?.id && userProfile?.id && authorProfileUser.id === userProfile.id) ||
+    (normCurrentUser && normAuthor && normAuthor === normCurrentUser)
+  );
+  const effectivePosts = (allPosts && allPosts.length > 0) ? allPosts : posts;
+
+  const authorHandleAliases = useMemo(() => {
+    const set = getUserAllHandleAliases(authorProfileUser, authorNickname);
+    if (normAuthor) set.add(normAuthor);
+    return set;
+  }, [authorProfileUser, authorNickname, normAuthor, profileTick]);
 
   const [badgeTick, setBadgeTick] = useState(0);
   useEffect(() => {
@@ -196,17 +201,17 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   }, []);
 
   const badgeInfo = useMemo(() => {
-    return getUserBadgeInfo(authorNickname, authorProfileUser);
-  }, [authorNickname, authorProfileUser, badgeTick, profileTick]);
+    return getUserBadgeInfo(effectiveAuthorNickname, authorProfileUser);
+  }, [effectiveAuthorNickname, authorProfileUser, badgeTick, profileTick]);
 
   const isVerifiedAuthor = badgeInfo.isVerified;
 
   const isAuthorModula = useMemo(() => {
     return isModulaAccount(authorProfileUser) || 
-      isModulaAccount(authorNickname) || 
+      isModulaAccount(effectiveAuthorNickname) || 
       isModulaAccount(username) ||
       normAuthor === 'modula';
-  }, [authorProfileUser, authorNickname, username, normAuthor]);
+  }, [authorProfileUser, effectiveAuthorNickname, username, normAuthor]);
   const effectiveAvatarKey = authorProfileUser?.avatarKey || authorAvatarKey || 'caduceus';
   const effectiveAvatarUrl = authorProfileUser?.avatarUrl !== undefined ? authorProfileUser.avatarUrl : authorAvatarUrl;
   const effectiveBio = useMemo(() => {
@@ -219,14 +224,16 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     return formatJoinDate(authorProfileUser || { joinedDate: authorJoinedDate });
   }, [authorProfileUser, authorJoinedDate]);
 
-  // Real, dynamic Following and Followers calculations
+  // Real, dynamic Following and Followers calculations (checks current + any legacy alias handles)
   const isFollowingAuthor = useMemo(() => {
-    return isUserFollowing(normCurrentUser, normAuthor, allFollows);
-  }, [normCurrentUser, normAuthor, allFollows]);
+    if (isUserFollowing(normCurrentUser, normAuthor, allFollows)) return true;
+    return Array.from(authorHandleAliases).some((alias) => isUserFollowing(normCurrentUser, alias, allFollows));
+  }, [normCurrentUser, normAuthor, authorHandleAliases, allFollows]);
 
   const hasAuthorFollowedBack = useMemo(() => {
-    return isUserFollowing(normAuthor, normCurrentUser, allFollows);
-  }, [normAuthor, normCurrentUser, allFollows]);
+    if (isUserFollowing(normAuthor, normCurrentUser, allFollows)) return true;
+    return Array.from(authorHandleAliases).some((alias) => isUserFollowing(alias, normCurrentUser, allFollows));
+  }, [normAuthor, normCurrentUser, authorHandleAliases, allFollows]);
 
   const isAuthorPrivate = Boolean(authorProfileUser?.isPrivate);
   
@@ -255,27 +262,28 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     return getFollowingCount(normAuthor, allFollows);
   }, [normAuthor, allFollows]);
 
-  // Find all threads written by this author or reposted by them, sorted chronologically (newest first)
+  // Find all threads written by this author (current OR previous usernames / matching authorId) or reposted by them, sorted chronologically
   const authorPosts = useMemo(() => {
     return effectivePosts
       .filter((p) => {
         if (!p || p.id.startsWith('repost_')) return false;
-        const nick = (p.authorNickname || p.nickname || (p as any).customNickname || '')
-          .toLowerCase()
-          .replace(/^@/, '')
-          .trim();
+        if (doesRecordBelongToUser(p, authorProfileUser, effectiveAuthorNickname)) {
+          return true;
+        }
+        const nick = normalizeNicknameHandle(p.authorNickname || p.nickname || (p as any).customNickname || '');
+        if (nick && authorHandleAliases.has(nick)) return true;
         const reposters = Array.isArray(p.repostedBy)
-          ? p.repostedBy.map((r) => (r || '').toLowerCase().replace(/^@/, '').trim())
+          ? p.repostedBy.map((r) => normalizeNicknameHandle(r))
           : [];
-        const hasReposted = reposters.includes(normAuthor);
-        return nick === normAuthor || hasReposted;
+        const hasReposted = reposters.some((r) => authorHandleAliases.has(r));
+        return hasReposted;
       })
       .sort((a, b) => {
-        const aTime = (Array.isArray(a.repostRecords) ? a.repostRecords.find((r) => (r.userNickname || '').toLowerCase().replace(/^@/, '').trim() === normAuthor)?.timestamp : null) || a.timestamp;
-        const bTime = (Array.isArray(b.repostRecords) ? b.repostRecords.find((r) => (r.userNickname || '').toLowerCase().replace(/^@/, '').trim() === normAuthor)?.timestamp : null) || b.timestamp;
+        const aTime = (Array.isArray(a.repostRecords) ? a.repostRecords.find((r) => authorHandleAliases.has(normalizeNicknameHandle(r.userNickname)))?.timestamp : null) || a.timestamp;
+        const bTime = (Array.isArray(b.repostRecords) ? b.repostRecords.find((r) => authorHandleAliases.has(normalizeNicknameHandle(r.userNickname)))?.timestamp : null) || b.timestamp;
         return getTimestampMs(bTime) - getTimestampMs(aTime);
       });
-  }, [effectivePosts, normAuthor]);
+  }, [effectivePosts, authorProfileUser, effectiveAuthorNickname, authorHandleAliases]);
 
   // Find all replies/comments made by this author across all threads
   const authorReplies = useMemo(() => {
@@ -284,8 +292,8 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
 
     // From allComments prop
     (allComments || []).forEach((c) => {
-      const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-      if (cNick === normAuthor) {
+      const cNick = normalizeNicknameHandle(c.authorNickname || '');
+      if (doesRecordBelongToUser(c, authorProfileUser, effectiveAuthorNickname) || (cNick && authorHandleAliases.has(cNick))) {
         if (!seen.has(c.id)) {
           seen.add(c.id);
           const parentPost = effectivePosts.find((p) => p.id === c.postId);
@@ -298,8 +306,8 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     effectivePosts.forEach((p) => {
       if ((p as any).comments && Array.isArray((p as any).comments)) {
         (p as any).comments.forEach((c: Comment) => {
-          const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '').trim();
-          if (cNick === normAuthor) {
+          const cNick = normalizeNicknameHandle(c.authorNickname || '');
+          if (doesRecordBelongToUser(c, authorProfileUser, effectiveAuthorNickname) || (cNick && authorHandleAliases.has(cNick))) {
             if (!seen.has(c.id)) {
               seen.add(c.id);
               list.push({ comment: c, parentPost: p });
@@ -310,19 +318,26 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
     });
 
     return list;
-  }, [allComments, effectivePosts, normAuthor]);
+  }, [allComments, effectivePosts, authorProfileUser, effectiveAuthorNickname, authorHandleAliases]);
 
-  // Calculate points dynamically based on actual activity
+  // Calculate points dynamically based on actual activity across all aliases
   const computedPoints = useMemo(() => {
     return calculateUserPoints(
-      authorNickname || '',
-      { nickname: authorNickname, department: 'FUHSI' },
+      effectiveAuthorNickname || '',
+      authorProfileUser || { nickname: effectiveAuthorNickname, department: 'FUHSI' },
       effectivePosts,
       allComments
     );
-  }, [authorNickname, effectivePosts, allComments]);
+  }, [effectiveAuthorNickname, authorProfileUser, effectivePosts, allComments]);
 
   const displayPoints = computedPoints;
+
+  const isDeletedAccount = useMemo(() => {
+    if (authorNickname === 'Account Deleted') return true;
+    if (authorProfileUser && isUserPermanentlyDeleted(authorProfileUser)) return true;
+    if (!authorProfileUser && isUserPermanentlyDeleted(normAuthor)) return true;
+    return false;
+  }, [authorProfileUser, authorNickname, normAuthor]);
 
   useEffect(() => {
     if (isAuthorModula) {
@@ -333,13 +348,6 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
   if (isAuthorModula) {
     return null;
   }
-
-  const isDeletedAccount = useMemo(() => {
-    if (authorNickname === 'Account Deleted') return true;
-    if (authorProfileUser && isUserPermanentlyDeleted(authorProfileUser)) return true;
-    if (!authorProfileUser && isUserPermanentlyDeleted(normAuthor)) return true;
-    return false;
-  }, [authorProfileUser, authorNickname, normAuthor]);
 
   if (isDeletedAccount) {
     return (
@@ -484,16 +492,16 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
             {!isViewingSelf && (
               <div className="shrink-0 flex items-center gap-2">
                 {/* Chat button only accessible if not private-locked and not guest */}
-                {!isPrivateLocked && !isGuestAccount(userProfile) && !isGuestAccount(authorNickname) && (
+                {!isPrivateLocked && !isGuestAccount(userProfile) && !isGuestAccount(effectiveAuthorNickname) && (
                   <button
                     id={`btn-chat-with-${normAuthor}`}
                     onClick={() => {
                       if (onStartChat) {
-                        onStartChat(authorNickname, effectiveAvatarKey, effectiveAvatarUrl);
+                        onStartChat(effectiveAuthorNickname, effectiveAvatarKey, effectiveAvatarUrl);
                       }
                     }}
                     className="inline-flex items-center justify-center px-3 py-1.5 bg-white/90 hover:bg-white text-teal-950 active:scale-95 text-xs font-black rounded-xl shadow-xs transition-all border border-teal-200 cursor-pointer hover:shadow-md"
-                    title={`Chat with ${authorNickname}`}
+                    title={`Chat with ${effectiveAuthorNickname}`}
                   >
                     <span>💬 Chat</span>
                   </button>
@@ -504,7 +512,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                   id={`btn-follow-${normAuthor}`}
                   onClick={() => {
                     if (onToggleFollow) {
-                      onToggleFollow(authorNickname);
+                      onToggleFollow(effectiveAuthorNickname);
                     }
                   }}
                   className={`inline-flex items-center justify-center px-3.5 py-1.5 active:scale-95 text-xs font-black rounded-xl shadow-xs transition-all border cursor-pointer hover:shadow-md ${
@@ -512,7 +520,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
                       ? 'bg-teal-950/80 text-teal-100 border-teal-400/80 hover:bg-rose-900/90 hover:text-white hover:border-rose-400'
                       : 'bg-white text-teal-950 hover:bg-teal-50 border-white'
                   }`}
-                  title={isFollowingAuthor ? `Unfollow ${authorNickname}` : `Follow ${authorNickname}`}
+                  title={isFollowingAuthor ? `Unfollow ${effectiveAuthorNickname}` : `Follow ${effectiveAuthorNickname}`}
                 >
                   {isFollowingAuthor ? (
                     <span className="flex items-center gap-1.5">
@@ -665,12 +673,14 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
               </div>
             ) : (
               authorPosts.map((post) => {
-                const isOriginalAuthor = (post.authorNickname || '').toLowerCase().replace(/^@/, '').trim() === normAuthor;
+                const isOriginalAuthor =
+                  doesRecordBelongToUser(post, authorProfileUser, effectiveAuthorNickname) ||
+                  authorHandleAliases.has(normalizeNicknameHandle(post.authorNickname || ''));
                 return (
                   <PostCard
                     key={post.id}
                     post={post}
-                    repostedByNick={!isOriginalAuthor ? authorNickname : undefined}
+                    repostedByNick={!isOriginalAuthor ? effectiveAuthorNickname : undefined}
                     comments={(allComments || []).filter((c) => c && c.postId === post.id)}
                     allComments={allComments}
                     currentUserNickname={currentUserNickname}
@@ -826,7 +836,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
       {/* Profile Picture Full-size Lightbox Modal */}
       {showPictureModal && (
         <ProfilePictureModal
-          nickname={authorNickname}
+          nickname={effectiveAuthorNickname}
           avatarUrl={effectiveAvatarUrl}
           avatarKey={effectiveAvatarKey}
           isOwner={false}
@@ -837,7 +847,7 @@ export const AuthorProfileModal: React.FC<AuthorProfileModalProps> = (props) => 
       {/* Followers & Following List Modal */}
       {showFollowersModal && (
         <FollowersListModal
-          targetNickname={authorNickname}
+          targetNickname={effectiveAuthorNickname}
           initialTab={showFollowersModal.tab}
           allFollows={allFollows}
           allUsers={allUsers}

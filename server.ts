@@ -78,6 +78,503 @@ function sanitizeServerDb(dbObj: typeof DEFAULT_SERVER_DB): typeof DEFAULT_SERVE
   };
 }
 
+function normalizeServerHandle(nick?: any): string {
+  if (!nick || typeof nick !== 'string') return '';
+  return nick.trim().toLowerCase().replace(/^@+/, '');
+}
+
+function cascadeUsernameChangeInActiveDb(params: {
+  userId?: string;
+  oldAliases: string[];
+  newNickname: string;
+  nowIso: string;
+  avatarKey?: string;
+  avatarUrl?: string;
+}): { updatedPosts: any[]; updatedComments: any[] } {
+  const { userId, oldAliases, newNickname, nowIso, avatarKey, avatarUrl } = params;
+  const cleanUserId = userId ? String(userId).trim() : '';
+  const cleanNew = normalizeServerHandle(newNickname);
+  if (!cleanNew) return { updatedPosts: [], updatedComments: [] };
+
+  const aliasSet = new Set<string>(
+    (oldAliases || []).map((a) => normalizeServerHandle(a)).filter((a) => Boolean(a) && a !== cleanNew)
+  );
+
+  // Pull in any pre-existing aliases that already point to this userId or any alias in aliasSet
+  const currentSup = ((activeDb as any).supersededUsernames || {}) as Record<string, any>;
+  Object.entries(currentSup).forEach(([k, entry]) => {
+    const cleanK = normalizeServerHandle(k);
+    const eUid = entry?.userId ? String(entry.userId).trim() : '';
+    const eTarget = normalizeServerHandle(entry?.newNickname);
+    if (
+      (cleanUserId && eUid === cleanUserId) ||
+      (eTarget && (eTarget === cleanNew || aliasSet.has(eTarget)))
+    ) {
+      if (cleanK && cleanK !== cleanNew) aliasSet.add(cleanK);
+    }
+  });
+
+  // 1. Update supersededUsernames registry and re-point chained entries
+  const nextSup: Record<string, any> = { ...currentSup };
+  Object.entries(nextSup).forEach(([k, entry]) => {
+    const cleanK = normalizeServerHandle(k);
+    const eUid = entry?.userId ? String(entry.userId).trim() : '';
+    const eTarget = normalizeServerHandle(entry?.newNickname);
+    if (
+      (cleanUserId && eUid === cleanUserId) ||
+      (eTarget && (eTarget === cleanNew || aliasSet.has(eTarget))) ||
+      (cleanK && aliasSet.has(cleanK))
+    ) {
+      nextSup[k] = {
+        newNickname,
+        userId: cleanUserId || eUid || undefined,
+        changedAt: nowIso,
+      };
+    }
+  });
+  aliasSet.forEach((oldClean) => {
+    nextSup[oldClean] = {
+      newNickname,
+      userId: cleanUserId || undefined,
+      changedAt: nowIso,
+    };
+  });
+  // If user switched back to a previously superseded name, remove it from superseded map
+  if (nextSup[cleanNew]) {
+    delete nextSup[cleanNew];
+  }
+  (activeDb as any).supersededUsernames = nextSup;
+
+  const isTargetHandle = (h?: any) => {
+    const clean = normalizeServerHandle(h);
+    return Boolean(clean && aliasSet.has(clean));
+  };
+
+  const replaceHandleInArray = (arr: any): { next: any[]; changed: boolean } => {
+    if (!Array.isArray(arr)) return { next: arr, changed: false };
+    let changed = false;
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const item of arr) {
+      let val = item;
+      if (typeof item === 'string' && isTargetHandle(item)) {
+        val = newNickname;
+        changed = true;
+      }
+      const normKey = typeof val === 'string' ? normalizeServerHandle(val) : String(val);
+      if (normKey) {
+        if (!seen.has(normKey)) {
+          seen.add(normKey);
+          out.push(val);
+        } else {
+          changed = true;
+        }
+      }
+    }
+    return { next: out, changed };
+  };
+
+  const updatedPosts: any[] = [];
+  if (Array.isArray(activeDb.posts)) {
+    activeDb.posts = activeDb.posts.map((p: any) => {
+      if (!p) return p;
+      let pChanged = false;
+      const pAuthorId = p.authorId ? String(p.authorId).trim() : '';
+      const pNick = p.authorNickname || p.nickname || p.customNickname;
+      const isAuthorMatch = Boolean((cleanUserId && pAuthorId === cleanUserId) || isTargetHandle(pNick));
+
+      let nextPost = { ...p };
+      if (isAuthorMatch) {
+        if (nextPost.authorNickname !== newNickname) {
+          nextPost.authorNickname = newNickname;
+          pChanged = true;
+        }
+        if (nextPost.nickname && nextPost.nickname !== newNickname) {
+          nextPost.nickname = newNickname;
+          pChanged = true;
+        }
+        if (nextPost.customNickname && nextPost.customNickname !== newNickname) {
+          nextPost.customNickname = newNickname;
+          pChanged = true;
+        }
+        if (cleanUserId && nextPost.authorId !== cleanUserId) {
+          nextPost.authorId = cleanUserId;
+          pChanged = true;
+        }
+        if (avatarKey !== undefined && nextPost.authorAvatarKey !== avatarKey) {
+          nextPost.authorAvatarKey = avatarKey;
+          pChanged = true;
+        }
+        if (avatarUrl !== undefined && nextPost.authorAvatarUrl !== avatarUrl) {
+          nextPost.authorAvatarUrl = avatarUrl;
+          pChanged = true;
+        }
+      }
+
+      if (isTargetHandle(nextPost.reposterNickname)) {
+        nextPost.reposterNickname = newNickname;
+        pChanged = true;
+      }
+
+      const likedRes = replaceHandleInArray(nextPost.likedBy);
+      if (likedRes.changed) {
+        nextPost.likedBy = likedRes.next;
+        pChanged = true;
+      }
+
+      const repRes = replaceHandleInArray(nextPost.repostedBy);
+      if (repRes.changed) {
+        nextPost.repostedBy = repRes.next;
+        pChanged = true;
+      }
+
+      const bmRes = replaceHandleInArray(nextPost.bookmarkedBy);
+      if (bmRes.changed) {
+        nextPost.bookmarkedBy = bmRes.next;
+        pChanged = true;
+      }
+
+      if (Array.isArray(nextPost.repostRecords)) {
+        let rrChanged = false;
+        nextPost.repostRecords = nextPost.repostRecords.map((rr: any) => {
+          if (rr && isTargetHandle(rr.userNickname)) {
+            rrChanged = true;
+            return { ...rr, userNickname: newNickname };
+          }
+          return rr;
+        });
+        if (rrChanged) pChanged = true;
+      }
+
+      if (nextPost.quotedPost) {
+        const qp = nextPost.quotedPost;
+        const qpMatch = Boolean((cleanUserId && qp.authorId === cleanUserId) || isTargetHandle(qp.authorNickname || qp.nickname));
+        if (qpMatch) {
+          nextPost.quotedPost = {
+            ...qp,
+            authorId: cleanUserId || qp.authorId,
+            authorNickname: newNickname,
+          };
+          pChanged = true;
+        }
+      }
+
+      if (nextPost.repostedPost) {
+        const rp = nextPost.repostedPost;
+        const rpMatch = Boolean((cleanUserId && rp.authorId === cleanUserId) || isTargetHandle(rp.authorNickname || rp.nickname));
+        if (rpMatch) {
+          nextPost.repostedPost = {
+            ...rp,
+            authorId: cleanUserId || rp.authorId,
+            authorNickname: newNickname,
+          };
+          pChanged = true;
+        }
+      }
+
+      if (pChanged) {
+        nextPost.updatedAt = nowIso;
+        updatedPosts.push(nextPost);
+      }
+      return nextPost;
+    });
+  }
+
+  const updatedComments: any[] = [];
+  if (Array.isArray(activeDb.comments)) {
+    activeDb.comments = activeDb.comments.map((c: any) => {
+      if (!c) return c;
+      let cChanged = false;
+      const cAuthorId = c.authorId ? String(c.authorId).trim() : '';
+      const isAuthorMatch = Boolean((cleanUserId && cAuthorId === cleanUserId) || isTargetHandle(c.authorNickname));
+      let nextComment = { ...c };
+
+      if (isAuthorMatch) {
+        if (nextComment.authorNickname !== newNickname) {
+          nextComment.authorNickname = newNickname;
+          cChanged = true;
+        }
+        if (cleanUserId && nextComment.authorId !== cleanUserId) {
+          nextComment.authorId = cleanUserId;
+          cChanged = true;
+        }
+        if (avatarKey !== undefined && nextComment.authorAvatarKey !== avatarKey) {
+          nextComment.authorAvatarKey = avatarKey;
+          cChanged = true;
+        }
+        if (avatarUrl !== undefined && nextComment.authorAvatarUrl !== avatarUrl) {
+          nextComment.authorAvatarUrl = avatarUrl;
+          cChanged = true;
+        }
+      }
+
+      if (isTargetHandle(nextComment.replyToNickname)) {
+        nextComment.replyToNickname = newNickname;
+        cChanged = true;
+      }
+
+      const likedRes = replaceHandleInArray(nextComment.likedBy);
+      if (likedRes.changed) {
+        nextComment.likedBy = likedRes.next;
+        cChanged = true;
+      }
+
+      if (cChanged) {
+        nextComment.updatedAt = nowIso;
+        updatedComments.push(nextComment);
+      }
+      return nextComment;
+    });
+  }
+
+  // Cascade across follows
+  if (Array.isArray(activeDb.follows)) {
+    const seenFollowIds = new Set<string>();
+    activeDb.follows = activeDb.follows
+      .map((f: any) => {
+        if (!f) return f;
+        let fChanged = false;
+        let followerNickname = f.followerNickname;
+        let followingNickname = f.followingNickname;
+        if (isTargetHandle(followerNickname)) {
+          followerNickname = newNickname;
+          fChanged = true;
+        }
+        if (isTargetHandle(followingNickname)) {
+          followingNickname = newNickname;
+          fChanged = true;
+        }
+        if (!fChanged) return f;
+        const c1 = normalizeServerHandle(followerNickname);
+        const c2 = normalizeServerHandle(followingNickname);
+        return {
+          ...f,
+          id: `${c1}__follows__${c2}`,
+          followerNickname,
+          followingNickname,
+        };
+      })
+      .filter((f: any) => {
+        if (!f) return false;
+        const c1 = normalizeServerHandle(f.followerNickname);
+        const c2 = normalizeServerHandle(f.followingNickname);
+        if (!c1 || !c2 || c1 === c2) return false;
+        const key = `${c1}__follows__${c2}`;
+        if (seenFollowIds.has(key)) return false;
+        seenFollowIds.add(key);
+        return true;
+      });
+  }
+
+  // Cascade across verification requests
+  if (Array.isArray(activeDb.verificationRequests)) {
+    activeDb.verificationRequests = activeDb.verificationRequests.map((v: any) => {
+      if (!v) return v;
+      if ((cleanUserId && v.userId === cleanUserId) || isTargetHandle(v.applicantNickname)) {
+        return { ...v, applicantNickname: newNickname, userId: cleanUserId || v.userId, updatedAt: nowIso };
+      }
+      return v;
+    });
+  }
+
+  // Cascade across marketplace listings
+  const updateMpList = (list: any[]) =>
+    (list || []).map((m: any) => {
+      if (!m) return m;
+      if ((cleanUserId && m.sellerId === cleanUserId) || isTargetHandle(m.sellerNickname)) {
+        return { ...m, sellerNickname: newNickname, sellerId: cleanUserId || m.sellerId, updatedAt: nowIso };
+      }
+      return m;
+    });
+  if (Array.isArray(activeDb.marketplaceItems)) {
+    activeDb.marketplaceItems = updateMpList(activeDb.marketplaceItems);
+  }
+  if (Array.isArray(activeDb.pendingMarketplaceItems)) {
+    activeDb.pendingMarketplaceItems = updateMpList(activeDb.pendingMarketplaceItems);
+  }
+
+  // Cascade across directMessages & chatConversations
+  if (Array.isArray(activeDb.directMessages)) {
+    activeDb.directMessages = activeDb.directMessages.map((d: any) => {
+      if (!d) return d;
+      let dChanged = false;
+      let nextD = { ...d };
+      if ((cleanUserId && d.senderId === cleanUserId) || isTargetHandle(d.senderNickname)) {
+        nextD.senderNickname = newNickname;
+        if (cleanUserId) nextD.senderId = cleanUserId;
+        dChanged = true;
+      }
+      if ((cleanUserId && d.receiverId === cleanUserId) || isTargetHandle(d.receiverNickname)) {
+        nextD.receiverNickname = newNickname;
+        if (cleanUserId) nextD.receiverId = cleanUserId;
+        dChanged = true;
+      }
+      return dChanged ? nextD : d;
+    });
+  }
+
+  if (Array.isArray(activeDb.chatConversations)) {
+    activeDb.chatConversations = activeDb.chatConversations.map((c: any) => {
+      if (!c) return c;
+      let cChanged = false;
+      const nextC = { ...c };
+      if (isTargetHandle(nextC.otherUserNickname)) {
+        nextC.otherUserNickname = newNickname;
+        cChanged = true;
+      }
+      if (isTargetHandle(nextC.participant1Nickname)) {
+        nextC.participant1Nickname = newNickname;
+        cChanged = true;
+      }
+      if (isTargetHandle(nextC.participant2Nickname)) {
+        nextC.participant2Nickname = newNickname;
+        cChanged = true;
+      }
+      if (Array.isArray(nextC.participants)) {
+        nextC.participants = nextC.participants.map((p: any) => (isTargetHandle(p) ? newNickname : p));
+        cChanged = true;
+      }
+      return cChanged ? nextC : c;
+    });
+  }
+
+  // Cascade across reports
+  if (Array.isArray(activeDb.reports)) {
+    activeDb.reports = activeDb.reports.map((r: any) => {
+      if (!r) return r;
+      let nextR = { ...r };
+      let rChanged = false;
+      if (isTargetHandle(r.authorNickname)) {
+        nextR.authorNickname = newNickname;
+        rChanged = true;
+      }
+      if (isTargetHandle(r.reportedNickname)) {
+        nextR.reportedNickname = newNickname;
+        rChanged = true;
+      }
+      if (isTargetHandle(r.reporterNickname)) {
+        nextR.reporterNickname = newNickname;
+        rChanged = true;
+      }
+      return rChanged ? nextR : r;
+    });
+  }
+
+  // Migrate user notifications under superseded handle keys to new clean handle key
+  if (activeDb.notifications && typeof activeDb.notifications === 'object') {
+    const nextNotifs: Record<string, any[]> = { ...activeDb.notifications };
+    let migratedList = Array.isArray(nextNotifs[cleanNew]) ? [...nextNotifs[cleanNew]] : [];
+    aliasSet.forEach((oldClean) => {
+      if (Array.isArray(nextNotifs[oldClean]) && nextNotifs[oldClean].length > 0) {
+        const remapped = nextNotifs[oldClean].map((n: any) => ({ ...n, targetNickname: cleanNew }));
+        migratedList = mergeNotifications(migratedList, remapped);
+        delete nextNotifs[oldClean];
+      }
+    });
+    if (migratedList.length > 0) {
+      nextNotifs[cleanNew] = migratedList;
+    }
+    activeDb.notifications = nextNotifs;
+  }
+
+  return { updatedPosts, updatedComments };
+}
+
+function reconcileSupersededHandlesInActiveDb(): boolean {
+  let didChange = false;
+  try {
+    const sup = ((activeDb as any).supersededUsernames || {}) as Record<string, { newNickname?: string; userId?: string; changedAt?: string }>;
+    const users = Array.isArray(activeDb.users) ? activeDb.users : [];
+    const groupedByTarget = new Map<string, { userId?: string; newNickname: string; aliases: Set<string>; avatarKey?: string; avatarUrl?: string }>();
+
+    const ensureGroup = (key: string, userId: string | undefined, newNickname: string, avatarKey?: string, avatarUrl?: string) => {
+      if (!groupedByTarget.has(key)) {
+        groupedByTarget.set(key, { userId, newNickname, aliases: new Set(), avatarKey, avatarUrl });
+      }
+      const g = groupedByTarget.get(key)!;
+      if (userId && !g.userId) g.userId = userId;
+      if (newNickname) g.newNickname = newNickname;
+      return g;
+    };
+
+    users.forEach((u: any) => {
+      if (!u || !u.nickname) return;
+      const cleanCurr = normalizeServerHandle(u.nickname);
+      if (!cleanCurr) return;
+      const prevs = Array.isArray(u.previousNicknames) ? u.previousNicknames : [];
+      if (prevs.length > 0) {
+        const key = u.id ? String(u.id) : cleanCurr;
+        const g = ensureGroup(key, u.id ? String(u.id) : undefined, u.nickname, u.avatarKey, u.avatarUrl);
+        prevs.forEach((p: any) => {
+          const cp = normalizeServerHandle(p);
+          if (cp && cp !== cleanCurr) g.aliases.add(cp);
+        });
+      }
+    });
+
+    Object.entries(sup).forEach(([oldRaw, entry]) => {
+      const oldClean = normalizeServerHandle(oldRaw);
+      if (!oldClean || !entry) return;
+      let targetUser: any = undefined;
+      if (entry.userId) {
+        targetUser = users.find((u: any) => u && String(u.id) === String(entry.userId));
+      }
+      if (!targetUser && entry.newNickname) {
+        const nextClean = normalizeServerHandle(entry.newNickname);
+        targetUser = users.find((u: any) => u && normalizeServerHandle(u.nickname) === nextClean);
+      }
+      const currentNick = targetUser?.nickname || entry.newNickname;
+      if (!currentNick) return;
+      const cleanCurr = normalizeServerHandle(currentNick);
+      if (!cleanCurr || oldClean === cleanCurr) return;
+      const uid = targetUser?.id ? String(targetUser.id) : (entry.userId ? String(entry.userId) : undefined);
+      const key = uid || cleanCurr;
+      const g = ensureGroup(key, uid, currentNick, targetUser?.avatarKey, targetUser?.avatarUrl);
+      g.aliases.add(oldClean);
+    });
+
+    const nowIso = new Date().toISOString();
+    groupedByTarget.forEach((g) => {
+      if (g.aliases.size === 0) return;
+      const res = cascadeUsernameChangeInActiveDb({
+        userId: g.userId,
+        oldAliases: Array.from(g.aliases),
+        newNickname: g.newNickname,
+        nowIso,
+        avatarKey: g.avatarKey,
+        avatarUrl: g.avatarUrl,
+      });
+      if (res.updatedPosts.length > 0 || res.updatedComments.length > 0) {
+        didChange = true;
+      }
+      if (g.userId) {
+        activeDb.users = (activeDb.users || []).map((u: any) => {
+          if (u && String(u.id) === g.userId) {
+            const cleanCurr = normalizeServerHandle(u.nickname);
+            const mergedPrev = new Set<string>(
+              (Array.isArray(u.previousNicknames) ? u.previousNicknames : [])
+                .map((x: any) => normalizeServerHandle(x))
+                .filter((x: string) => Boolean(x) && x !== cleanCurr)
+            );
+            g.aliases.forEach((a) => {
+              if (a && a !== cleanCurr) mergedPrev.add(a);
+            });
+            const formattedPrev = Array.from(mergedPrev).map((a) => `@${a}`);
+            if (JSON.stringify(u.previousNicknames || []) !== JSON.stringify(formattedPrev)) {
+              didChange = true;
+              return { ...u, previousNicknames: formattedPrev };
+            }
+          }
+          return u;
+        });
+      }
+    });
+  } catch (err) {
+    console.warn('[Username Reconcile] Non-critical warning:', err);
+  }
+  return didChange;
+}
+
 function initAndLoadServerDb() {
   try {
     const dataDir = path.dirname(DB_FILE);
@@ -130,6 +627,7 @@ function initAndLoadServerDb() {
         follows: mergeFollows([], parsed.follows || []),
         notifications: parsed.notifications || {},
       });
+      reconcileSupersededHandlesInActiveDb();
       persistServerDb();
       console.log('[DB Init] Loaded and sanitized central database from data/db.json on server disk.');
     }
@@ -386,6 +884,7 @@ async function syncFirestoreToActiveDb() {
       activeDb.notifications = nextNotifs;
     }
 
+    reconcileSupersededHandlesInActiveDb();
     persistServerDb();
     console.log(
       `[Firestore Sync] Synced ${activeDb.users.length} users, ${(activeDb.posts || []).length} posts, ${(activeDb.comments || []).length} comments, ${(activeDb.directMessages || []).length} DMs into server DB.`
@@ -580,14 +1079,14 @@ app.post('/api/auth/login', async (req, res) => {
 // Dedicated Central Username Change Endpoint - ensures authoritative central synchronization across all devices
 app.post('/api/users/change-username', async (req, res) => {
   try {
-    const { userId, newNickname, oldNickname } = req.body || {};
+    const { userId, newNickname, oldNickname, previousNicknames: incomingPrevNicks, avatarKey, avatarUrl } = req.body || {};
     if (!userId || !newNickname) {
       return res.status(400).json({ success: false, error: 'User ID and new username are required' });
     }
 
     const rawNew = String(newNickname).trim();
-    const cleanNew = rawNew.toLowerCase().replace(/^@/, '');
-    const cleanOld = oldNickname ? String(oldNickname).trim().toLowerCase().replace(/^@/, '') : '';
+    const cleanNew = normalizeServerHandle(rawNew);
+    const cleanOld = normalizeServerHandle(oldNickname);
     const formattedNew = rawNew.startsWith('@') ? rawNew : `@${rawNew}`;
 
     if (!cleanNew) {
@@ -598,11 +1097,22 @@ app.post('/api/users/change-username', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Username cannot contain anonymous or anon' });
     }
 
-    // Check if new username is already taken by any other user
+    // Ensure central DB has synced from Firestore if user is missing in memory
+    let userIndex = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === String(userId));
+    if (userIndex === -1) {
+      await syncFirestoreToActiveDb().catch(() => {});
+      userIndex = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === String(userId));
+    }
+
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, error: 'User account not found' });
+    }
+
+    // Check if new username is already actively used by any other user
     const existingOther = (activeDb.users || []).find((u: any) => {
       if (!u || !u.nickname) return false;
       const uId = String(u.id || '');
-      const uNick = String(u.nickname).toLowerCase().replace(/^@/, '');
+      const uNick = normalizeServerHandle(u.nickname);
       return uId !== String(userId) && uNick === cleanNew;
     });
 
@@ -610,60 +1120,147 @@ app.post('/api/users/change-username', async (req, res) => {
       return res.status(409).json({ success: false, error: `The handle "${formattedNew}" is already taken.` });
     }
 
-    // Find user by permanent internal ID in activeDb.users
-    const userIndex = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === String(userId));
-    if (userIndex === -1) {
-      return res.status(404).json({ success: false, error: 'User account not found' });
-    }
-
     const currentUser = activeDb.users[userIndex];
-    const previousNickClean = cleanOld || String(currentUser.nickname || '').toLowerCase().replace(/^@/, '');
+    const currentNickClean = normalizeServerHandle(currentUser.nickname);
+    const previousNickClean = cleanOld || currentNickClean;
 
-    // Update username centrally
+    // Collect all historical handle aliases belonging strictly to this user
+    const prevListRaw = [
+      ...(Array.isArray(currentUser.previousNicknames) ? currentUser.previousNicknames : []),
+      ...(Array.isArray(incomingPrevNicks) ? incomingPrevNicks : []),
+      currentUser.nickname,
+      oldNickname,
+    ];
+    const prevSet = new Set<string>();
+    prevListRaw.forEach((n) => {
+      const clean = normalizeServerHandle(n);
+      if (clean && clean !== cleanNew) prevSet.add(clean);
+    });
+    const nextPreviousNicknames = Array.from(prevSet).map((c) => `@${c}`);
+
     const nowIso = new Date().toISOString();
     activeDb.users[userIndex] = {
       ...currentUser,
       nickname: formattedNew,
+      previousNicknames: nextPreviousNicknames,
+      ...(avatarKey !== undefined ? { avatarKey } : {}),
+      ...(avatarUrl !== undefined ? { avatarUrl } : {}),
       updatedAt: nowIso,
     };
 
-    // Invalidate old username centrally so it can NEVER be used to log in on any device
-    if (previousNickClean && previousNickClean !== cleanNew) {
-      if (!(activeDb as any).supersededUsernames) (activeDb as any).supersededUsernames = {};
-      (activeDb as any).supersededUsernames[previousNickClean] = {
-        newNickname: formattedNew,
-        userId: String(userId),
-        changedAt: nowIso,
-      };
-    }
+    // Cascade username change across ALL posts, comments, follows, verifications, marketplace, DMs & notifications
+    const cascadeResult = cascadeUsernameChangeInActiveDb({
+      userId: String(userId),
+      oldAliases: [previousNickClean, currentNickClean, ...Array.from(prevSet)],
+      newNickname: formattedNew,
+      nowIso,
+      avatarKey: avatarKey !== undefined ? avatarKey : currentUser.avatarKey,
+      avatarUrl: avatarUrl !== undefined ? avatarUrl : currentUser.avatarUrl,
+    });
 
     persistServerDb();
 
-    // Sync to Firestore
+    // Sync user and cascaded posts/comments to Firestore
     try {
       const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         const { initializeApp, getApps } = await import('firebase/app');
-        const { getFirestore, doc, setDoc, deleteDoc } = await import('firebase/firestore');
+        const { getFirestore, doc, setDoc, deleteDoc, collection, getDocs } = await import('firebase/firestore');
         const app = !getApps().length ? initializeApp(config) : getApps()[0];
         const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
-        
+
         await setDoc(doc(firestoreDb, 'users', String(userId)), {
           nickname: formattedNew,
+          previousNicknames: nextPreviousNicknames,
           updatedAt: nowIso,
         }, { merge: true });
 
         if (previousNickClean) {
           await deleteDoc(doc(firestoreDb, 'users', previousNickClean)).catch(() => {});
         }
+
+        // Update cascaded posts in Firestore
+        const postUpdates = cascadeResult.updatedPosts || [];
+        if (postUpdates.length > 0) {
+          await Promise.all(
+            postUpdates.map((p: any) =>
+              setDoc(
+                doc(firestoreDb, 'posts', String(p.id)),
+                {
+                  authorId: p.authorId || String(userId),
+                  authorNickname: p.authorNickname,
+                  ...(p.nickname ? { nickname: p.nickname } : {}),
+                  ...(p.likedBy ? { likedBy: p.likedBy } : {}),
+                  ...(p.repostedBy ? { repostedBy: p.repostedBy } : {}),
+                  ...(p.repostRecords ? { repostRecords: p.repostRecords } : {}),
+                  ...(p.bookmarkedBy ? { bookmarkedBy: p.bookmarkedBy } : {}),
+                  ...(p.quotedPost ? { quotedPost: p.quotedPost } : {}),
+                  ...(p.repostedPost ? { repostedPost: p.repostedPost } : {}),
+                  updatedAt: nowIso,
+                },
+                { merge: true }
+              ).catch(() => {})
+            )
+          );
+        } else {
+          // Also scan Firestore posts directly in case any former post wasn't in activeDb yet
+          const fsPostsSnap = await getDocs(collection(firestoreDb, 'posts')).catch(() => null);
+          if (fsPostsSnap) {
+            const aliasCheckSet = new Set([previousNickClean, currentNickClean, ...Array.from(prevSet)].filter(Boolean));
+            const extraPromises: Promise<any>[] = [];
+            fsPostsSnap.forEach((d: any) => {
+              const pData = d.data();
+              if (!pData) return;
+              const pNick = normalizeServerHandle(pData.authorNickname || pData.nickname);
+              if (String(pData.authorId || '') === String(userId) || aliasCheckSet.has(pNick)) {
+                extraPromises.push(
+                  setDoc(
+                    doc(firestoreDb, 'posts', d.id),
+                    { authorId: String(userId), authorNickname: formattedNew, updatedAt: nowIso },
+                    { merge: true }
+                  ).catch(() => {})
+                );
+              }
+            });
+            if (extraPromises.length > 0) await Promise.all(extraPromises);
+          }
+        }
+
+        // Update cascaded comments in Firestore
+        const commentUpdates = cascadeResult.updatedComments || [];
+        if (commentUpdates.length > 0) {
+          await Promise.all(
+            commentUpdates.map((c: any) =>
+              setDoc(
+                doc(firestoreDb, 'comments', String(c.id)),
+                {
+                  authorId: c.authorId || String(userId),
+                  authorNickname: c.authorNickname,
+                  ...(c.replyToNickname ? { replyToNickname: c.replyToNickname } : {}),
+                  ...(c.likedBy ? { likedBy: c.likedBy } : {}),
+                  updatedAt: nowIso,
+                },
+                { merge: true }
+              ).catch(() => {})
+            )
+          );
+        }
       }
     } catch (fsErr) {
       console.warn('[Username Change] Firestore sync warning:', fsErr);
     }
 
-    console.log(`[Username Change] Central account ${userId} changed: @${previousNickClean} -> ${formattedNew}`);
-    return res.json({ success: true, user: activeDb.users[userIndex] });
+    console.log(
+      `[Username Change] Central account ${userId} changed: @${previousNickClean} -> ${formattedNew} (cascaded ${cascadeResult.updatedPosts.length} posts, ${cascadeResult.updatedComments.length} comments)`
+    );
+    return res.json({
+      success: true,
+      user: activeDb.users[userIndex],
+      updatedPostsCount: cascadeResult.updatedPosts.length,
+      updatedCommentsCount: cascadeResult.updatedComments.length,
+      supersededUsernames: (activeDb as any).supersededUsernames || {},
+    });
   } catch (err: any) {
     console.error('[Username Change] Error:', err);
     return res.status(500).json({ success: false, error: 'Failed to update username centrally' });
@@ -1174,9 +1771,18 @@ app.post('/api/db/sync', (req, res) => {
           if (key) userMap.set(key, u);
         }
 
+        const pendingUsernameCascades: Array<{
+          userId?: string;
+          oldAliases: string[];
+          newNickname: string;
+          nowIso: string;
+          avatarKey?: string;
+          avatarUrl?: string;
+        }> = [];
+
         for (const incoming of filteredIncoming) {
           const inId = String(incoming.id || '');
-          const inNick = incoming.nickname ? String(incoming.nickname).toLowerCase().replace(/^@/, '') : '';
+          const inNick = normalizeServerHandle(incoming.nickname);
           const inEmail = incoming.studentEmail ? String(incoming.studentEmail).toLowerCase().trim() : '';
 
           // Match existing account by permanent ID (primary), email (secondary), or previous nickname
@@ -1189,7 +1795,7 @@ app.post('/api/db/sync', (req, res) => {
                 matchedKey = key;
                 break;
               }
-              const exNick = existing.nickname ? String(existing.nickname).toLowerCase().replace(/^@/, '') : '';
+              const exNick = normalizeServerHandle(existing.nickname);
               if (inNick && exNick && inNick === exNick) {
                 matchedKey = key;
                 break;
@@ -1207,8 +1813,8 @@ app.post('/api/db/sync', (req, res) => {
 
             // REQUIREMENT 3, 4, 7: Protect central username from being regressed by stale client devices!
             let authoritativeNick = existing.nickname;
-            const inNickClean = incoming.nickname ? String(incoming.nickname).toLowerCase().replace(/^@/, '') : '';
-            const exNickClean = existing.nickname ? String(existing.nickname).toLowerCase().replace(/^@/, '') : '';
+            const inNickClean = normalizeServerHandle(incoming.nickname);
+            const exNickClean = normalizeServerHandle(existing.nickname);
 
             // If incoming has a nickname that is superseded (old), discard it and keep existing!
             if ((activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[inNickClean]) {
@@ -1219,21 +1825,42 @@ app.post('/api/db/sync', (req, res) => {
               if (incomingTime > existingTime) {
                 authoritativeNick = incoming.nickname;
                 if (exNickClean && exNickClean !== inNickClean) {
-                  if (!(activeDb as any).supersededUsernames) (activeDb as any).supersededUsernames = {};
-                  (activeDb as any).supersededUsernames[exNickClean] = {
+                  const changeIso = incoming.updatedAt || new Date().toISOString();
+                  pendingUsernameCascades.push({
+                    userId: String(existing.id || incoming.id || ''),
+                    oldAliases: [
+                      exNickClean,
+                      ...(Array.isArray(existing.previousNicknames) ? existing.previousNicknames : []),
+                      ...(Array.isArray(incoming.previousNicknames) ? incoming.previousNicknames : []),
+                    ],
                     newNickname: incoming.nickname,
-                    userId: String(existing.id || incoming.id),
-                    changedAt: incoming.updatedAt || new Date().toISOString(),
-                  };
+                    nowIso: changeIso,
+                    avatarKey: incoming.avatarKey || existing.avatarKey,
+                    avatarUrl: incoming.avatarUrl !== undefined ? incoming.avatarUrl : existing.avatarUrl,
+                  });
                 }
               }
             }
+
+            const authClean = normalizeServerHandle(authoritativeNick);
+            const mergedPrevSet = new Set<string>();
+            [
+              ...(Array.isArray(existing.previousNicknames) ? existing.previousNicknames : []),
+              ...(Array.isArray(incoming.previousNicknames) ? incoming.previousNicknames : []),
+              exNickClean !== authClean ? existing.nickname : '',
+              inNickClean !== authClean ? incoming.nickname : '',
+            ].forEach((n) => {
+              const c = normalizeServerHandle(n);
+              if (c && c !== authClean) mergedPrevSet.add(c);
+            });
+            const mergedPreviousNicknames = Array.from(mergedPrevSet).map((c) => `@${c}`);
 
             userMap.set(matchedKey, {
               ...existing,
               ...incoming,
               id: existing.id || incoming.id,
               nickname: authoritativeNick,
+              previousNicknames: mergedPreviousNicknames,
               emergencyHomePhone: incoming.emergencyHomePhone !== undefined ? incoming.emergencyHomePhone : existing.emergencyHomePhone,
               realName: incoming.realName !== undefined ? incoming.realName : existing.realName,
               studentEmail: incoming.studentEmail !== undefined ? incoming.studentEmail : existing.studentEmail,
@@ -1276,9 +1903,13 @@ app.post('/api/db/sync', (req, res) => {
 
         activeDb.users = Array.from(userMap.values()).filter((u: any) => {
           const uId = String(u.id || '');
-          const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
+          const uNick = normalizeServerHandle(u.nickname);
           return !deletedIds.has(uId) && !deletedNicks.has(uNick);
         });
+
+        for (const casc of pendingUsernameCascades) {
+          cascadeUsernameChangeInActiveDb(casc);
+        }
         changed = true;
       }
       if (Array.isArray(updates.posts)) {

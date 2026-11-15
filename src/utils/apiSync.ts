@@ -44,6 +44,7 @@ export interface ServerDbState {
   deletedUserNicknames?: string[];
   deletedPostIds?: string[];
   deletedCommentIds?: string[];
+  supersededUsernames?: Record<string, { newNickname: string; userId?: string; changedAt?: string }>;
 }
 
 export function isCommentDeletedLocally(commentId?: string | null): boolean {
@@ -302,6 +303,19 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         })(),
         savedPassword: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,
         password: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,
+        previousNicknames: (() => {
+          const authClean = (authoritativeNick || '').trim().toLowerCase().replace(/^@+/, '');
+          const set = new Set<string>();
+          [...(secondary.previousNicknames || []), ...(primary.previousNicknames || [])].forEach((n) => {
+            const c = (n || '').trim().toLowerCase().replace(/^@+/, '');
+            if (c && c !== authClean) set.add(c);
+          });
+          const exClean = (existing.nickname || '').trim().toLowerCase().replace(/^@+/, '');
+          const inClean = (u.nickname || '').trim().toLowerCase().replace(/^@+/, '');
+          if (exClean && exClean !== authClean) set.add(exClean);
+          if (inClean && inClean !== authClean) set.add(inClean);
+          return Array.from(set);
+        })(),
         updatedAt: primary.updatedAt || secondary.updatedAt || new Date().toISOString(),
       };
       mergedList[existingIndex] = merged;

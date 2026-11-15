@@ -5,7 +5,7 @@ import { VerificationBadge } from './VerificationBadge';
 import { formatRelativeTime } from '../utils/dateUtils';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
-import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
+import { findUserByNickname, isGuestAccount, isModulaAccount, doesRecordBelongToUser } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount, isItemBookmarkedByUser } from '../utils/reactionUtils';
 import { ShareRepostModal, getDedicatedPostUrl } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
@@ -111,10 +111,32 @@ export const PostCard: React.FC<PostCardProps> = ({
     setIsExpanded(false);
   }, [post.content, post.text]);
 
+  const [badgeTick, setBadgeTick] = useState(0);
+  useEffect(() => {
+    const handleBadgeUpdate = () => {
+      setBadgeTick((t) => t + 1);
+    };
+    window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+    window.addEventListener('fuhsi_profile_updated', handleBadgeUpdate);
+    window.addEventListener('fuhsi_users_updated', handleBadgeUpdate);
+    return () => {
+      window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
+      window.removeEventListener('fuhsi_profile_updated', handleBadgeUpdate);
+      window.removeEventListener('fuhsi_users_updated', handleBadgeUpdate);
+    };
+  }, []);
+
+  const authorUser = useMemo(() => {
+    return findUserByNickname(post.authorNickname, (post as any).authorId);
+  }, [post.authorNickname, (post as any).authorId, badgeTick]);
+
   const isMyPost = Boolean(
     (post as any).isOwner ||
-    (currentUserNickname && post.authorNickname?.toLowerCase() === currentUserNickname.toLowerCase())
+    doesRecordBelongToUser(post, userProfile, currentUserNickname) ||
+    (userProfile?.id && authorUser?.id && userProfile.id === authorUser.id)
   );
+
+  const displayAuthorNickname = (isMyPost ? userProfile?.nickname : undefined) || authorUser?.nickname || post.authorNickname;
 
   const isModulaAdmin = useMemo(() => {
     if (isModulaAccount(userProfile) || isModulaAccount(currentUserNickname)) {
@@ -132,22 +154,9 @@ export const PostCard: React.FC<PostCardProps> = ({
     return false;
   }, [userProfile, currentUserNickname]);
 
-  const [badgeTick, setBadgeTick] = useState(0);
-  useEffect(() => {
-    const handleBadgeUpdate = () => {
-      setBadgeTick((t) => t + 1);
-    };
-    window.addEventListener('fuhsi_badge_updated', handleBadgeUpdate);
-    return () => window.removeEventListener('fuhsi_badge_updated', handleBadgeUpdate);
-  }, []);
-
-  const authorUser = useMemo(() => {
-    return findUserByNickname(post.authorNickname);
-  }, [post.authorNickname, badgeTick]);
-
   const authorBadgeInfo = useMemo(() => {
-    return getUserBadgeInfo(post.authorNickname || currentUserNickname, authorUser || (isMyPost ? userProfile : null));
-  }, [post.authorNickname, currentUserNickname, authorUser, isMyPost, userProfile, badgeTick]);
+    return getUserBadgeInfo(displayAuthorNickname || currentUserNickname, authorUser || (isMyPost ? userProfile : null));
+  }, [displayAuthorNickname, currentUserNickname, authorUser, isMyPost, userProfile, badgeTick]);
 
   const isVerifiedUser = authorBadgeInfo.isVerified;
   const likesCount = getEffectiveLikesCount(post);
@@ -361,9 +370,9 @@ export const PostCard: React.FC<PostCardProps> = ({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => onAuthorClick?.(post)}
+              onClick={() => onAuthorClick?.({ ...post, authorNickname: displayAuthorNickname, authorId: (post as any).authorId || authorUser?.id })}
               className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border bg-teal-50 border-teal-200/80 hover:scale-105 transition-transform focus:outline-none focus:ring-2 focus:ring-teal-500/40 overflow-hidden"
-              title={`View ${post.authorNickname}'s profile details`}
+              title={`View ${displayAuthorNickname}'s profile details`}
             >
               <AvatarIcon avatarKey={avatarKey} avatarUrl={avatarUrl} size={20} sizeClassName="w-10 h-10 rounded-xl object-cover" />
             </button>
@@ -371,11 +380,11 @@ export const PostCard: React.FC<PostCardProps> = ({
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => onAuthorClick?.(post)}
+                  onClick={() => onAuthorClick?.({ ...post, authorNickname: displayAuthorNickname, authorId: (post as any).authorId || authorUser?.id })}
                   className="font-bold text-slate-900 text-sm hover:text-teal-700 cursor-pointer focus:outline-none focus:underline"
-                  title={`View ${post.authorNickname}'s profile details`}
+                  title={`View ${displayAuthorNickname}'s profile details`}
                 >
-                  {post.authorNickname}
+                  {displayAuthorNickname}
                 </button>
 
                 <VerificationBadge 
@@ -385,7 +394,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                   size={13}
                 />
 
-                {isGuestAccount(post.authorNickname) && (
+                {isGuestAccount(authorUser || displayAuthorNickname) && (
                   <span className="text-[10px] text-slate-400 font-medium">Guest</span>
                 )}
               </div>
@@ -773,12 +782,12 @@ export const PostCard: React.FC<PostCardProps> = ({
                 <p className="text-xs text-slate-400 italic py-2">No comments yet. Be the first student to reply!</p>
               ) : (
                 comments.map((comment) => {
+                  const cAuthorUser = findUserByNickname(comment.authorNickname, (comment as any).authorId);
                   const isMyComment = Boolean(
-                    userProfile?.nickname &&
-                    comment?.authorNickname &&
-                    comment.authorNickname.toLowerCase() === userProfile.nickname.toLowerCase()
+                    doesRecordBelongToUser(comment, userProfile, currentUserNickname) ||
+                    (userProfile?.id && cAuthorUser?.id && userProfile.id === cAuthorUser.id)
                   );
-                  const cAuthorUser = findUserByNickname(comment.authorNickname);
+                  const displayCommentNick = (isMyComment ? userProfile?.nickname : undefined) || cAuthorUser?.nickname || comment.authorNickname;
                   const commentAvatarKey = (isMyComment ? userProfile?.avatarKey : undefined) || cAuthorUser?.avatarKey || comment.authorAvatarKey || comment.authorAvatarId || 'caduceus';
                   const commentAvatarUrl = (isMyComment ? userProfile?.avatarUrl : undefined) ?? cAuthorUser?.avatarUrl ?? comment.authorAvatarUrl;
 
@@ -790,7 +799,8 @@ export const PostCard: React.FC<PostCardProps> = ({
                             if (onAuthorClick) {
                               onAuthorClick({
                                 ...post,
-                                authorNickname: comment.authorNickname,
+                                authorId: (comment as any).authorId || cAuthorUser?.id,
+                                authorNickname: displayCommentNick,
                                 authorAvatarKey: commentAvatarKey,
                                 authorAvatarUrl: commentAvatarUrl,
                                 authorBadgeType: comment.authorBadgeType,
@@ -799,13 +809,13 @@ export const PostCard: React.FC<PostCardProps> = ({
                             }
                           }}
                           className={`flex items-center gap-2 ${onAuthorClick ? 'cursor-pointer group/user' : ''}`}
-                          title={onAuthorClick ? `View ${comment.authorNickname}'s profile` : undefined}
+                          title={onAuthorClick ? `View ${displayCommentNick}'s profile` : undefined}
                         >
                           <div className="w-5 h-5 rounded-full bg-teal-50 flex items-center justify-center shrink-0 group-hover/user:scale-105 transition-transform overflow-hidden">
                             <AvatarIcon avatarKey={commentAvatarKey} avatarUrl={commentAvatarUrl} size={12} sizeClassName="w-5 h-5 object-cover" />
                           </div>
-                          <span className="font-bold text-slate-800 group-hover/user:text-teal-700 group-hover/user:underline">{comment.authorNickname}</span>
-                          {isGuestAccount(comment.authorNickname) && (
+                          <span className="font-bold text-slate-800 group-hover/user:text-teal-700 group-hover/user:underline">{displayCommentNick}</span>
+                          {isGuestAccount(cAuthorUser || displayCommentNick) && (
                             <span className="text-[10px] text-slate-400 font-medium">Guest</span>
                           )}
                         </div>

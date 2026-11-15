@@ -55,7 +55,7 @@ import { ProfilePictureModal } from '../components/ProfilePictureModal';
 import { VerificationModal } from '../components/VerificationModal';
 import { formatRelativeTime, getTimestampMs } from '../utils/dateUtils';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
-import { isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
+import { isGuestAccount, isModulaAccount, getUserAllHandleAliases, doesRecordBelongToUser, normalizeNicknameHandle } from '../utils/userDbUtils';
 import { ImageCropModal } from '../components/ImageCropModal';
 import { useBackHandler, NAV_PRIORITY, navigateBack, pushNavState } from '../utils/navigationStack';
 
@@ -433,30 +433,36 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     { key: 'grad', label: 'Scholar Cap 🎓' },
   ];
 
-  // User posts (threads) sorted chronologically (newest first)
+  // User posts (threads) sorted chronologically (newest first), unified across username changes
   const myNickname = userProfile?.nickname || '';
   const normMyNick = useMemo(() => normalizeHandle(myNickname), [myNickname]);
+  const myHandleAliases = useMemo(() => getUserAllHandleAliases(userProfile, myNickname), [userProfile, myNickname]);
 
   const myPosts = (allPosts || [])
     .filter((p) => {
       if (!p || p.id.startsWith('repost_')) return false;
-      const author = normalizeHandle(p.authorNickname || p.nickname || (p as any).customNickname || '');
-      const reposters = Array.isArray(p.repostedBy) ? p.repostedBy.map(normalizeHandle) : [];
-      const hasReposted = Boolean(normMyNick && reposters.includes(normMyNick));
-      return (Boolean(normMyNick) && author === normMyNick) || hasReposted;
+      if (doesRecordBelongToUser(p, userProfile, myNickname)) {
+        return true;
+      }
+      const author = normalizeNicknameHandle(p.authorNickname || p.nickname || (p as any).customNickname || '');
+      if (author && myHandleAliases.has(author)) return true;
+      const reposters = Array.isArray(p.repostedBy) ? p.repostedBy.map(normalizeNicknameHandle) : [];
+      const hasReposted = reposters.some((r) => myHandleAliases.has(r));
+      return hasReposted;
     })
     .sort((a, b) => {
-      const aTime = (Array.isArray(a.repostRecords) ? a.repostRecords.find((r) => normalizeHandle(r.userNickname) === normMyNick)?.timestamp : null) || a.timestamp;
-      const bTime = (Array.isArray(b.repostRecords) ? b.repostRecords.find((r) => normalizeHandle(r.userNickname) === normMyNick)?.timestamp : null) || b.timestamp;
+      const aTime = (Array.isArray(a.repostRecords) ? a.repostRecords.find((r) => myHandleAliases.has(normalizeNicknameHandle(r.userNickname)))?.timestamp : null) || a.timestamp;
+      const bTime = (Array.isArray(b.repostRecords) ? b.repostRecords.find((r) => myHandleAliases.has(normalizeNicknameHandle(r.userNickname)))?.timestamp : null) || b.timestamp;
       return getTimestampMs(bTime) - getTimestampMs(aTime);
     });
 
-  // User comments (replies) sorted chronologically (newest first)
+  // User comments (replies) sorted chronologically (newest first), unified across username changes
   const myReplies = (allComments || [])
     .filter((c) => {
       if (!c) return false;
-      const author = normalizeHandle(c.authorNickname || '');
-      return normMyNick && author === normMyNick;
+      if (doesRecordBelongToUser(c, userProfile, myNickname)) return true;
+      const author = normalizeNicknameHandle(c.authorNickname || '');
+      return Boolean(author && myHandleAliases.has(author));
     })
     .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
 

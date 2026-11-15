@@ -7,7 +7,7 @@ import { formatRelativeTime, formatExactDateTime, getTimestampMs } from '../util
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { compressImageFile } from '../utils/imageUtils';
 import { checkIsUserVerified, getUserBadgeInfo } from '../utils/verificationUtils';
-import { findUserByNickname, isGuestAccount, isModulaAccount } from '../utils/userDbUtils';
+import { findUserByNickname, isGuestAccount, isModulaAccount, doesRecordBelongToUser } from '../utils/userDbUtils';
 import { isItemLikedByUser, getEffectiveLikesCount, isItemBookmarkedByUser } from '../utils/reactionUtils';
 import { ShareRepostModal } from './ShareRepostModal';
 import { normalizeHandle } from '../utils/followUtils';
@@ -28,7 +28,7 @@ interface PostDetailModalProps {
   onEditPost?: (postId: string, newContent: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onVotePoll?: (post: Post, optionId: string) => void;
-  onAuthorClick?: (author: { nickname: string; avatarKey?: string; avatarUrl?: string; badgeType?: string; badgeTitle?: string }) => void;
+  onAuthorClick?: (author: { id?: string; authorId?: string; nickname: string; avatarKey?: string; avatarUrl?: string; badgeType?: string; badgeTitle?: string }) => void;
   onRepost?: (post: Post) => void;
   onUndoRepost?: (post: Post) => void;
   onQuote?: (post: Post, caption: string) => void;
@@ -254,19 +254,22 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   const renderCommentItem = (comment: Comment, depth: number = 0) => {
     const replies = getChildReplies(comment.id);
     const isMaxDepth = depth >= 3;
+    const commentAuthorUser = findUserByNickname(comment.authorNickname, (comment as any).authorId);
     const isMyComment = Boolean(
-      userProfile?.nickname &&
-      comment.authorNickname?.toLowerCase() === userProfile.nickname.toLowerCase()
+      doesRecordBelongToUser(comment, userProfile) ||
+      (userProfile?.id && commentAuthorUser?.id && userProfile.id === commentAuthorUser.id)
     );
+    const displayCommentAuthorNick = (isMyComment ? userProfile?.nickname : undefined) || commentAuthorUser?.nickname || comment.authorNickname;
 
     const relativeTime = formatRelativeTime(comment.timestamp);
     const exactTime = formatExactDateTime(comment.timestamp) || comment.timestamp;
 
-    const commentAuthorUser = findUserByNickname(comment.authorNickname);
     const commentAvatarKey = (isMyComment ? userProfile?.avatarKey : undefined) || commentAuthorUser?.avatarKey || comment.authorAvatarKey || '1';
     const commentAvatarUrl = (isMyComment ? userProfile?.avatarUrl : undefined) ?? commentAuthorUser?.avatarUrl ?? comment.authorAvatarUrl;
 
-    const commentBadgeInfo = getUserBadgeInfo(comment.authorNickname, commentAuthorUser || (isMyComment ? userProfile : null));
+    const commentBadgeInfo = getUserBadgeInfo(displayCommentAuthorNick, commentAuthorUser || (isMyComment ? userProfile : null));
+    const replyTargetUser = comment.replyToNickname ? findUserByNickname(comment.replyToNickname) : undefined;
+    const displayReplyToNick = replyTargetUser?.nickname || comment.replyToNickname;
 
     return (
       <div key={comment.id} className="space-y-2">
@@ -280,14 +283,15 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           <div className="flex items-start justify-between gap-2">
             <div 
               onClick={() => onAuthorClick?.({
-                nickname: comment.authorNickname,
+                authorId: (comment as any).authorId || commentAuthorUser?.id,
+                nickname: displayCommentAuthorNick,
                 avatarKey: commentAvatarKey,
                 avatarUrl: commentAvatarUrl,
                 badgeType: commentBadgeInfo.badgeType,
                 badgeTitle: commentBadgeInfo.badgeTitle
               })}
               className="flex items-center gap-2 flex-wrap cursor-pointer group/user"
-              title={`View ${comment.authorNickname}'s profile`}
+              title={`View ${displayCommentAuthorNick}'s profile`}
             >
               <AvatarIcon
                 avatarKey={commentAvatarKey}
@@ -295,7 +299,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 sizeClassName="w-7 h-7 rounded-full object-cover shrink-0 group-hover/user:scale-105 transition-transform"
               />
               <span className="font-extrabold text-slate-900 text-xs group-hover/user:text-teal-700 group-hover/user:underline">
-                {comment.authorNickname}
+                {displayCommentAuthorNick}
               </span>
               <VerificationBadge 
                 isVerified={commentBadgeInfo.isVerified} 
@@ -303,22 +307,23 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 title={commentBadgeInfo.badgeTitle}
                 size={12}
               />
-              {isGuestAccount(comment.authorNickname) && (
+              {isGuestAccount(commentAuthorUser || displayCommentAuthorNick) && (
                 <span className="text-[10px] text-slate-400 font-medium">Guest</span>
               )}
-              {comment.replyToNickname && (
+              {displayReplyToNick && (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     onAuthorClick?.({
-                      nickname: comment.replyToNickname!,
+                      authorId: replyTargetUser?.id,
+                      nickname: displayReplyToNick,
                     });
                   }}
                   className="text-[10px] text-teal-700 font-bold bg-teal-100/70 hover:bg-teal-200/80 px-1.5 py-0.5 rounded-md transition-colors cursor-pointer"
-                  title={`View @${comment.replyToNickname}'s profile`}
+                  title={`View @${displayReplyToNick.replace(/^@/, '')}'s profile`}
                 >
-                  Replying to @{comment.replyToNickname}
+                  Replying to @{displayReplyToNick.replace(/^@/, '')}
                 </button>
               )}
             </div>
@@ -490,20 +495,20 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
           {/* Main Post Card */}
           {(() => {
+            const authorUser = findUserByNickname(post?.authorNickname, (post as any)?.authorId);
             const isMyPost = Boolean(
-              userProfile?.nickname &&
-              post?.authorNickname &&
-              post.authorNickname.toLowerCase() === userProfile.nickname.toLowerCase()
+              doesRecordBelongToUser(post, userProfile) ||
+              (userProfile?.id && authorUser?.id && userProfile.id === authorUser.id)
             );
+            const displayPostAuthorNick = (isMyPost ? userProfile?.nickname : undefined) || authorUser?.nickname || post.authorNickname;
             const isModulaAdmin = Boolean(
               isModulaAccount(userProfile) ||
               (typeof localStorage !== 'undefined' && isModulaAccount(localStorage.getItem('fuhsi_active_user')))
             );
-            const authorUser = findUserByNickname(post?.authorNickname);
             const postAvatarKey = (isMyPost ? userProfile?.avatarKey : undefined) || authorUser?.avatarKey || post.authorAvatarKey || '1';
             const postAvatarUrl = (isMyPost ? userProfile?.avatarUrl : undefined) ?? authorUser?.avatarUrl ?? post.authorAvatarUrl;
 
-            const authorBadgeInfo = getUserBadgeInfo(post?.authorNickname, authorUser || (isMyPost ? userProfile : null));
+            const authorBadgeInfo = getUserBadgeInfo(displayPostAuthorNick, authorUser || (isMyPost ? userProfile : null));
 
             return (
               <div className="p-4 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-3 shadow-2xs">
@@ -538,14 +543,15 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                 <div className="flex items-start justify-between gap-2">
                   <div 
                     onClick={() => onAuthorClick?.({
-                      nickname: post.authorNickname,
+                      authorId: (post as any).authorId || authorUser?.id,
+                      nickname: displayPostAuthorNick,
                       avatarKey: postAvatarKey,
                       avatarUrl: postAvatarUrl,
                       badgeType: authorBadgeInfo.badgeType,
                       badgeTitle: authorBadgeInfo.badgeTitle
                     })}
                     className="flex items-center gap-3 cursor-pointer group/author flex-1 min-w-0"
-                    title={`View ${post.authorNickname}'s profile`}
+                    title={`View ${displayPostAuthorNick}'s profile`}
                   >
                     <AvatarIcon
                       avatarKey={postAvatarKey}
@@ -555,7 +561,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-black text-slate-900 text-sm truncate group-hover/author:text-teal-700 group-hover/author:underline">
-                          {post.authorNickname}
+                          {displayPostAuthorNick}
                         </span>
                         <VerificationBadge 
                           isVerified={authorBadgeInfo.isVerified} 
@@ -563,7 +569,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                           title={authorBadgeInfo.badgeTitle}
                           size={13}
                         />
-                        {isGuestAccount(post.authorNickname) && (
+                        {isGuestAccount(authorUser || displayPostAuthorNick) && (
                           <span className="text-[10px] text-slate-400 font-medium">Guest</span>
                         )}
                       </div>

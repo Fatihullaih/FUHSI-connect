@@ -369,6 +369,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
     }
     const dummyPost: Post = {
       id: `acc_${acc.id}`,
+      authorId: acc.id,
       authorNickname: acc.nickname,
       authorAvatarKey: acc.avatarKey,
       authorBadgeType: acc.badgeType,
@@ -665,6 +666,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
                             if (onAuthorClick) {
                               onAuthorClick({
                                 id: `seller_${item.id}`,
+                                authorId: (item as any).sellerId,
                                 authorNickname: item.sellerNickname,
                                 timeAgo: 'Marketplace',
                                 category: 'Marketplace',
@@ -732,6 +734,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       {/* Author Profile Modal */}
       {selectedAuthor && (
         <AuthorProfileModal
+          authorId={selectedAuthor.id}
           authorNickname={selectedAuthor.nickname}
           authorAvatarKey={selectedAuthor.avatarKey}
           authorAvatarUrl={selectedAuthor.avatarUrl}

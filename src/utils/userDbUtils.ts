@@ -911,37 +911,166 @@ export function saveStoredUsers(users: UserProfile[]): void {
 }
 
 
-/**
- * Find user by nickname (safe, non-recursive, excludes deleted accounts)
- */
-export function findUserByNickname(nickname: string): UserProfile | undefined {
-  if (!nickname) return undefined;
-  const clean = nickname.trim().toLowerCase().replace(/^@/, '');
+export function normalizeNicknameHandle(nick?: string | null): string {
+  if (!nick || typeof nick !== 'string') return '';
+  return nick.trim().toLowerCase().replace(/^@+/, '');
+}
+
+export function getSupersededUsernamesMap(): Record<string, { newNickname: string; userId?: string; changedAt?: string }> {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem('fuhsi_superseded_usernames');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getUserAllHandleAliases(
+  user?: Partial<UserProfile> | null,
+  extraHandle?: string | null
+): Set<string> {
+  const aliases = new Set<string>();
+  const add = (val?: string | null) => {
+    const clean = normalizeNicknameHandle(val);
+    if (clean) aliases.add(clean);
+  };
+  if (user) {
+    add(user.nickname);
+    if (Array.isArray(user.previousNicknames)) {
+      user.previousNicknames.forEach((p) => add(p));
+    }
+  }
+  add(extraHandle);
+  const superseded = getSupersededUsernamesMap();
+  const userId = user?.id ? String(user.id).trim() : '';
+  const currentClean = normalizeNicknameHandle(user?.nickname);
+  Object.entries(superseded).forEach(([oldClean, entry]) => {
+    if (!entry) return;
+    const eUserId = entry.userId ? String(entry.userId).trim() : '';
+    const eNewClean = normalizeNicknameHandle(entry.newNickname);
+    const matchesById = Boolean(userId && eUserId && userId === eUserId);
+    const matchesByAlias = Boolean(eNewClean && (eNewClean === currentClean || aliases.has(eNewClean)));
+    const matchesOld = Boolean(oldClean && aliases.has(normalizeNicknameHandle(oldClean)));
+    if (matchesById || matchesByAlias || matchesOld) {
+      add(oldClean);
+      add(entry.newNickname);
+    }
+  });
+  return aliases;
+}
+
+export function resolveUserIdentity(
+  identifierOrObj?: string | { userId?: string; authorId?: string; nickname?: string; authorNickname?: string } | null,
+  usersList?: UserProfile[]
+): UserProfile | undefined {
+  if (!identifierOrObj) return undefined;
+  const targetId =
+    typeof identifierOrObj === 'object'
+      ? String(identifierOrObj.userId || identifierOrObj.authorId || '').trim()
+      : '';
+  const rawNick =
+    typeof identifierOrObj === 'object'
+      ? identifierOrObj.nickname || identifierOrObj.authorNickname || ''
+      : identifierOrObj;
+  const clean = normalizeNicknameHandle(rawNick);
+  if (!targetId && !clean) return undefined;
+
+  const candidates: UserProfile[] = [];
   try {
     if (typeof localStorage !== 'undefined') {
       const activeStr = localStorage.getItem('fuhsi_active_user');
       if (activeStr) {
         const activeUser = JSON.parse(activeStr);
-        if ((activeUser?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean) {
-          if (!isUserPermanentlyDeleted(activeUser)) {
-            return sanitizeUserProfile(activeUser);
-          }
+        if (activeUser && !isUserPermanentlyDeleted(activeUser)) {
+          candidates.push(activeUser);
         }
       }
-      const stored = localStorage.getItem(USER_DB_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          const found = parsed.find((u) => (u?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
-          if (found && !isUserPermanentlyDeleted(found)) {
-            return sanitizeUserProfile(found);
+      if (!usersList || usersList.length === 0) {
+        const stored = localStorage.getItem(USER_DB_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((u) => {
+              if (u && !isUserPermanentlyDeleted(u)) candidates.push(u);
+            });
           }
         }
       }
     }
-  } catch (e) {}
-  const fallback = DEFAULT_USERS_LIST.find((u) => (u?.nickname || '').trim().toLowerCase().replace(/^@/, '') === clean);
-  return fallback && !isUserPermanentlyDeleted(fallback) ? sanitizeUserProfile(fallback) : undefined;
+  } catch {}
+  if (Array.isArray(usersList)) {
+    usersList.forEach((u) => {
+      if (u && !isUserPermanentlyDeleted(u)) candidates.push(u);
+    });
+  }
+  DEFAULT_USERS_LIST.forEach((u) => {
+    if (u && !isUserPermanentlyDeleted(u)) candidates.push(u);
+  });
+
+  // 1. Exact ID match
+  if (targetId) {
+    const byId = candidates.find((u) => u.id && String(u.id).trim() === targetId);
+    if (byId) return sanitizeUserProfile(byId);
+  }
+
+  // 2. Exact current nickname match
+  if (clean) {
+    const byCurrent = candidates.find((u) => normalizeNicknameHandle(u.nickname) === clean);
+    if (byCurrent) return sanitizeUserProfile(byCurrent);
+
+    // 3. Match via previousNicknames on user profile
+    const byPrev = candidates.find(
+      (u) => Array.isArray(u.previousNicknames) && u.previousNicknames.some((p) => normalizeNicknameHandle(p) === clean)
+    );
+    if (byPrev) return sanitizeUserProfile(byPrev);
+
+    // 4. Match via supersededUsernames registry (userId or newNickname chain)
+    const superseded = getSupersededUsernamesMap();
+    let cursor = clean;
+    const visited = new Set<string>();
+    while (cursor && !visited.has(cursor)) {
+      visited.add(cursor);
+      const entry = superseded[cursor];
+      if (!entry) break;
+      if (entry.userId) {
+        const bySupId = candidates.find((u) => u.id && String(u.id).trim() === String(entry.userId).trim());
+        if (bySupId) return sanitizeUserProfile(bySupId);
+      }
+      const nextClean = normalizeNicknameHandle(entry.newNickname);
+      if (nextClean) {
+        const bySupNick = candidates.find((u) => normalizeNicknameHandle(u.nickname) === nextClean);
+        if (bySupNick) return sanitizeUserProfile(bySupNick);
+      }
+      cursor = nextClean;
+    }
+  }
+
+  return undefined;
+}
+
+export function doesRecordBelongToUser(
+  record: { authorId?: string; authorNickname?: string; nickname?: string; customNickname?: string } | null | undefined,
+  targetUser?: Partial<UserProfile> | null,
+  fallbackHandle?: string | null
+): boolean {
+  if (!record) return false;
+  if (record.authorId && targetUser?.id && String(record.authorId).trim() === String(targetUser.id).trim()) {
+    return true;
+  }
+  const recHandle = normalizeNicknameHandle(record.authorNickname || record.nickname || record.customNickname || '');
+  if (!recHandle) return false;
+  const aliases = getUserAllHandleAliases(targetUser, fallbackHandle);
+  return aliases.has(recHandle);
+}
+
+/**
+ * Find user by nickname or userId (resolves across username edits via previousNicknames & supersededUsernames)
+ */
+export function findUserByNickname(nickname: string, userId?: string): UserProfile | undefined {
+  return resolveUserIdentity({ userId, nickname });
 }
 
 /**
@@ -1076,9 +1205,19 @@ export function upsertUser(user: UserProfile): UserProfile[] {
     const existingPassword = (existing as any).savedPassword || (existing as any).password;
     const incomingPassword = (user as any).savedPassword || (user as any).password;
     const finalPassword = incomingPassword || existingPassword;
+    const mergedPrevNicknames = Array.from(
+      new Set([
+        ...((existing.previousNicknames || []).map(normalizeNicknameHandle)),
+        ...((user.previousNicknames || []).map(normalizeNicknameHandle)),
+        ...(existing.nickname && normalizeNicknameHandle(existing.nickname) !== normNick
+          ? [normalizeNicknameHandle(existing.nickname)]
+          : []),
+      ])
+    ).filter((h) => h && h !== normNick);
     users[index] = sanitizeModulaProfile({ 
       ...existing, 
       ...user,
+      previousNicknames: mergedPrevNicknames,
       savedPassword: finalPassword,
       password: finalPassword,
       updatedAt: user.updatedAt || nowIso,
