@@ -216,8 +216,8 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
 
     if (updatedStudent) {
       saveStoredUsers(updatedList);
-      saveUserToFirestore(updatedStudent).catch(console.error);
-      pushServerDbSync({ users: [updatedStudent] } as any).catch(console.error);
+      saveUserToFirestore(updatedStudent).catch((err) => console.warn('Firestore student update notice:', err));
+      pushServerDbSync({ users: [updatedStudent] } as any).catch((err) => console.warn('Server student update notice:', err));
 
       // If updating currently logged in user
       const activeRaw = localStorage.getItem('fuhsi_active_user');
@@ -269,8 +269,8 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
 
     if (promotedCount > 0) {
       saveStoredUsers(updatedList);
-      saveUsersBatchToFirestore(updatedList).catch(console.error);
-      pushServerDbSync({ users: updatedList } as any).catch(console.error);
+      saveUsersBatchToFirestore(updatedList).catch((err) => console.warn('Firestore bulk promote notice:', err));
+      pushServerDbSync({ users: updatedList } as any).catch((err) => console.warn('Server bulk promote notice:', err));
 
       // Reconcile active user if student
       const activeRaw = localStorage.getItem('fuhsi_active_user');
@@ -582,9 +582,9 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       setAllUsersList(updatedList);
 
       if (revokedUser) {
-        saveUserToFirestore(revokedUser).catch((err) => console.error(err));
+        saveUserToFirestore(revokedUser).catch((err) => console.warn('Firestore user revoke notice:', err));
       }
-      pushServerDbSync({ users: updatedList, replaceUsers: true } as any).catch((err) => console.error(err));
+      pushServerDbSync({ users: updatedList, replaceUsers: true } as any).catch((err) => console.warn('Server user revoke notice:', err));
 
       if (onRevokeVerification) {
         onRevokeVerification(nick || userId);

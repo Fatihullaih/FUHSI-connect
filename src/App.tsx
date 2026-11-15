@@ -2495,7 +2495,7 @@ export const App: React.FC = () => {
 
     // 4. Save to Firestore (savePostToFirestore strips isBookmarked/isBookmarkedByMe
     // and preserves bookmarkedBy and bookmarks count)
-    savePostToFirestore(updatedPost).catch((err) => console.error(err));
+    savePostToFirestore(updatedPost).catch((err) => console.warn('Firestore bookmark sync notice:', err));
   };
 
   const handleRepost = useCallback((targetPost: Post) => {
@@ -2559,8 +2559,8 @@ export const App: React.FC = () => {
       })
     );
 
-    savePostToFirestore(updatedBasePost).catch((err) => console.error('Error saving reposted base post:', err));
-    pushServerDbSync({ posts: [updatedBasePost] } as any);
+    savePostToFirestore(updatedBasePost).catch((err) => console.warn('Firestore repost sync notice:', err));
+    pushServerDbSync({ posts: [updatedBasePost] } as any).catch((err) => console.warn('Server repost sync notice:', err));
   }, [userProfile, selectedPost]);
 
   const handleUndoRepost = useCallback((targetPost: Post) => {
@@ -2617,8 +2617,8 @@ export const App: React.FC = () => {
       })
     );
 
-    savePostToFirestore(updatedBasePost).catch((err) => console.error('Error updating base post on undo repost:', err));
-    pushServerDbSync({ posts: [updatedBasePost] } as any);
+    savePostToFirestore(updatedBasePost).catch((err) => console.warn('Firestore undo repost sync notice:', err));
+    pushServerDbSync({ posts: [updatedBasePost] } as any).catch((err) => console.warn('Server undo repost sync notice:', err));
   }, [userProfile, selectedPost]);
 
   const handleQuotePost = useCallback((targetPost: Post, caption: string) => {
@@ -2699,14 +2699,14 @@ export const App: React.FC = () => {
       })
     );
 
-    savePostToFirestore(updatedBasePost).catch((err) => console.error('Error saving quoted base post:', err));
-    savePostToFirestore(quotePost).catch((err) => console.error('Error saving new quote post:', err));
-    pushServerDbSync({ posts: [updatedBasePost, quotePost] } as any);
+    savePostToFirestore(updatedBasePost).catch((err) => console.warn('Firestore quote base post sync notice:', err));
+    savePostToFirestore(quotePost).catch((err) => console.warn('Firestore quote post sync notice:', err));
+    pushServerDbSync({ posts: [updatedBasePost, quotePost] } as any).catch((err) => console.warn('Server quote post sync notice:', err));
   }, [userProfile, selectedPost]);
 
   const handleDeletePost = (postId: string) => {
     markPostPermanentlyDeleted(postId);
-    deletePostFromFirestore(postId).catch((err) => console.error('Error deleting post from Firestore:', err));
+    deletePostFromFirestore(postId).catch((err) => console.warn('Firestore delete post sync notice:', err));
     const updatedPosts = posts.filter((p) => p.id !== postId && p.repostedPostId !== postId && p.quotedPostId !== postId);
     const updatedComments = comments.filter((c) => c.postId !== postId);
     setPosts(updatedPosts);
@@ -2715,7 +2715,7 @@ export const App: React.FC = () => {
       localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
       localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
     } catch (e) {
-      console.error(e);
+      console.warn('Local storage delete post notice:', e);
     }
     pushServerDbSync({
       deletedPostIds: [postId],
@@ -2724,7 +2724,7 @@ export const App: React.FC = () => {
       comments: updatedComments,
       replaceComments: true,
     }).catch((err) =>
-      console.error('Error syncing post deletion to server db:', err)
+      console.warn('Server delete post sync notice:', err)
     );
 
     if (selectedPost && selectedPost.id === postId) {
@@ -2749,7 +2749,7 @@ export const App: React.FC = () => {
           updatedAt: nowIso,
           isEdited: true,
         };
-        savePostToFirestore(updated).catch((err) => console.error('Error saving edited post to Firestore:', err));
+        savePostToFirestore(updated).catch((err) => console.warn('Firestore edit post sync notice:', err));
         return updated;
       }
       return p;
@@ -2759,11 +2759,11 @@ export const App: React.FC = () => {
     try {
       localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
     } catch (e) {
-      console.error(e);
+      console.warn('Local storage edit post notice:', e);
     }
 
     pushServerDbSync({ posts: updatedPosts, replacePosts: true }).catch((err) => {
-      console.error('Error pushing edited post to server:', err);
+      console.warn('Server edit post sync notice:', err);
     });
 
     setModalStack((prevStack) =>
@@ -2801,9 +2801,9 @@ export const App: React.FC = () => {
     childReplies.forEach((r) => markCommentPermanentlyDeleted(r.id));
 
     // Delete from Firestore
-    deleteCommentFromFirestore(commentId).catch((err) => console.error('Error deleting comment from Firestore:', err));
+    deleteCommentFromFirestore(commentId).catch((err) => console.warn('Firestore delete comment notice:', err));
     childReplies.forEach((r) => {
-      deleteCommentFromFirestore(r.id).catch((err) => console.error('Error deleting reply from Firestore:', err));
+      deleteCommentFromFirestore(r.id).catch((err) => console.warn('Firestore delete reply notice:', err));
     });
 
     // 2. Updated comments list (removes target comment and its direct child replies)
@@ -2830,7 +2830,7 @@ export const App: React.FC = () => {
     // Update only commentsCount on target post in Firestore so concurrent likes are preserved
     if (targetPostId) {
       updatePostCommentsCountInFirestore(targetPostId, targetTopLevelCount).catch((err) =>
-        console.error('Error updating post commentsCount in Firestore:', err)
+        console.warn('Firestore commentsCount sync notice:', err)
       );
     }
 
@@ -2865,7 +2865,7 @@ export const App: React.FC = () => {
       localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
       localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
     } catch (e) {
-      console.error(e);
+      console.warn('Local storage delete comment notice:', e);
     }
 
     // 6. Push sync to server database with replace flags so deleted comments do not resurrect
@@ -2876,7 +2876,7 @@ export const App: React.FC = () => {
       posts: updatedPosts,
       replacePosts: true,
     }).catch((err) =>
-      console.error('Error syncing comment deletion to server db:', err)
+      console.warn('Server delete comment sync notice:', err)
     );
 
     // 7. Recalculate engagement points dynamically for current user and all users
@@ -2902,6 +2902,7 @@ export const App: React.FC = () => {
   const handleVotePoll = (post: Post, optionId: string) => {
     const currentNickname = (userProfile?.nickname || 'guest').toLowerCase();
 
+    let updatedPollPostForSync: Post | null = null;
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === post.id) {
@@ -2946,13 +2947,18 @@ export const App: React.FC = () => {
             pollVotesA: votesA,
             pollVotesB: votesB,
           };
-          savePostToFirestore(updatedPost).catch((err) => console.error(err));
-          pushServerDbSync({ posts: [updatedPost] } as any).catch(console.error);
+          updatedPollPostForSync = updatedPost;
           return updatedPost;
         }
         return p;
       })
     );
+    setTimeout(() => {
+      if (updatedPollPostForSync) {
+        savePostToFirestore(updatedPollPostForSync).catch((err) => console.warn('Firestore poll vote sync notice:', err));
+        pushServerDbSync({ posts: [updatedPollPostForSync] } as any).catch((err) => console.warn('Server poll vote sync notice:', err));
+      }
+    }, 0);
   };
 
   const handleReportPost = (post: Post, reason: string) => {
@@ -2968,7 +2974,7 @@ export const App: React.FC = () => {
     setPosts((prev) =>
       prev.map((p) => (p.id === post.id ? { ...p, isFlagged: true, flagReason: reason } : p))
     );
-    pushServerDbSync({ reports: [newReport] } as any).catch(console.error);
+    pushServerDbSync({ reports: [newReport] } as any).catch((err) => console.warn('Server report sync notice:', err));
   };
 
   const handleCreatePost = (data: {
@@ -3042,8 +3048,8 @@ export const App: React.FC = () => {
     const calculatedPoints = calculateUserPoints(userProfile.nickname, userProfile, [newPost, ...posts], comments, reports);
     newPost.authorPoints = calculatedPoints;
 
-    savePostToFirestore(newPost).catch((err) => console.error('Error saving post to Firestore:', err));
-    pushServerDbSync({ posts: [newPost] } as any).catch(console.error);
+    savePostToFirestore(newPost).catch((err) => console.warn('Firestore post save notice:', err));
+    pushServerDbSync({ posts: [newPost] } as any).catch((err) => console.warn('Server post sync notice:', err));
 
     setPosts((prev) => [newPost, ...prev]);
     // Recalculate exact points dynamically
@@ -3133,14 +3139,14 @@ export const App: React.FC = () => {
     );
 
     // Persist comment and update ONLY commentsCount on post in Firestore (never overwrite concurrent likes)
-    saveCommentToFirestore(newComment).catch((err) => console.error('Error saving comment to Firestore:', err));
+    saveCommentToFirestore(newComment).catch((err) => console.warn('Firestore comment save notice:', err));
     updatePostCommentsCountInFirestore(postId, targetTopLevelCount).catch((err) =>
-      console.error('Error updating post commentsCount in Firestore:', err)
+      console.warn('Firestore post commentsCount sync notice:', err)
     );
     pushServerDbSync({
       comments: [newComment],
       postCommentCount: { postId, commentsCount: targetTopLevelCount },
-    } as any).catch((err) => console.error('Error syncing comment to server db:', err));
+    } as any).catch((err) => console.warn('Server comment sync notice:', err));
 
     // Send cross-device COMMENT/REPLY notifications to post author and parent comment author
     try {
@@ -3471,15 +3477,13 @@ export const App: React.FC = () => {
 
     // 2. Persist directly to Cloud Firestore
     saveMarketplaceApprovedToFirestore(newItem).catch((err) =>
-      console.error('Error saving new marketplace item to Firestore:', err)
+      console.warn('Firestore marketplace item sync notice:', err)
     );
 
     // 3. Sync to central server db
-    try {
-      pushServerDbSync({ marketplaceItems: [newItem] });
-    } catch (e) {
-      console.error('Error syncing new marketplace item to server:', e);
-    }
+    pushServerDbSync({ marketplaceItems: [newItem] }).catch((err) => {
+      console.warn('Server marketplace item sync notice:', err);
+    });
 
     // 4. Notify components and listeners
     if (typeof window !== 'undefined') {
@@ -3488,21 +3492,28 @@ export const App: React.FC = () => {
   };
 
   const handleRecordDmBuyIntent = (itemId: string) => {
+    let updatedItemToSync: MarketplaceItem | null = null;
     setMarketplaceItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
           const updated = { ...item, buyerDmIntentsCount: (item.buyerDmIntentsCount || 0) + 1, updatedAt: new Date().toISOString() };
-          saveMarketplaceApprovedToFirestore(updated).catch(console.error);
-          pushServerDbSync({ marketplaceItems: [updated] } as any).catch(console.error);
+          updatedItemToSync = updated;
           return updated;
         }
         return item;
       })
     );
+    setTimeout(() => {
+      if (updatedItemToSync) {
+        saveMarketplaceApprovedToFirestore(updatedItemToSync).catch((err) => console.warn('Firestore DM buy intent sync notice:', err));
+        pushServerDbSync({ marketplaceItems: [updatedItemToSync] } as any).catch((err) => console.warn('Server DM buy intent sync notice:', err));
+      }
+    }, 0);
   };
 
   const handleMarkAsSold = (itemId: string, ratingStars: number, ratingTag: string) => {
     const nowIso = new Date().toISOString();
+    let updatedSoldItem: MarketplaceItem | null = null;
     setMarketplaceItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
@@ -3514,13 +3525,18 @@ export const App: React.FC = () => {
             sellerRatingTag: ratingTag,
             updatedAt: nowIso,
           };
-          saveMarketplaceApprovedToFirestore(updated).catch((err) => console.error(err));
-          pushServerDbSync({ marketplaceItems: [updated] } as any).catch(console.error);
+          updatedSoldItem = updated;
           return updated;
         }
         return item;
       })
     );
+    setTimeout(() => {
+      if (updatedSoldItem) {
+        saveMarketplaceApprovedToFirestore(updatedSoldItem).catch((err) => console.warn('Firestore mark sold sync notice:', err));
+        pushServerDbSync({ marketplaceItems: [updatedSoldItem] } as any).catch((err) => console.warn('Server mark sold sync notice:', err));
+      }
+    }, 0);
   };
 
   const handleUpdateMarketplaceItem = async (updatedItem: MarketplaceItem) => {
@@ -3547,14 +3563,12 @@ export const App: React.FC = () => {
     });
 
     saveMarketplaceApprovedToFirestore(itemToSave).catch((err) =>
-      console.error('Error saving updated marketplace item to Firestore:', err)
+      console.warn('Firestore update marketplace item notice:', err)
     );
 
-    try {
-      pushServerDbSync({ marketplaceItems: [itemToSave] } as any);
-    } catch (e) {
-      console.error('Error syncing updated marketplace item to server:', e);
-    }
+    pushServerDbSync({ marketplaceItems: [itemToSave] } as any).catch((err) => {
+      console.warn('Server update marketplace item notice:', err);
+    });
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_marketplace_updated'));
@@ -3576,8 +3590,8 @@ export const App: React.FC = () => {
       sessionStorage.setItem(sessionKey, String(now));
     } catch (e) {}
 
+    let targetItem: MarketplaceItem | null = null;
     setMarketplaceItems((prev) => {
-      let targetItem: MarketplaceItem | null = null;
       const next = prev.map((item) => {
         if (item.id === itemId) {
           const currentCount = typeof item.viewCount === 'number' && !isNaN(item.viewCount) ? item.viewCount : 0;
@@ -3596,13 +3610,15 @@ export const App: React.FC = () => {
           localStorage.setItem('fuhsi_marketplace_approved_db', JSON.stringify(next));
           localStorage.setItem('fuhsi_marketplace_db', JSON.stringify(next));
         } catch (e) {}
-        saveMarketplaceApprovedToFirestore(targetItem).catch(console.error);
-        try {
-          pushServerDbSync({ marketplaceItems: [targetItem] } as any);
-        } catch (e) {}
       }
       return next;
     });
+    setTimeout(() => {
+      if (targetItem) {
+        saveMarketplaceApprovedToFirestore(targetItem).catch((err) => console.warn('Firestore item view sync notice:', err));
+        pushServerDbSync({ marketplaceItems: [targetItem] } as any).catch(() => {});
+      }
+    }, 0);
   };
 
   const handleAdminQueryMarketplaceItem = async (itemId: string, queryMessage: string) => {
@@ -3627,10 +3643,8 @@ export const App: React.FC = () => {
       return next;
     });
 
-    saveMarketplaceApprovedToFirestore(updatedItem).catch(console.error);
-    try {
-      pushServerDbSync({ marketplaceItems: [updatedItem] } as any);
-    } catch (e) {}
+    saveMarketplaceApprovedToFirestore(updatedItem).catch((err) => console.warn('Firestore admin query item notice:', err));
+    pushServerDbSync({ marketplaceItems: [updatedItem] } as any).catch(() => {});
 
     // Deliver simple notification directly to seller (no Chat, no Campus Administration branding)
     try {
@@ -3798,6 +3812,8 @@ export const App: React.FC = () => {
     } catch (e) {}
 
     // 1. Update verification requests list
+    let approvedVerifToSync: VerificationRequest | null = null;
+    let updatedVerifListToSync: VerificationRequest[] | null = null;
     setVerificationRequests((prev) => {
       let matched = false;
       const updatedList = prev.map((v) => {
@@ -3813,9 +3829,7 @@ export const App: React.FC = () => {
             assignedBadgeTitle: assignedTitle,
             timestamp: nowIso,
           };
-          saveVerificationRequestToFirestore(approvedReq).catch((err) =>
-            console.error('Error saving approved verification to Firestore:', err)
-          );
+          approvedVerifToSync = approvedReq;
           return approvedReq;
         }
         return v;
@@ -3834,17 +3848,27 @@ export const App: React.FC = () => {
           assignedBadgeTitle: assignedTitle,
         };
         updatedList.unshift(newApprovedReq);
-        saveVerificationRequestToFirestore(newApprovedReq).catch((err) =>
-          console.error('Error saving new approved verification to Firestore:', err)
-        );
+        approvedVerifToSync = newApprovedReq;
       }
 
+      updatedVerifListToSync = updatedList;
       try {
         localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
-        pushServerDbSync({ verificationRequests: updatedList });
       } catch (e) {}
       return updatedList;
     });
+    setTimeout(() => {
+      if (approvedVerifToSync) {
+        saveVerificationRequestToFirestore(approvedVerifToSync).catch((err) =>
+          console.warn('Firestore verification approve sync notice:', err)
+        );
+      }
+      if (updatedVerifListToSync) {
+        pushServerDbSync({ verificationRequests: updatedVerifListToSync }).catch((err) =>
+          console.warn('Server verification approve sync notice:', err)
+        );
+      }
+    }, 0);
 
     // 2. Update active user profile if matching
     if (
@@ -3998,6 +4022,8 @@ export const App: React.FC = () => {
     const nowIso = new Date().toISOString();
 
     // 1. Update verification requests list
+    const revokedVerifsToSync: VerificationRequest[] = [];
+    let revokedVerifListToSync: VerificationRequest[] | null = null;
     setVerificationRequests((prev) => {
       const updatedList = prev.map((v) => {
         const isMatch =
@@ -4012,19 +4038,29 @@ export const App: React.FC = () => {
             assignedBadgeTitle: '',
             timestamp: nowIso,
           };
-          saveVerificationRequestToFirestore(revokedReq).catch((err) =>
-            console.error('Error revoking verification in Firestore:', err)
-          );
+          revokedVerifsToSync.push(revokedReq);
           return revokedReq;
         }
         return v;
       });
+      revokedVerifListToSync = updatedList;
       try {
         localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
-        pushServerDbSync({ verificationRequests: updatedList });
       } catch (e) {}
       return updatedList;
     });
+    setTimeout(() => {
+      revokedVerifsToSync.forEach((revokedReq) => {
+        saveVerificationRequestToFirestore(revokedReq).catch((err) =>
+          console.warn('Firestore verification revoke sync notice:', err)
+        );
+      });
+      if (revokedVerifListToSync) {
+        pushServerDbSync({ verificationRequests: revokedVerifListToSync }).catch((err) =>
+          console.warn('Server verification revoke sync notice:', err)
+        );
+      }
+    }, 0);
 
     // 2. Update active user profile if matching
     if (
@@ -4166,6 +4202,8 @@ export const App: React.FC = () => {
     const cleanTarget = targetApplicantNick.toLowerCase().replace(/^@/, '');
 
     // 1. Update verification requests list
+    const declinedVerifsToSync: VerificationRequest[] = [];
+    let declinedVerifListToSync: VerificationRequest[] | null = null;
     setVerificationRequests((prev) => {
       const updatedList = prev.map((v) => {
         const isMatch =
@@ -4179,19 +4217,29 @@ export const App: React.FC = () => {
             assignedBadgeType: 'NONE',
             assignedBadgeTitle: '',
           };
-          saveVerificationRequestToFirestore(declinedReq).catch((err) =>
-            console.error('Error saving declined verification to Firestore:', err)
-          );
+          declinedVerifsToSync.push(declinedReq);
           return declinedReq;
         }
         return v;
       });
+      declinedVerifListToSync = updatedList;
       try {
         localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updatedList));
-        pushServerDbSync({ verificationRequests: updatedList });
       } catch (e) {}
       return updatedList;
     });
+    setTimeout(() => {
+      declinedVerifsToSync.forEach((declinedReq) => {
+        saveVerificationRequestToFirestore(declinedReq).catch((err) =>
+          console.warn('Firestore verification decline sync notice:', err)
+        );
+      });
+      if (declinedVerifListToSync) {
+        pushServerDbSync({ verificationRequests: declinedVerifListToSync }).catch((err) =>
+          console.warn('Server verification decline sync notice:', err)
+        );
+      }
+    }, 0);
 
     // 2. Send notification to applicant (Firestore + Server DB + local)
     try {
@@ -4213,18 +4261,26 @@ export const App: React.FC = () => {
 
   // Handler for Admin permanently deleting a verification record (from Revoked or Declined)
   const handleDeleteVerification = async (reqId: string) => {
+    let remainingVerifList: VerificationRequest[] | null = null;
     setVerificationRequests((prev) => {
       const updated = prev.filter((r) => r.id !== reqId);
+      remainingVerifList = updated;
       try {
         localStorage.setItem('fuhsi_verifications_db', JSON.stringify(updated));
-        pushServerDbSync({ verificationRequests: updated });
       } catch (e) {}
       return updated;
     });
+    setTimeout(() => {
+      if (remainingVerifList) {
+        pushServerDbSync({ verificationRequests: remainingVerifList }).catch((err) =>
+          console.warn('Server verification delete sync notice:', err)
+        );
+      }
+    }, 0);
     try {
       await deleteVerificationRequestFromFirestore(reqId);
     } catch (err) {
-      console.error('Error permanently deleting verification request from Firestore:', err);
+      console.warn('Firestore verification delete notice:', err);
     }
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_verifications_updated', { detail: { requestId: reqId } }));
@@ -4263,7 +4319,7 @@ export const App: React.FC = () => {
       }
     } catch (e) {}
 
-    let updatedApproved: MarketplaceItem[] = [];
+    let updatedApproved: MarketplaceItem[] | null = null;
     setMarketplaceItems((prev) => {
       const updated = prev.filter((i) => i.id !== id);
       updatedApproved = updated;
@@ -4274,7 +4330,7 @@ export const App: React.FC = () => {
       return updated;
     });
 
-    let updatedPendingList: MarketplaceItem[] = [];
+    let updatedPendingList: MarketplaceItem[] | null = null;
     setPendingMarketplaceItems((prev) => {
       const updatedPending = prev.filter((i) => i.id !== id);
       updatedPendingList = updatedPending;
@@ -4285,16 +4341,18 @@ export const App: React.FC = () => {
       return updatedPending;
     });
 
-    // Sync to Server DB (replace flag ensures server purges it immediately)
-    pushServerDbSync({
-      marketplaceItems: updatedApproved,
-      replaceMarketplaceItems: true,
-      pendingMarketplaceItems: updatedPendingList,
-      replacePendingMarketplaceItems: true,
-    } as any);
+    // Sync to Server DB (replace flag ensures server purges it immediately after updaters run)
+    setTimeout(() => {
+      pushServerDbSync({
+        marketplaceItems: updatedApproved ?? marketplaceItems.filter((i) => i.id !== id),
+        replaceMarketplaceItems: true,
+        pendingMarketplaceItems: updatedPendingList ?? pendingMarketplaceItems.filter((i) => i.id !== id),
+        replacePendingMarketplaceItems: true,
+      } as any).catch((err) => console.warn('Server marketplace delete sync notice:', err));
+    }, 0);
 
     // Permanently remove from Cloud Firestore (both approved & pending collections)
-    deleteMarketplaceApprovedFromFirestore(id).catch((err) => console.error('Error deleting marketplace item from Firestore:', err));
+    deleteMarketplaceApprovedFromFirestore(id).catch((err) => console.warn('Firestore marketplace delete notice:', err));
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_marketplace_item_deleted', { detail: id }));
@@ -4389,7 +4447,7 @@ export const App: React.FC = () => {
             newNickname: formattedNick,
             oldNickname: userProfile.nickname,
           }),
-        }).catch((err) => console.error('Error syncing username change to central backend:', err));
+        }).catch((err) => console.warn('Server username change sync notice:', err));
 
         // Record in client-side superseded registry and clean old cached identifier references
         try {
@@ -4412,7 +4470,7 @@ export const App: React.FC = () => {
       }
 
       saveUserToFirestore(updated, currentNickClean).catch((err) => {
-        console.error('Error persisting user to Firestore:', err);
+        console.warn('Firestore profile persist notice:', err);
       });
       uploadAvatarToServer(updated.id, updated.nickname, newAvatarUrl || '').catch((err) => {
         console.warn('Avatar upload server notice:', err);
@@ -4526,13 +4584,13 @@ export const App: React.FC = () => {
     try {
       upsertUser(updated);
       saveUserToFirestore(updated).catch((err) => {
-        console.error('Error persisting user privacy to Firestore:', err);
+        console.warn('Firestore user privacy sync notice:', err);
       });
       pushServerDbSync({ users: [updated] }).catch((err) => {
-        console.error('Error syncing user privacy to server DB:', err);
+        console.warn('Server user privacy sync notice:', err);
       });
     } catch (e) {
-      console.error('Error updating user privacy settings:', e);
+      console.warn('User privacy update notice:', e);
     }
 
     try {

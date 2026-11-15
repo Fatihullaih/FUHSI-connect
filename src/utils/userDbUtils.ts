@@ -902,11 +902,11 @@ export function saveStoredUsers(users: UserProfile[]): void {
   }
   // Sync to Firestore cloud database
   saveUsersBatchToFirestore(cleaned).catch((err) => {
-    console.error('Error batch saving users to Firestore:', err);
+    console.warn('Firestore batch users sync notice:', err);
   });
   // Sync to central server database asynchronously
   pushServerDbSync({ users: cleaned } as any).catch((err) => {
-    console.error('Error syncing users to server:', err);
+    console.warn('Server users sync notice:', err);
   });
 }
 
@@ -1090,10 +1090,10 @@ export function upsertUser(user: UserProfile): UserProfile[] {
 
   // Save single user to Firestore & server immediately
   saveUserToFirestore(updatedUser).catch((err) => {
-    console.error('Error saving single user to Firestore:', err);
+    console.warn('Firestore user sync notice:', err);
   });
   pushServerDbSync({ users: [updatedUser] } as any).catch((err) => {
-    console.error('Error saving single user to server DB:', err);
+    console.warn('Server user sync notice:', err);
   });
 
   saveStoredUsers(users);
@@ -1128,7 +1128,7 @@ export function updateUserPassword(identifierOrEmail: string, newPassword: strin
       password: newPassword.trim(),
     };
 
-    saveUserToFirestore(users[index]).catch((err) => console.error('Error updating user password in Firestore:', err));
+    saveUserToFirestore(users[index]).catch((err) => console.warn('Firestore password sync notice:', err));
     saveStoredUsers(users);
 
     // Update active user profile in localStorage if matching
@@ -1220,7 +1220,7 @@ export function updateUserBadgeAndVerification(
       updatedAt: nowIso,
     };
     users[targetIdx] = updatedUser;
-    saveUserToFirestore(updatedUser).catch((err) => console.error('Error saving updated badge to Firestore:', err));
+    saveUserToFirestore(updatedUser).catch((err) => console.warn('Firestore badge sync notice:', err));
     saveStoredUsers(users);
   } else {
     // If not found in users list, check active user or construct record
@@ -1250,7 +1250,7 @@ export function updateUserBadgeAndVerification(
     };
     updatedUser = createdUser;
     users.push(createdUser);
-    saveUserToFirestore(createdUser).catch((err) => console.error('Error saving updated badge to Firestore:', err));
+    saveUserToFirestore(createdUser).catch((err) => console.warn('Firestore badge create sync notice:', err));
     saveStoredUsers(users);
   }
 
@@ -1295,7 +1295,7 @@ export function updateUserBadgeAndVerification(
           assignedBadgeTitle: isVerified ? cleanTitle : '',
           timestamp: nowIso,
         };
-        saveVerificationRequestToFirestore(updatedReq).catch((err) => console.error(err));
+        saveVerificationRequestToFirestore(updatedReq).catch((err) => console.warn('Firestore verif sync notice:', err));
         return updatedReq;
       }
       return req;
@@ -1323,7 +1323,7 @@ export function updateUserBadgeAndVerification(
         assignedBadgeTitle: cleanTitle,
       };
       vList.unshift(newReq);
-      saveVerificationRequestToFirestore(newReq).catch((err) => console.error(err));
+      saveVerificationRequestToFirestore(newReq).catch((err) => console.warn('Firestore new verif sync notice:', err));
     }
 
     localStorage.setItem('fuhsi_verifications_db', JSON.stringify(vList));

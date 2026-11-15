@@ -549,7 +549,7 @@ export function deleteConversationForUser(conversationId: string, userNickname: 
       ];
     }
     localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(updated));
-    pushServerDbSync({ chatConversations: updated } as any).catch(console.error);
+    pushServerDbSync({ chatConversations: updated } as any).catch((err) => console.warn('Conversation sync notice:', err));
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_conversation_deleted', { detail: { conversationId, userNickname } }));
@@ -571,7 +571,7 @@ export function submitChatReport(report: ChatReport): void {
     reports = [report, ...reports];
     localStorage.setItem(CHAT_REPORTS_KEY, JSON.stringify(reports));
 
-    pushServerDbSync({ chatReports: reports } as any).catch(console.error);
+    pushServerDbSync({ chatReports: reports } as any).catch((err) => console.warn('Chat report sync notice:', err));
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_chat_report_submitted', { detail: report }));
@@ -613,7 +613,7 @@ export function updateChatReportStatus(
         : r
     );
     localStorage.setItem(CHAT_REPORTS_KEY, JSON.stringify(updated));
-    pushServerDbSync({ chatReports: updated } as any).catch(console.error);
+    pushServerDbSync({ chatReports: updated } as any).catch((err) => console.warn('Chat report status sync notice:', err));
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_chat_report_updated', { detail: { reportId, status, actionNote } }));
@@ -708,7 +708,7 @@ export function sendDirectMessage(msg: DirectMessage): {
 
   // Push delta sync to server (server merges cleanly with mergeDirectMessages)
   try {
-    pushServerDbSync({ directMessages: [safeMsg] } as any).catch(console.error);
+    pushServerDbSync({ directMessages: [safeMsg] } as any).catch((err) => console.warn('DM server sync notice:', err));
   } catch (e) {
     console.error(e);
   }
@@ -773,7 +773,7 @@ export function updateConversationList(msg: DirectMessage): void {
     }
 
     localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(convs));
-    pushServerDbSync({ chatConversations: convs } as any).catch(console.error);
+    pushServerDbSync({ chatConversations: convs } as any).catch((err) => console.warn('Conversation list sync notice:', err));
   } catch (err) {
     console.error('Error updating conversations:', err);
   }
@@ -814,7 +814,7 @@ export function markConversationMessagesAsRead(conversationId: string, readerNic
         readAt: new Date().toISOString(),
       };
       saveDirectMessageToFirestore(updatedMsg).catch((err) => {
-        console.error('Error updating read status in Firestore:', err);
+        console.warn('Firestore read status sync notice:', err);
       });
       return updatedMsg;
     }
@@ -830,7 +830,7 @@ export function markConversationMessagesAsRead(conversationId: string, readerNic
           readByUsers: [...(msg.readByUsers || []), cleanReader],
         };
         saveDirectMessageToFirestore(updatedMsg).catch((err) => {
-          console.error('Error updating group message read status in Firestore:', err);
+          console.warn('Firestore group read status sync notice:', err);
         });
         return updatedMsg;
       }
@@ -861,7 +861,7 @@ export function markConversationMessagesAsRead(conversationId: string, readerNic
         return c;
       });
       localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(updatedConvs));
-      pushServerDbSync({ directMessages: readUpdatedMsgs, chatConversations: updatedConvs } as any).catch(console.error);
+      pushServerDbSync({ directMessages: readUpdatedMsgs, chatConversations: updatedConvs } as any).catch((err) => console.warn('DM read sync notice:', err));
     } catch (e) {
       console.error(e);
     }
@@ -1211,8 +1211,8 @@ export function reactToDirectMessage(
 
   if (updatedMsg) {
     localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
-    saveDirectMessageToFirestore(updatedMsg).catch(console.error);
-    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch(console.error);
+    saveDirectMessageToFirestore(updatedMsg).catch((err) => console.warn('DM reaction Firestore sync notice:', err));
+    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch((err) => console.warn('DM reaction server sync notice:', err));
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated', { detail: updatedMsg }));
@@ -1262,8 +1262,8 @@ export function deleteDirectMessageForMe(
 
   if (updatedMsg) {
     localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
-    saveDirectMessageToFirestore(updatedMsg).catch(console.error);
-    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch(console.error);
+    saveDirectMessageToFirestore(updatedMsg).catch((err) => console.warn('DM delete-for-me Firestore sync notice:', err));
+    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch((err) => console.warn('DM delete-for-me server sync notice:', err));
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated', { detail: updatedMsg }));
@@ -1311,8 +1311,8 @@ export function deleteDirectMessageForEveryone(
 
   if (updatedMsg) {
     localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
-    saveDirectMessageToFirestore(updatedMsg).catch(console.error);
-    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch(console.error);
+    saveDirectMessageToFirestore(updatedMsg).catch((err) => console.warn('DM delete-for-all Firestore sync notice:', err));
+    pushServerDbSync({ directMessages: [updatedMsg] } as any).catch((err) => console.warn('DM delete-for-all server sync notice:', err));
 
     // Also update conversations if this was the last message
     try {
@@ -1327,7 +1327,7 @@ export function deleteDirectMessageForEveryone(
         return c;
       });
       localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(updatedConvs));
-      pushServerDbSync({ chatConversations: updatedConvs } as any).catch(console.error);
+      pushServerDbSync({ chatConversations: updatedConvs } as any).catch((err) => console.warn('DM conversation delete sync notice:', err));
     } catch (e) {}
 
     if (typeof window !== 'undefined') {
@@ -1368,7 +1368,7 @@ export function clearConversationHistoryForUser(
           changed = true;
           const updatedMsg = { ...m, deletedForUsers: deletedFor };
           modifiedMessages.push(updatedMsg);
-          saveDirectMessageToFirestore(updatedMsg).catch(console.error);
+          saveDirectMessageToFirestore(updatedMsg).catch((err) => console.warn('DM clear history Firestore sync notice:', err));
           return updatedMsg;
         }
       }
@@ -1377,7 +1377,7 @@ export function clearConversationHistoryForUser(
 
     if (changed) {
       localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(updatedMessages));
-      pushServerDbSync({ directMessages: modifiedMessages } as any).catch(console.error);
+      pushServerDbSync({ directMessages: modifiedMessages } as any).catch((err) => console.warn('DM clear history server sync notice:', err));
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('fuhsi_direct_message_updated'));
