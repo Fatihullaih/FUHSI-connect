@@ -737,8 +737,8 @@ export const App: React.FC = () => {
             // User was created or updated locally and not yet synced to remote snapshot
             // Preserve the user, upsert into DB, and sync to server
             upsertUser(parsed);
-            pushServerDbSync({ users: [parsed] } as any).catch(console.error);
-            saveUserToFirestore(parsed).catch(console.error);
+            pushServerDbSync({ users: [parsed] } as any).catch((err) => console.warn('Server user sync notice:', err));
+            saveUserToFirestore(parsed).catch((err) => console.warn('Firestore user sync notice:', err));
             setUserProfile(parsed);
             return;
           } else if (found) {
@@ -1321,8 +1321,8 @@ export const App: React.FC = () => {
                 // User was created or updated locally and not yet synced to remote snapshot
                 // Preserve the user, upsert into DB, and sync to server
                 upsertUser(parsed);
-                pushServerDbSync({ users: [parsed] } as any).catch(console.error);
-                saveUserToFirestore(parsed).catch(console.error);
+                pushServerDbSync({ users: [parsed] } as any).catch((err) => console.warn('Server user sync notice:', err));
+                saveUserToFirestore(parsed).catch((err) => console.warn('Firestore user sync notice:', err));
                 setUserProfile(parsed);
               } else if (found) {
                 if (found.isApproved === false && !parsed.isAdmin) {
@@ -1958,6 +1958,12 @@ export const App: React.FC = () => {
 
   const [modalStack, setModalStack] = useState<ModalStackItem[]>([]);
   const [navHistory, setNavHistory] = useState<number[]>([0]);
+  const navIndexRef = useRef<number>(navIndex);
+  navIndexRef.current = navIndex;
+  const navHistoryRef = useRef<number[]>(navHistory);
+  navHistoryRef.current = navHistory;
+  const modalStackRef = useRef<ModalStackItem[]>(modalStack);
+  modalStackRef.current = modalStack;
 
   // Tab Navigation with History Tracking
   const handleNavChange = useCallback((newIndex: number) => {
@@ -1965,14 +1971,17 @@ export const App: React.FC = () => {
     if (isGuestAccount(userProfile) && (newIndex === 2 || newIndex === 4)) {
       return;
     }
-    setNavIndex((prevNav) => {
-      if (prevNav === newIndex) return prevNav;
-      setNavHistory((prev) => [...prev, newIndex]);
-      try {
-        window.history.pushState({ type: 'nav', index: newIndex, time: Date.now() }, '');
-      } catch (e) { console.error(e); }
-      return newIndex;
+    if (navIndexRef.current === newIndex) return;
+    navIndexRef.current = newIndex;
+    setNavIndex(newIndex);
+    setNavHistory((prev) => {
+      const next = [...prev, newIndex];
+      navHistoryRef.current = next;
+      return next;
     });
+    try {
+      window.history.pushState({ type: 'nav', index: newIndex, time: Date.now() }, '');
+    } catch (e) { console.warn('History pushState notice:', e); }
   }, [userProfile]);
 
   // Safety fallback: Ensure guests are never left on Hub&Fund or Chats
@@ -2115,44 +2124,44 @@ export const App: React.FC = () => {
   }, [handleNavChange, userProfile]);
 
   const popModalState = useCallback(() => {
-    setModalStack((prevStack) => {
-      if (prevStack.length === 0) {
-        setSelectedPost(null);
-        setSelectedAuthorPost(null);
-        setShowProfileModal(false);
-        setShowCreatePostModal(false);
-        setShowAuthModal(false);
-        setShowPwaModal(false);
-        setShowFollowersDirectoryModal(false);
-        if (window.location.pathname.startsWith('/post/') || window.location.search.includes('post=')) {
-          try {
-            window.history.replaceState(null, '', '/');
-          } catch (e) { console.error(e); }
-        }
-        return [];
-      }
-      const newStack = [...prevStack];
-      const popped = newStack.pop();
-      if (popped?.type === 'postDetail' && (window.location.pathname.startsWith('/post/') || window.location.search.includes('post='))) {
+    const prevStack = modalStackRef.current;
+    if (prevStack.length === 0) {
+      setSelectedPost(null);
+      setSelectedAuthorPost(null);
+      setShowProfileModal(false);
+      setShowCreatePostModal(false);
+      setShowAuthModal(false);
+      setShowPwaModal(false);
+      setShowFollowersDirectoryModal(false);
+      if (window.location.pathname.startsWith('/post/') || window.location.search.includes('post=')) {
         try {
           window.history.replaceState(null, '', '/');
-        } catch (e) { console.error(e); }
+        } catch (e) { console.warn('History replaceState notice:', e); }
       }
+      return;
+    }
+    const newStack = [...prevStack];
+    const popped = newStack.pop();
+    modalStackRef.current = newStack;
+    setModalStack(newStack);
 
-      const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
-      setSelectedPost(lastPost ? (lastPost as any).post : null);
+    if (popped?.type === 'postDetail' && (window.location.pathname.startsWith('/post/') || window.location.search.includes('post='))) {
+      try {
+        window.history.replaceState(null, '', '/');
+      } catch (e) { console.warn('History replaceState notice:', e); }
+    }
 
-      const lastAuthor = newStack.slice().reverse().find((item) => item.type === 'authorProfile');
-      setSelectedAuthorPost(lastAuthor ? (lastAuthor as any).post : null);
+    const lastPost = newStack.slice().reverse().find((item) => item.type === 'postDetail');
+    setSelectedPost(lastPost ? (lastPost as any).post : null);
 
-      setShowProfileModal(newStack.some((item) => item.type === 'profile'));
-      setShowCreatePostModal(newStack.some((item) => item.type === 'createPost'));
-      setShowAuthModal(newStack.some((item) => item.type === 'auth'));
-      setShowPwaModal(newStack.some((item) => item.type === 'pwa'));
-      setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
+    const lastAuthor = newStack.slice().reverse().find((item) => item.type === 'authorProfile');
+    setSelectedAuthorPost(lastAuthor ? (lastAuthor as any).post : null);
 
-      return newStack;
-    });
+    setShowProfileModal(newStack.some((item) => item.type === 'profile'));
+    setShowCreatePostModal(newStack.some((item) => item.type === 'createPost'));
+    setShowAuthModal(newStack.some((item) => item.type === 'auth'));
+    setShowPwaModal(newStack.some((item) => item.type === 'pwa'));
+    setShowFollowersDirectoryModal(newStack.some((item) => item.type === 'followersDirectory'));
   }, []);
 
   // Close top modal via UI "X" / "Back" button - delegates to hierarchical coordinator
@@ -2192,16 +2201,16 @@ export const App: React.FC = () => {
     NAV_PRIORITY.MAIN_TAB,
     navHistory.length > 1,
     () => {
-      setNavHistory((prevNav) => {
-        if (prevNav.length > 1) {
-          const newNav = [...prevNav];
-          newNav.pop();
-          const prevTab = newNav[newNav.length - 1];
-          setNavIndex(prevTab);
-          return newNav;
-        }
-        return prevNav;
-      });
+      const prevNav = navHistoryRef.current;
+      if (prevNav.length > 1) {
+        const newNav = [...prevNav];
+        newNav.pop();
+        const prevTab = newNav[newNav.length - 1];
+        navHistoryRef.current = newNav;
+        navIndexRef.current = prevTab;
+        setNavHistory(newNav);
+        setNavIndex(prevTab);
+      }
       return true;
     }
   );
@@ -2383,7 +2392,7 @@ export const App: React.FC = () => {
       .then((txResult) => {
         if (!txResult) {
           // Fallback to full merge write if transaction couldn't run
-          savePostToFirestore(updated).catch((err) => console.error('Error saving like to Firestore:', err));
+          savePostToFirestore(updated).catch((err) => console.warn('Firestore like sync fallback notice:', err));
           pushServerDbSync({ posts: [updated] } as any).catch(() => {});
           return;
         }
@@ -2416,7 +2425,7 @@ export const App: React.FC = () => {
         pushServerDbSync({ posts: [syncedPost] } as any).catch(() => {});
       })
       .catch((err) => {
-        console.error('Error saving like to Firestore:', err);
+        console.warn('Firestore like sync fallback notice:', err);
         pushServerDbSync({ posts: [updated] } as any).catch(() => {});
       });
   };
@@ -3263,7 +3272,7 @@ export const App: React.FC = () => {
     toggleCommentLikeInFirestore(commentId, userKey, userAliases, latestComment.likedBy)
       .then((txResult) => {
         if (!txResult) {
-          saveCommentToFirestore(optimisticUpdated).catch((err) => console.error('Error saving comment like to Firestore:', err));
+          saveCommentToFirestore(optimisticUpdated).catch((err) => console.warn('Firestore comment like sync fallback notice:', err));
           pushServerDbSync({ comments: [optimisticUpdated] } as any).catch(() => {});
           return;
         }
@@ -3290,7 +3299,7 @@ export const App: React.FC = () => {
         pushServerDbSync({ comments: [syncedComment] } as any).catch(() => {});
       })
       .catch((err) => {
-        console.error('Error saving comment like to Firestore:', err);
+        console.warn('Firestore comment like sync fallback notice:', err);
         pushServerDbSync({ comments: [optimisticUpdated] } as any).catch(() => {});
       });
   };
@@ -3687,7 +3696,7 @@ export const App: React.FC = () => {
     }
 
     // Instantly save pending status to Firestore
-    saveUserToFirestore(updatedUser).catch((err) => console.error('Error saving user verification status to Firestore:', err));
+    saveUserToFirestore(updatedUser).catch((err) => console.warn('Firestore verification status notice:', err));
 
     const newReq: VerificationRequest = {
       id: `verif_req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -3853,7 +3862,7 @@ export const App: React.FC = () => {
         updatedAt: nowIso,
       };
       setUserProfile(updated);
-      saveUserToFirestore(updated).catch((err) => console.error(err));
+      saveUserToFirestore(updated).catch((err) => console.warn('Firestore verification user update notice:', err));
       try {
         localStorage.setItem('fuhsi_active_user', JSON.stringify(updated));
       } catch (e) {}
@@ -3876,7 +3885,7 @@ export const App: React.FC = () => {
             badgeTitle: assignedTitle,
             updatedAt: nowIso,
           };
-          saveUserToFirestore(updatedUserRecord).catch((err) => console.error(err));
+          saveUserToFirestore(updatedUserRecord).catch((err) => console.warn('Firestore user record sync notice:', err));
           return updatedUserRecord;
         }
         return u;
@@ -3892,16 +3901,17 @@ export const App: React.FC = () => {
           updatedAt: nowIso,
         };
         usersList.push(newUserRecord);
-        saveUserToFirestore(newUserRecord).catch((err) => console.error(err));
+        saveUserToFirestore(newUserRecord).catch((err) => console.warn('Firestore new user record sync notice:', err));
       }
       localStorage.setItem('fuhsi_users_db', JSON.stringify(usersList));
       setNotifTrigger((prev) => prev + 1);
       pushServerDbSync({ users: usersList });
     } catch (e) {
-      console.error(e);
+      console.warn('Local user verification update notice:', e);
     }
 
     // 4. Update all posts in state, localStorage & Firestore
+    const updatedPostsToSync: Post[] = [];
     setPosts((prevPosts) => {
       const updatedPosts = prevPosts.map((p) => {
         const pNick = (p.authorNickname || '').toLowerCase().replace(/^@/, '');
@@ -3913,7 +3923,7 @@ export const App: React.FC = () => {
             authorBadgeTitle: assignedTitle,
             authorIsVerified: true,
           };
-          savePostToFirestore(updatedPost).catch((err) => console.error(err));
+          updatedPostsToSync.push(updatedPost);
           return updatedPost;
         }
         return p;
@@ -3923,8 +3933,12 @@ export const App: React.FC = () => {
       } catch (e) {}
       return updatedPosts;
     });
+    setTimeout(() => {
+      updatedPostsToSync.forEach((p) => savePostToFirestore(p).catch((err) => console.warn('Firestore post badge sync notice:', err)));
+    }, 0);
 
     // 5. Update all comments in state, localStorage & Firestore
+    const updatedCommentsToSync: Comment[] = [];
     setComments((prevComments) => {
       const updatedComments = prevComments.map((c) => {
         const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
@@ -3936,7 +3950,7 @@ export const App: React.FC = () => {
             authorBadgeType: badgeType,
             authorBadgeTitle: assignedTitle,
           };
-          saveCommentToFirestore(updatedComment).catch((err) => console.error(err));
+          updatedCommentsToSync.push(updatedComment);
           return updatedComment;
         }
         return c;
@@ -3946,6 +3960,9 @@ export const App: React.FC = () => {
       } catch (e) {}
       return updatedComments;
     });
+    setTimeout(() => {
+      updatedCommentsToSync.forEach((c) => saveCommentToFirestore(c).catch((err) => console.warn('Firestore comment badge sync notice:', err)));
+    }, 0);
 
     // 6. Broadcast badge update event
     if (typeof window !== 'undefined') {
@@ -4025,7 +4042,7 @@ export const App: React.FC = () => {
         updatedAt: nowIso,
       };
       setUserProfile(updatedUser);
-      saveUserToFirestore(updatedUser).catch((err) => console.error(err));
+      saveUserToFirestore(updatedUser).catch((err) => console.warn('Firestore revoke user update notice:', err));
       try {
         localStorage.setItem('fuhsi_active_user', JSON.stringify(updatedUser));
       } catch (e) {}
@@ -4046,7 +4063,7 @@ export const App: React.FC = () => {
             badgeTitle: '',
             updatedAt: new Date().toISOString(),
           };
-          saveUserToFirestore(updatedRecord).catch((err) => console.error(err));
+          saveUserToFirestore(updatedRecord).catch((err) => console.warn('Firestore revoke record sync notice:', err));
           return updatedRecord;
         }
         return u;
@@ -4055,10 +4072,11 @@ export const App: React.FC = () => {
       setNotifTrigger((prev) => prev + 1);
       pushServerDbSync({ users: usersList });
     } catch (e) {
-      console.error(e);
+      console.warn('Local user revoke update notice:', e);
     }
 
     // 4. Update all posts by user in state, localStorage & Firestore
+    const revokedPostsToSync: Post[] = [];
     setPosts((prevPosts) => {
       const updatedPosts = prevPosts.map((p) => {
         const pNick = (p.authorNickname || '').toLowerCase().replace(/^@/, '');
@@ -4070,7 +4088,7 @@ export const App: React.FC = () => {
             authorBadgeTitle: '',
             authorIsVerified: false,
           };
-          savePostToFirestore(updatedPost).catch((err) => console.error(err));
+          revokedPostsToSync.push(updatedPost);
           return updatedPost;
         }
         return p;
@@ -4080,8 +4098,12 @@ export const App: React.FC = () => {
       } catch (e) {}
       return updatedPosts;
     });
+    setTimeout(() => {
+      revokedPostsToSync.forEach((p) => savePostToFirestore(p).catch((err) => console.warn('Firestore post revoke sync notice:', err)));
+    }, 0);
 
     // 5. Update all comments by user in state, localStorage & Firestore
+    const revokedCommentsToSync: Comment[] = [];
     setComments((prevComments) => {
       const updatedComments = prevComments.map((c) => {
         const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
@@ -4093,7 +4115,7 @@ export const App: React.FC = () => {
             authorBadgeType: 'NONE' as const,
             authorBadgeTitle: '',
           };
-          saveCommentToFirestore(updatedComment).catch((err) => console.error(err));
+          revokedCommentsToSync.push(updatedComment);
           return updatedComment;
         }
         return c;
@@ -4103,6 +4125,9 @@ export const App: React.FC = () => {
       } catch (e) {}
       return updatedComments;
     });
+    setTimeout(() => {
+      revokedCommentsToSync.forEach((c) => saveCommentToFirestore(c).catch((err) => console.warn('Firestore comment revoke sync notice:', err)));
+    }, 0);
 
     // 6. Broadcast badge update event
     if (typeof window !== 'undefined') {
@@ -4390,19 +4415,21 @@ export const App: React.FC = () => {
         console.error('Error persisting user to Firestore:', err);
       });
       uploadAvatarToServer(updated.id, updated.nickname, newAvatarUrl || '').catch((err) => {
-        console.error('Error uploading avatar to central server storage:', err);
+        console.warn('Avatar upload server notice:', err);
       });
       pushServerDbSync({ users: [updated] }).catch((err) => {
-        console.error('Error syncing user profile to server DB:', err);
+        console.warn('User profile server DB sync notice:', err);
       });
     } catch (e) {
-      console.error('Error persisting user profile update:', e);
+      console.warn('User profile update persistence notice:', e);
     }
 
     // 4. Propagate updated avatar and nickname across existing user posts and comments
     const oldNick = currentNickClean;
     const newNick = cleanNewNick;
 
+    const syncedProfilePosts: Post[] = [];
+    let fullUpdatedPostsForServer: Post[] | null = null;
     setPosts((prev) => {
       const updatedPosts = prev.map((p) => {
         const pNick = (p.authorNickname || p.nickname || '').toLowerCase().replace(/^@/, '');
@@ -4413,18 +4440,26 @@ export const App: React.FC = () => {
             authorAvatarKey: newAvatarKey,
             authorAvatarUrl: newAvatarUrl,
           };
-          savePostToFirestore(updatedPost).catch(console.error);
+          syncedProfilePosts.push(updatedPost);
           return updatedPost;
         }
         return p;
       });
+      fullUpdatedPostsForServer = updatedPosts;
       try {
         localStorage.setItem('fuhsi_posts_db', JSON.stringify(updatedPosts));
-        pushServerDbSync({ posts: updatedPosts, replacePosts: true } as any).catch(console.error);
       } catch (e) {}
       return updatedPosts;
     });
+    setTimeout(() => {
+      syncedProfilePosts.forEach((p) => savePostToFirestore(p).catch((err) => console.warn('Firestore profile post sync notice:', err)));
+      if (fullUpdatedPostsForServer) {
+        pushServerDbSync({ posts: fullUpdatedPostsForServer, replacePosts: true } as any).catch((err) => console.warn('Server posts sync notice:', err));
+      }
+    }, 0);
 
+    const syncedProfileComments: Comment[] = [];
+    let fullUpdatedCommentsForServer: Comment[] | null = null;
     setComments((prev) => {
       const updatedComments = prev.map((c) => {
         const cNick = (c.authorNickname || '').toLowerCase().replace(/^@/, '');
@@ -4435,17 +4470,23 @@ export const App: React.FC = () => {
             authorAvatarKey: newAvatarKey,
             authorAvatarUrl: newAvatarUrl,
           };
-          saveCommentToFirestore(updatedComment).catch(console.error);
+          syncedProfileComments.push(updatedComment);
           return updatedComment;
         }
         return c;
       });
+      fullUpdatedCommentsForServer = updatedComments;
       try {
         localStorage.setItem('fuhsi_comments_db', JSON.stringify(updatedComments));
-        pushServerDbSync({ comments: updatedComments, replaceComments: true } as any).catch(console.error);
       } catch (e) {}
       return updatedComments;
     });
+    setTimeout(() => {
+      syncedProfileComments.forEach((c) => saveCommentToFirestore(c).catch((err) => console.warn('Firestore profile comment sync notice:', err)));
+      if (fullUpdatedCommentsForServer) {
+        pushServerDbSync({ comments: fullUpdatedCommentsForServer, replaceComments: true } as any).catch((err) => console.warn('Server comments sync notice:', err));
+      }
+    }, 0);
 
     // 5. Broadcast profile updated event
     try {
@@ -4533,7 +4574,7 @@ export const App: React.FC = () => {
     if (isNowFollowing) {
       const record = updatedFollows.find((f) => f.id === docId);
       if (record) {
-        saveFollowToFirestore(record).catch(console.error);
+        saveFollowToFirestore(record).catch((err) => console.warn('Firestore follow save notice:', err));
       }
       // Record aggregated follower notification for the target user (applies to both Student and Guest)
       try {
@@ -4549,10 +4590,10 @@ export const App: React.FC = () => {
           } as any);
         }
       } catch (err) {
-        console.error('Error recording follow notification:', err);
+        console.warn('Error recording follow notification:', err);
       }
     } else {
-      deleteFollowFromFirestore(docId).catch(console.error);
+      deleteFollowFromFirestore(docId).catch((err) => console.warn('Firestore unfollow notice:', err));
     }
   }, [userProfile?.nickname, allFollows]);
 

@@ -37,6 +37,39 @@ const FOLLOWS_COL = 'follows';
 const SETTINGS_COL = 'settings';
 const VERIFICATION_SETTINGS_DOC = 'verification_settings';
 
+let firestoreQuotaCircuitUntil = 0;
+
+export function isFirestoreQuotaError(err: any): boolean {
+  const code = String(err?.code || '').toLowerCase();
+  const msg = String(err?.message || err || '').toLowerCase();
+  return (
+    code.includes('resource-exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('free daily read units')
+  );
+}
+
+function noteFirestoreQuotaError(err: any): boolean {
+  if (isFirestoreQuotaError(err)) {
+    firestoreQuotaCircuitUntil = Math.max(firestoreQuotaCircuitUntil, Date.now() + 5 * 60 * 1000);
+    return true;
+  }
+  return false;
+}
+
+function isFirestoreQuotaCircuitActive(): boolean {
+  return Date.now() < firestoreQuotaCircuitUntil;
+}
+
+function logFirestoreIssue(context: string, err: any): void {
+  if (noteFirestoreQuotaError(err)) {
+    console.warn(`${context} (Firestore quota exceeded, using central server fallback):`, err?.message || err);
+    return;
+  }
+  console.warn(`${context}:`, err?.message || err);
+}
+
 /**
  * Subscribe to all users in Firestore in real-time
  */
@@ -77,6 +110,7 @@ export function subscribeUsers(onUpdate: (users: UserProfile[]) => void) {
     const deduplicated = mergeUsers([], list);
     onUpdate(deduplicated);
   }, (err) => {
+    noteFirestoreQuotaError(err);
     console.warn('Firestore users subscription fallback/warning:', err?.message || err);
   });
 }
@@ -99,6 +133,7 @@ export function subscribeDeletedUsers(onUpdate: (deletedList: { id?: string; nic
     });
     onUpdate(list);
   }, (err) => {
+    noteFirestoreQuotaError(err);
     console.warn('Firestore deleted_users subscription warning:', err?.message || err);
   });
 }
@@ -126,7 +161,7 @@ export async function cleanupModulaFirestoreDoc(): Promise<void> {
     await setDoc(doc(db, USERS_COL, 'usr_admin_modula'), cleanAdminData, { merge: true });
     await setDoc(doc(db, USERS_COL, 'modula'), cleanAdminData, { merge: true });
   } catch (err) {
-    console.error('Error cleaning up modula in Firestore:', err);
+    logFirestoreIssue('Error cleaning up modula in Firestore', err);
   }
 }
 
@@ -160,7 +195,7 @@ export async function saveUserToFirestore(user: UserProfile, oldNickname?: strin
       await cleanupModulaFirestoreDoc().catch(() => {});
     }
   } catch (err) {
-    console.error('Error saving user to Firestore:', err);
+    logFirestoreIssue('Error saving user to Firestore', err);
   }
 }
 
@@ -185,7 +220,7 @@ export async function saveUsersBatchToFirestore(users: UserProfile[]): Promise<v
     });
     await batch.commit();
   } catch (err) {
-    console.error('Error saving batch users to Firestore:', err);
+    logFirestoreIssue('Error saving batch users to Firestore', err);
   }
 }
 
@@ -193,6 +228,7 @@ export async function saveUsersBatchToFirestore(users: UserProfile[]): Promise<v
  * Fetch all registered users from Firestore database
  */
 export async function fetchUsersFromFirestore(): Promise<UserProfile[]> {
+  if (isFirestoreQuotaCircuitActive()) return [];
   try {
     const [snap, delSnap] = await Promise.all([
       getDocs(collection(db, USERS_COL)),
@@ -231,7 +267,7 @@ export async function fetchUsersFromFirestore(): Promise<UserProfile[]> {
     });
     return mergeUsers([], list);
   } catch (err) {
-    console.error('Error fetching users from Firestore:', err);
+    logFirestoreIssue('Error fetching users from Firestore', err);
     return [];
   }
 }
@@ -240,7 +276,7 @@ export async function fetchUsersFromFirestore(): Promise<UserProfile[]> {
  * Fetch a single user by id, nickname, or email from Firestore
  */
 export async function fetchUserFromFirestore(searchKey: string): Promise<UserProfile | null> {
-  if (!searchKey || !searchKey.trim()) return null;
+  if (!searchKey || !searchKey.trim() || isFirestoreQuotaCircuitActive()) return null;
   try {
     const cleanKey = searchKey.trim().toLowerCase().replace(/^@/, '');
     const users = await fetchUsersFromFirestore();
@@ -252,7 +288,7 @@ export async function fetchUserFromFirestore(searchKey: string): Promise<UserPro
     });
     return found || null;
   } catch (err) {
-    console.error('Error fetching single user from Firestore:', err);
+    logFirestoreIssue('Error fetching single user from Firestore', err);
     return null;
   }
 }
@@ -469,7 +505,7 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
       });
     } catch {}
   } catch (err) {
-    console.error('Error deleting user from Firestore:', err);
+    logFirestoreIssue('Error deleting user from Firestore', err);
   }
 }
 
@@ -481,7 +517,7 @@ export async function deleteCommentFromFirestore(commentId: string): Promise<voi
   try {
     await deleteDoc(doc(db, COMMENTS_COL, commentId));
   } catch (err) {
-    console.error('Error deleting comment from Firestore:', err);
+    logFirestoreIssue('Error deleting comment from Firestore', err);
   }
 }
 
@@ -493,7 +529,7 @@ export async function deleteDirectMessageFromFirestore(messageId: string): Promi
   try {
     await deleteDoc(doc(db, DIRECT_MESSAGES_COL, messageId));
   } catch (err) {
-    console.error('Error deleting direct message from Firestore:', err);
+    logFirestoreIssue('Error deleting direct message from Firestore', err);
   }
 }
 
@@ -505,7 +541,7 @@ export async function deleteReportFromFirestore(reportId: string): Promise<void>
   try {
     await deleteDoc(doc(db, REPORTS_COL, reportId));
   } catch (err) {
-    console.error('Error deleting report from Firestore:', err);
+    logFirestoreIssue('Error deleting report from Firestore', err);
   }
 }
 
@@ -535,6 +571,7 @@ export function subscribePosts(onUpdate: (posts: Post[]) => void) {
     list.sort((a, b) => new Date(b.createdAt || b.timestamp || 0).getTime() - new Date(a.createdAt || a.timestamp || 0).getTime());
     onUpdate(list);
   }, (err) => {
+    noteFirestoreQuotaError(err);
     console.warn('Firestore posts subscription fallback/warning:', err?.message || err);
   });
 }
@@ -543,7 +580,7 @@ export function subscribePosts(onUpdate: (posts: Post[]) => void) {
  * Fetch single post from Firestore by ID (deep-linking & sharing)
  */
 export async function getPostFromFirestore(postId: string): Promise<Post | null> {
-  if (!postId || isPostDeletedLocally(postId)) return null;
+  if (!postId || isPostDeletedLocally(postId) || isFirestoreQuotaCircuitActive()) return null;
   try {
     const snap = await getDoc(doc(db, POSTS_COL, postId));
     if (snap.exists()) {
@@ -558,7 +595,7 @@ export async function getPostFromFirestore(postId: string): Promise<Post | null>
       }
     }
   } catch (err) {
-    console.error('Error fetching post from Firestore:', err);
+    logFirestoreIssue('Error fetching post from Firestore', err);
   }
   return null;
 }
@@ -585,7 +622,7 @@ export async function savePostToFirestore(post: Post): Promise<boolean> {
     await setDoc(doc(db, POSTS_COL, post.id), cleanPost, { merge: true });
     return true;
   } catch (err) {
-    console.error('Error saving post to Firestore:', err);
+    logFirestoreIssue('Error saving post to Firestore', err);
     return false;
   }
 }
@@ -603,7 +640,7 @@ export async function updatePostCommentsCountInFirestore(postId: string, comment
       { merge: true }
     );
   } catch (err) {
-    console.error('Error updating post commentsCount in Firestore:', err);
+    logFirestoreIssue('Error updating post commentsCount in Firestore', err);
   }
 }
 
@@ -626,7 +663,7 @@ export async function togglePostLikeInFirestore(
   fallbackLikedBy?: string[]
 ): Promise<{ likedBy: string[]; likesCount: number; updatedAt: string } | null> {
   const cleanKey = normalizeLikeKey(userKey);
-  if (!postId || !cleanKey || isPostDeletedLocally(postId)) return null;
+  if (!postId || !cleanKey || isPostDeletedLocally(postId) || isFirestoreQuotaCircuitActive()) return null;
 
   const aliasSet = new Set<string>([cleanKey]);
   userAliases.forEach((a) => {
@@ -677,7 +714,7 @@ export async function togglePostLikeInFirestore(
     });
     return result;
   } catch (err) {
-    console.error('Error toggling post like in Firestore transaction:', err);
+    logFirestoreIssue('Error toggling post like in Firestore transaction', err);
     return null;
   }
 }
@@ -692,7 +729,7 @@ export async function toggleCommentLikeInFirestore(
   fallbackLikedBy?: string[]
 ): Promise<{ likedBy: string[]; likesCount: number; updatedAt: string } | null> {
   const cleanKey = normalizeLikeKey(userKey);
-  if (!commentId || !cleanKey || isCommentDeletedLocally(commentId)) return null;
+  if (!commentId || !cleanKey || isCommentDeletedLocally(commentId) || isFirestoreQuotaCircuitActive()) return null;
 
   const aliasSet = new Set<string>([cleanKey]);
   userAliases.forEach((a) => {
@@ -743,7 +780,7 @@ export async function toggleCommentLikeInFirestore(
     });
     return result;
   } catch (err) {
-    console.error('Error toggling comment like in Firestore transaction:', err);
+    logFirestoreIssue('Error toggling comment like in Firestore transaction', err);
     return null;
   }
 }
@@ -752,6 +789,7 @@ export async function toggleCommentLikeInFirestore(
  * Fetch all posts from Firestore (one-shot fallback/hydration)
  */
 export async function fetchPostsFromFirestore(): Promise<Post[]> {
+  if (isFirestoreQuotaCircuitActive()) return [];
   try {
     const snap = await getDocs(collection(db, POSTS_COL));
     const list: Post[] = [];
@@ -768,7 +806,7 @@ export async function fetchPostsFromFirestore(): Promise<Post[]> {
     });
     return list;
   } catch (err) {
-    console.error('Error fetching posts from Firestore:', err);
+    logFirestoreIssue('Error fetching posts from Firestore', err);
     return [];
   }
 }
@@ -777,6 +815,7 @@ export async function fetchPostsFromFirestore(): Promise<Post[]> {
  * Fetch all comments from Firestore (one-shot fallback/hydration)
  */
 export async function fetchCommentsFromFirestore(): Promise<Comment[]> {
+  if (isFirestoreQuotaCircuitActive()) return [];
   try {
     const snap = await getDocs(collection(db, COMMENTS_COL));
     const list: Comment[] = [];
@@ -790,7 +829,7 @@ export async function fetchCommentsFromFirestore(): Promise<Comment[]> {
     });
     return list;
   } catch (err) {
-    console.error('Error fetching comments from Firestore:', err);
+    logFirestoreIssue('Error fetching comments from Firestore', err);
     return [];
   }
 }
@@ -812,7 +851,7 @@ export async function deletePostFromFirestore(postId: string): Promise<void> {
       await batch.commit().catch(() => {});
     }
   } catch (err) {
-    console.error('Error deleting post from Firestore:', err);
+    logFirestoreIssue('Error deleting post from Firestore', err);
   }
 }
 
@@ -837,6 +876,7 @@ export function subscribeComments(onUpdate: (comments: Comment[]) => void) {
     list.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
     onUpdate(list);
   }, (err) => {
+    noteFirestoreQuotaError(err);
     console.warn('Firestore comments subscription fallback/warning:', err?.message || err);
   });
 }
@@ -862,7 +902,7 @@ export async function saveCommentToFirestore(comment: Comment): Promise<boolean>
     await setDoc(doc(db, COMMENTS_COL, comment.id), cleanComment, { merge: true });
     return true;
   } catch (err) {
-    console.error('Error saving comment to Firestore:', err);
+    logFirestoreIssue('Error saving comment to Firestore', err);
     return false;
   }
 }
@@ -884,6 +924,7 @@ export function subscribeMarketplaceApproved(onUpdate: (items: MarketplaceItem[]
       onUpdate(list);
     },
     (err) => {
+      noteFirestoreQuotaError(err);
       console.warn('Firestore marketplace subscription fallback/warning:', err?.message || err);
     }
   );
@@ -894,7 +935,7 @@ export async function saveMarketplaceApprovedToFirestore(item: MarketplaceItem):
   try {
     await setDoc(doc(db, MARKETPLACE_APPROVED_COL, item.id), sanitizeForFirestore(item), { merge: true });
   } catch (err) {
-    console.error('Error saving marketplace item to Firestore:', err);
+    logFirestoreIssue('Error saving marketplace item to Firestore', err);
   }
 }
 
@@ -904,7 +945,7 @@ export async function deleteMarketplaceApprovedFromFirestore(itemId: string): Pr
     await deleteDoc(doc(db, MARKETPLACE_APPROVED_COL, itemId));
     await deleteDoc(doc(db, MARKETPLACE_PENDING_COL, itemId));
   } catch (err) {
-    console.error('Error deleting marketplace item from Firestore:', err);
+    logFirestoreIssue('Error deleting marketplace item from Firestore', err);
   }
 }
 
@@ -931,6 +972,7 @@ export function subscribeVerificationRequests(onUpdate: (reqs: VerificationReque
       onUpdate(list);
     },
     (err) => {
+      noteFirestoreQuotaError(err);
       console.warn('Firestore verifications subscription fallback/warning:', err?.message || err);
     }
   );
@@ -941,7 +983,7 @@ export async function saveVerificationRequestToFirestore(req: VerificationReques
   try {
     await setDoc(doc(db, VERIFICATIONS_COL, req.id), sanitizeForFirestore(req), { merge: true });
   } catch (err) {
-    console.error('Error saving verification request to Firestore:', err);
+    logFirestoreIssue('Error saving verification request to Firestore', err);
   }
 }
 
@@ -956,7 +998,7 @@ export async function saveVerificationRequestsBatchToFirestore(reqs: Verificatio
     });
     await batch.commit();
   } catch (err) {
-    console.error('Error batch saving verification requests to Firestore:', err);
+    logFirestoreIssue('Error batch saving verification requests to Firestore', err);
   }
 }
 
@@ -965,12 +1007,12 @@ export async function deleteVerificationRequestFromFirestore(requestId: string):
   try {
     await deleteDoc(doc(db, VERIFICATIONS_COL, requestId));
   } catch (err) {
-    console.error('Error deleting verification request from Firestore:', err);
+    logFirestoreIssue('Error deleting verification request from Firestore', err);
   }
 }
 
 export async function fetchPostByIdFromFirestore(postId: string): Promise<Post | null> {
-  if (!postId) return null;
+  if (!postId || isFirestoreQuotaCircuitActive()) return null;
   try {
     const postRef = doc(db, POSTS_COL, postId);
     const snap = await getDoc(postRef);
@@ -981,14 +1023,9 @@ export async function fetchPostByIdFromFirestore(postId: string): Promise<Post |
       }
     }
   } catch (err) {
-    console.error('Error fetching post by ID from Firestore:', err);
+    logFirestoreIssue('Error fetching post by ID from Firestore', err);
   }
   return null;
-}
-
-function isFirestoreQuotaError(err: any): boolean {
-  const msg = String(err?.code || err?.message || err || '').toLowerCase();
-  return msg.includes('quota') || msg.includes('resource-exhausted');
 }
 
 let firestoreSeedCheckedThisSession = false;
@@ -997,7 +1034,7 @@ let firestoreSeedCheckedThisSession = false;
  * Initial seed check: if Firestore is empty, seed initial users & posts into Firestore
  */
 export async function seedFirestoreInitialDataIfNeeded(initialUsers: UserProfile[], initialPosts: Post[]) {
-  if (firestoreSeedCheckedThisSession) return;
+  if (firestoreSeedCheckedThisSession || isFirestoreQuotaCircuitActive()) return;
   try {
     if (typeof localStorage !== 'undefined' && localStorage.getItem('fuhsi_firestore_seeded_v1') === 'true') {
       firestoreSeedCheckedThisSession = true;
@@ -1029,7 +1066,7 @@ export async function seedFirestoreInitialDataIfNeeded(initialUsers: UserProfile
       }
     } catch {}
   } catch (err: any) {
-    if (isFirestoreQuotaError(err)) {
+    if (noteFirestoreQuotaError(err)) {
       console.warn('Firestore daily read quota exceeded; continuing with central server fallback:', err?.message || err);
     } else {
       console.warn('Initial Firestore seed check notice:', err?.message || err);
@@ -1046,31 +1083,31 @@ export async function purgeAllExceptAdminFromFirestore(): Promise<void> {
     usersSnap.forEach((docSnap) => {
       const data = docSnap.data() as UserProfile;
       if (!data.isAdmin && data.nickname !== '@modula') {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting user doc during purge', err));
       }
     });
 
     const postsSnap = await getDocs(collection(db, POSTS_COL));
-    postsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => console.error(err)));
+    postsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting post doc during purge', err)));
 
     const commentsSnap = await getDocs(collection(db, COMMENTS_COL));
-    commentsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => console.error(err)));
+    commentsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting comment doc during purge', err)));
 
     const mpApprovedSnap = await getDocs(collection(db, MARKETPLACE_APPROVED_COL));
-    mpApprovedSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => console.error(err)));
+    mpApprovedSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting approved marketplace doc during purge', err)));
 
     const mpPendingSnap = await getDocs(collection(db, MARKETPLACE_PENDING_COL));
-    mpPendingSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => console.error(err)));
+    mpPendingSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting pending marketplace doc during purge', err)));
 
     const verifsSnap = await getDocs(collection(db, VERIFICATIONS_COL));
-    verifsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => console.error(err)));
+    verifsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting verification doc during purge', err)));
 
     const reportsSnap = await getDocs(collection(db, REPORTS_COL));
-    reportsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => console.error(err)));
+    reportsSnap.forEach((docSnap) => deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting report doc during purge', err)));
 
     console.log('Successfully purged all non-admin data and posts from Firestore.');
   } catch (err) {
-    console.error('Error purging Firestore database:', err);
+    logFirestoreIssue('Error purging Firestore database', err);
   }
 }
 
@@ -1083,7 +1120,7 @@ export async function purgeDemoAccountsFromFirestore(): Promise<void> {
     usersSnap.forEach((docSnap) => {
       const data = docSnap.data() as UserProfile;
       if (isDemoUser(data) || isDemoNickname(data.nickname) || isDemoNickname(data.realName)) {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting demo user doc', err));
       }
     });
 
@@ -1091,7 +1128,7 @@ export async function purgeDemoAccountsFromFirestore(): Promise<void> {
     postsSnap.forEach((docSnap) => {
       const data = docSnap.data() as Post;
       if (isDemoPost(data) || isDemoNickname(data.authorNickname) || isDemoNickname(data.nickname)) {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting demo post doc', err));
       }
     });
 
@@ -1099,7 +1136,7 @@ export async function purgeDemoAccountsFromFirestore(): Promise<void> {
     commentsSnap.forEach((docSnap) => {
       const data = docSnap.data() as Comment;
       if (isDemoComment(data) || isDemoNickname(data.authorNickname) || isDemoNickname(data.replyToNickname)) {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting demo comment doc', err));
       }
     });
 
@@ -1107,7 +1144,7 @@ export async function purgeDemoAccountsFromFirestore(): Promise<void> {
     mpApprovedSnap.forEach((docSnap) => {
       const data = docSnap.data() as MarketplaceItem;
       if (isDemoMarketplaceItem(data) || isDemoNickname(data.sellerNickname)) {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting demo marketplace approved doc', err));
       }
     });
 
@@ -1115,7 +1152,7 @@ export async function purgeDemoAccountsFromFirestore(): Promise<void> {
     mpPendingSnap.forEach((docSnap) => {
       const data = docSnap.data() as MarketplaceItem;
       if (isDemoMarketplaceItem(data) || isDemoNickname(data.sellerNickname)) {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting demo marketplace pending doc', err));
       }
     });
 
@@ -1123,7 +1160,7 @@ export async function purgeDemoAccountsFromFirestore(): Promise<void> {
     verifsSnap.forEach((docSnap) => {
       const data = docSnap.data() as VerificationRequest;
       if (isDemoVerificationRequest(data) || isDemoNickname(data.applicantNickname)) {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting demo verification doc', err));
       }
     });
 
@@ -1131,13 +1168,13 @@ export async function purgeDemoAccountsFromFirestore(): Promise<void> {
     dmsSnap.forEach((docSnap) => {
       const data = docSnap.data() as DirectMessage;
       if (isDemoDirectMessage(data) || isDemoNickname(data.senderNickname) || isDemoNickname(data.receiverNickname)) {
-        deleteDoc(docSnap.ref).catch((err) => console.error(err));
+        deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting demo direct message doc', err));
       }
     });
 
     console.log('Successfully completed Firestore cleanup of demo accounts and content.');
   } catch (err) {
-    console.error('Error cleaning demo accounts from Firestore:', err);
+    logFirestoreIssue('Error cleaning demo accounts from Firestore', err);
   }
 }
 
@@ -1181,12 +1218,13 @@ export function subscribeDirectMessagesByConversation(
         onUpdate(list);
       },
       (err) => {
+        noteFirestoreQuotaError(err);
         console.warn(`Firestore direct messages subscription fallback for ${conversationId}:`, err?.message || err);
         if (onError) onError(err);
       }
     );
   } catch (err) {
-    console.error('Failed to create direct messages subscription:', err);
+    logFirestoreIssue('Failed to create direct messages subscription', err);
     if (onError) onError(err);
     return () => {};
   }
@@ -1205,7 +1243,7 @@ export async function saveDirectMessageToFirestore(msg: DirectMessage): Promise<
     await setDoc(doc(db, DIRECT_MESSAGES_COL, msg.id), cleanMsg, { merge: true });
     return true;
   } catch (err) {
-    console.error('Error saving direct message to Firestore:', err);
+    logFirestoreIssue('Error saving direct message to Firestore', err);
     return false;
   }
 }
@@ -1225,6 +1263,7 @@ export function subscribeVerificationFee(onUpdate: (fee: number) => void) {
       }
     },
     (err) => {
+      noteFirestoreQuotaError(err);
       console.warn('Firestore verification fee subscription warning:', err?.message || err);
     }
   );
@@ -1242,7 +1281,7 @@ export async function saveVerificationFeeToFirestore(fee: number): Promise<void>
       { merge: true }
     );
   } catch (err) {
-    console.error('Error saving verification fee to Firestore:', err);
+    logFirestoreIssue('Error saving verification fee to Firestore', err);
   }
 }
 
@@ -1264,6 +1303,7 @@ export function subscribeAllDirectMessages(onUpdate: (messages: DirectMessage[])
       onUpdate(list);
     },
     (err) => {
+      noteFirestoreQuotaError(err);
       console.warn('Firestore all direct messages subscription fallback/warning:', err?.message || err);
     }
   );
@@ -1288,6 +1328,7 @@ export function subscribeHelpDeskInquiries(onUpdate: (inquiries: HelpDeskInquiry
       onUpdate(list);
     },
     (err) => {
+      noteFirestoreQuotaError(err);
       console.warn('Firestore help desk inquiries subscription fallback/warning:', err?.message || err);
     }
   );
@@ -1301,7 +1342,7 @@ export async function saveHelpDeskInquiryToFirestore(inquiry: HelpDeskInquiry): 
   try {
     await setDoc(doc(db, HELPDESK_COL, inquiry.id), sanitizeForFirestore(inquiry), { merge: true });
   } catch (err) {
-    console.error('Error saving Help Desk inquiry to Firestore:', err);
+    logFirestoreIssue('Error saving Help Desk inquiry to Firestore', err);
   }
 }
 
@@ -1321,7 +1362,7 @@ export async function updateHelpDeskInquiryStatus(inquiryId: string, status: 'PE
       { merge: true }
     );
   } catch (err) {
-    console.error('Error updating Help Desk inquiry status:', err);
+    logFirestoreIssue('Error updating Help Desk inquiry status', err);
   }
 }
 
@@ -1348,6 +1389,7 @@ export function subscribeFollows(onUpdate: (follows: FollowRecord[]) => void) {
       onUpdate(list);
     },
     (err) => {
+      noteFirestoreQuotaError(err);
       console.warn('Firestore follows subscription fallback/warning:', err?.message || err);
     }
   );
@@ -1362,7 +1404,7 @@ export async function saveFollowToFirestore(follow: FollowRecord): Promise<void>
   try {
     await setDoc(doc(db, FOLLOWS_COL, follow.id), sanitizeForFirestore(follow), { merge: true });
   } catch (err) {
-    console.error('Error saving follow relationship to Firestore:', err);
+    logFirestoreIssue('Error saving follow relationship to Firestore', err);
   }
 }
 
@@ -1374,7 +1416,7 @@ export async function deleteFollowFromFirestore(docId: string): Promise<void> {
   try {
     await deleteDoc(doc(db, FOLLOWS_COL, docId));
   } catch (err) {
-    console.error('Error deleting follow relationship from Firestore:', err);
+    logFirestoreIssue('Error deleting follow relationship from Firestore', err);
   }
 }
 
@@ -1397,11 +1439,12 @@ export function subscribeChatGroups(onUpdate: (groups: ChatGroup[]) => void) {
         onUpdate(list);
       },
       (err) => {
+        noteFirestoreQuotaError(err);
         console.warn('Firestore chat groups subscription warning:', err?.message || err);
       }
     );
   } catch (err) {
-    console.error('Failed to subscribe to chat groups:', err);
+    logFirestoreIssue('Failed to subscribe to chat groups', err);
     return () => {};
   }
 }
@@ -1419,7 +1462,7 @@ export async function saveChatGroupToFirestore(group: ChatGroup): Promise<boolea
     await setDoc(doc(db, CHAT_GROUPS_COL, group.id), cleanGroup, { merge: true });
     return true;
   } catch (err) {
-    console.error('Error saving chat group to Firestore:', err);
+    logFirestoreIssue('Error saving chat group to Firestore', err);
     return false;
   }
 }
@@ -1432,7 +1475,7 @@ export async function deleteChatGroupFromFirestore(groupId: string): Promise<voi
   try {
     await deleteDoc(doc(db, CHAT_GROUPS_COL, groupId));
   } catch (err) {
-    console.error('Error deleting chat group from Firestore:', err);
+    logFirestoreIssue('Error deleting chat group from Firestore', err);
   }
 }
 
@@ -1474,7 +1517,7 @@ export async function saveNotificationToFirestore(
     await setDoc(doc(db, NOTIFICATIONS_COL, notif.id), cleanNotif, { merge: true });
     return true;
   } catch (err) {
-    console.error('Error saving notification to Firestore:', err);
+    logFirestoreIssue('Error saving notification to Firestore', err);
     return false;
   }
 }
@@ -1525,11 +1568,12 @@ export function subscribeUserNotifications(
         onUpdate(list);
       },
       (err) => {
+        noteFirestoreQuotaError(err);
         console.warn('Firestore user notifications subscription warning:', err?.message || err);
       }
     );
   } catch (err) {
-    console.error('Failed to subscribe to user notifications:', err);
+    logFirestoreIssue('Failed to subscribe to user notifications', err);
     return () => {};
   }
 }

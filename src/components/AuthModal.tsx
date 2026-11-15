@@ -374,11 +374,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       try {
         await Promise.all([
-          saveUserToFirestore(newUserProfile).catch(console.error),
-          pushServerDbSync({ users: [newUserProfile], unDeleteUserNicknames: [cleanNickname], unDeleteUserIds: [newUserProfile.id] } as any).catch(console.error),
+          saveUserToFirestore(newUserProfile).catch((err) => console.warn('Registration Firestore sync notice:', err)),
+          pushServerDbSync({ users: [newUserProfile], unDeleteUserNicknames: [cleanNickname], unDeleteUserIds: [newUserProfile.id] } as any).catch((err) => console.warn('Registration server sync notice:', err)),
         ]);
       } catch (syncErr) {
-        console.error('Registration background sync notice:', syncErr);
+        console.warn('Registration background sync notice:', syncErr);
       }
 
       try {
@@ -942,8 +942,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           updatedAt: new Date().toISOString(),
         };
         upsertUser(updatedUser);
-        saveUserToFirestore(updatedUser).catch(console.error);
-        pushServerDbSync({ users: [updatedUser] }).catch(console.error);
+        saveUserToFirestore(updatedUser).catch((err) => console.warn('Password reset Firestore sync notice:', err));
+        pushServerDbSync({ users: [updatedUser] }).catch((err) => console.warn('Password reset server sync notice:', err));
       }
 
       setResetSuccessMessage('✓ Password reset successfully! Your new password is now active. Please sign in below.');
