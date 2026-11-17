@@ -29,11 +29,23 @@ import {
   isDemoDirectMessage,
   isDemoNickname,
 } from './src/utils/postGenerator';
+import { MAINTENANCE_MODE, MAINTENANCE_MESSAGE } from './src/config/maintenance';
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+app.use('/api', (_req, res, next) => {
+  if (MAINTENANCE_MODE) {
+    return res.status(503).json({
+      success: false,
+      maintenance: true,
+      error: MAINTENANCE_MESSAGE,
+    });
+  }
+  next();
+});
 
 // Central Server Database Persistence File
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
@@ -897,12 +909,14 @@ async function syncFirestoreToActiveDb() {
 }
 
 // Only hydrate from Firestore on cold startup when local DB lacks users/posts, and avoid aggressive background polling that burns daily Firestore read quotas
-if ((activeDb.users || []).length <= 1 || (activeDb.posts || []).length === 0) {
-  syncFirestoreToActiveDb().catch(() => {});
+if (!MAINTENANCE_MODE) {
+  if ((activeDb.users || []).length <= 1 || (activeDb.posts || []).length === 0) {
+    syncFirestoreToActiveDb().catch(() => {});
+  }
+  setInterval(() => {
+    syncFirestoreToActiveDb().catch(() => {});
+  }, 30 * 60 * 1000);
 }
-setInterval(() => {
-  syncFirestoreToActiveDb().catch(() => {});
-}, 30 * 60 * 1000);
 
 // Central DB API Endpoints
 app.get('/api/db', (req, res) => {

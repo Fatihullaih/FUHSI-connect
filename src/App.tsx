@@ -100,6 +100,8 @@ import { getUserNotifications, getReadNotificationIds, setReadNotificationId, ge
 import { mergeFirestoreGroupsIntoStorage } from './utils/groupUtils';
 import { updateActiveUserPresence } from './utils/presenceUtils';
 import { isUserMatchingAudience } from './utils/audienceUtils';
+import { MAINTENANCE_MODE } from './config/maintenance';
+import { MaintenanceScreen } from './components/MaintenanceScreen';
 
 const reconcilePostAuthorWithUsers = (post: Post, usersList: UserProfile[]): Post => {
   if (!post || !Array.isArray(usersList) || usersList.length === 0) return post;
@@ -174,7 +176,7 @@ const reconcileCommentAuthorWithUsers = (comment: Comment, usersList: UserProfil
   return changed ? nextComment : comment;
 };
 
-export const App: React.FC = () => {
+const FullApp: React.FC = () => {
   // Navigation State
   const [navIndex, setNavIndex] = useState(0);
   const [showPwaModal, setShowPwaModal] = useState(false);
@@ -6004,4 +6006,11 @@ export const App: React.FC = () => {
       </nav>
     </div>
   );
+};
+
+export const App: React.FC = () => {
+  if (MAINTENANCE_MODE) {
+    return <MaintenanceScreen />;
+  }
+  return <FullApp />;
 };
