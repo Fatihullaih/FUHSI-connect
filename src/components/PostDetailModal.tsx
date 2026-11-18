@@ -501,10 +501,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               (userProfile?.id && authorUser?.id && userProfile.id === authorUser.id)
             );
             const displayPostAuthorNick = (isMyPost ? userProfile?.nickname : undefined) || authorUser?.nickname || post.authorNickname;
-            const isModulaAdmin = Boolean(
-              isModulaAccount(userProfile) ||
-              (typeof localStorage !== 'undefined' && isModulaAccount(localStorage.getItem('fuhsi_active_user')))
-            );
+            const isModulaAdmin = Boolean(isModulaAccount(userProfile));
             const postAvatarKey = (isMyPost ? userProfile?.avatarKey : undefined) || authorUser?.avatarKey || post.authorAvatarKey || '1';
             const postAvatarUrl = (isMyPost ? userProfile?.avatarUrl : undefined) ?? authorUser?.avatarUrl ?? post.authorAvatarUrl;
 

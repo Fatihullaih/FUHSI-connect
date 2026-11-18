@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   setDoc,
   deleteDoc,
   onSnapshot,
@@ -13,11 +14,12 @@ import {
   arrayUnion,
   limit
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import { UserProfile, Post, Comment, MarketplaceItem, VerificationRequest, Report, DirectMessage, HelpDeskInquiry, FollowRecord, ChatGroup, CampusNotification } from '../types';
 import { isDemoUser, isDemoPost, isDemoNickname, isDemoComment, isDemoVerificationRequest, isDemoMarketplaceItem, isDemoDirectMessage } from '../utils/postGenerator';
 import { isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
 import { mergeUsers, isPostDeletedLocally, isCommentDeletedLocally } from '../utils/apiSync';
+import { authFetch } from '../utils/authSession';
 
 // Collection references
 const USERS_COL = 'users';
@@ -62,9 +64,89 @@ function isFirestoreQuotaCircuitActive(): boolean {
   return Date.now() < firestoreQuotaCircuitUntil;
 }
 
-function logFirestoreIssue(context: string, err: any): void {
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+function buildFirestoreErrorInfo(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): FirestoreErrorInfo {
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+      emailVerified: auth?.currentUser?.emailVerified,
+      isAnonymous: auth?.currentUser?.isAnonymous,
+      tenantId: auth?.currentUser?.tenantId,
+      providerInfo:
+        auth?.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const errInfo = buildFirestoreErrorInfo(error, operationType, path);
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+export async function testConnection(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+
+void testConnection();
+
+function logFirestoreIssue(context: string, err: any, operationType: OperationType = OperationType.WRITE, path: string | null = null): void {
   if (noteFirestoreQuotaError(err)) {
     console.warn(`${context} (Firestore quota exceeded, using central server fallback):`, err?.message || err);
+    return;
+  }
+  const msg = String(err?.message || err || '').toLowerCase();
+  const code = String(err?.code || '').toLowerCase();
+  if (code.includes('permission-denied') || msg.includes('missing or insufficient permissions')) {
+    const errInfo = buildFirestoreErrorInfo(err, operationType, path);
+    console.warn('Firestore Error:', JSON.stringify(errInfo));
     return;
   }
   console.warn(`${context}:`, err?.message || err);
@@ -165,13 +247,21 @@ export async function cleanupModulaFirestoreDoc(): Promise<void> {
   }
 }
 
+function stripSecretUserFieldsForFirestore(user: UserProfile): any {
+  const copy: any = { ...(user || {}) };
+  delete copy.password;
+  delete copy.savedPassword;
+  delete copy.passwordHash;
+  return copy;
+}
+
 /**
  * Save single user to Firestore
  */
 export async function saveUserToFirestore(user: UserProfile, oldNickname?: string): Promise<void> {
   if (!user || (!user.id && !user.nickname) || isDemoUser(user) || isDemoNickname(user.nickname)) return;
   const isMod = isModulaAccount(user);
-  const targetUser = isMod ? sanitizeModulaProfile(user) : user;
+  const targetUser = stripSecretUserFieldsForFirestore(isMod ? sanitizeModulaProfile(user) : user);
   const docId = targetUser.id || targetUser.nickname.toLowerCase().replace(/[^a-z0-9_]/g, '');
   const cleanUser = sanitizeForFirestore({ 
     ...targetUser, 
@@ -195,7 +285,7 @@ export async function saveUserToFirestore(user: UserProfile, oldNickname?: strin
       await cleanupModulaFirestoreDoc().catch(() => {});
     }
   } catch (err) {
-    logFirestoreIssue('Error saving user to Firestore', err);
+    logFirestoreIssue('Error saving user to Firestore', err, OperationType.WRITE, `${USERS_COL}/${docId}`);
   }
 }
 
@@ -209,7 +299,7 @@ export async function saveUsersBatchToFirestore(users: UserProfile[]): Promise<v
     const batch = writeBatch(db);
     const nowIso = new Date().toISOString();
     nonDemoUsers.forEach((rawUser) => {
-      const user = isModulaAccount(rawUser) ? sanitizeModulaProfile(rawUser) : rawUser;
+      const user = stripSecretUserFieldsForFirestore(isModulaAccount(rawUser) ? sanitizeModulaProfile(rawUser) : rawUser);
       const docId = user.id || user.nickname.toLowerCase().replace(/[^a-z0-9_]/g, '');
       const cleanUser = sanitizeForFirestore({ 
         ...user, 
@@ -220,7 +310,7 @@ export async function saveUsersBatchToFirestore(users: UserProfile[]): Promise<v
     });
     await batch.commit();
   } catch (err) {
-    logFirestoreIssue('Error saving batch users to Firestore', err);
+    logFirestoreIssue('Error saving batch users to Firestore', err, OperationType.WRITE, USERS_COL);
   }
 }
 
@@ -498,7 +588,7 @@ export async function deleteUserFromFirestore(userId: string, nickname?: string,
 
     // Notify server to ensure central database and disk storage are also pruned synchronously
     try {
-      await fetch('/api/user/delete', {
+      await authFetch('/api/user/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, nickname: cleanNick, studentEmail: cleanEmail }),

@@ -9,9 +9,10 @@ import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { FUHSI_DEPARTMENTS } from '../components/AuthModal';
 import { AdminTradeDesk } from '../components/AdminTradeDesk';
 import { AdminChatReportsDesk } from '../components/AdminChatReportsDesk';
-import { INITIAL_VERIFICATION_CANDIDATES, INITIAL_USER_PROFILE } from '../data/initialData';
-import { sendUserNotification, sendBroadcastNotification, normalizeNickname, formatMessageTime } from '../utils/messagingUtils';
+import { INITIAL_VERIFICATION_CANDIDATES } from '../data/initialData';
+import { sendUserNotification, sendBroadcastNotification, normalizeNickname } from '../utils/messagingUtils';
 import { useAdminPendingCounts } from '../utils/adminAlertUtils';
+import { authFetch } from '../utils/authSession';
 
 interface ModerationScreenProps {
   userProfile?: UserProfile | null;
@@ -99,6 +100,118 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       console.error(e);
     }
   }, [verifCandidates]);
+
+  // Security Audit & Session Control Console state
+  const [auditLogsList, setAuditLogsList] = useState<Array<{
+    id?: string;
+    timestamp: string;
+    event: string;
+    actorId?: string;
+    actorNickname?: string;
+    ip?: string;
+    status: string;
+    details: string;
+  }>>([]);
+  const [activeSessionsList, setActiveSessionsList] = useState<Array<{
+    sessionIdPrefix: string;
+    userId: string;
+    isAdmin: boolean;
+    createdAt: string;
+    expiresAt: string;
+    ip?: string;
+    userAgent?: string;
+  }>>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [currentAdminPassword, setCurrentAdminPassword] = useState('');
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [confirmNewAdminPassword, setConfirmNewAdminPassword] = useState('');
+  const [securityActionStatus, setSecurityActionStatus] = useState<string | null>(null);
+  const [securityActionError, setSecurityActionError] = useState<string | null>(null);
+  const [isRotatingPassword, setIsRotatingPassword] = useState(false);
+
+  const loadSecurityAuditLogs = async () => {
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const res = await authFetch('/api/admin/audit-logs');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        setAuditError(data?.error || 'Could not load server audit logs.');
+        return;
+      }
+      setAuditLogsList(Array.isArray(data.logs) ? data.logs : []);
+      setActiveSessionsList(Array.isArray(data.activeSessions) ? data.activeSessions : []);
+    } catch {
+      setAuditError('Network error while contacting backend audit endpoint.');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadSecurityAuditLogs();
+  }, []);
+
+  const handleRotateAdminPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecurityActionError(null);
+    setSecurityActionStatus(null);
+    if (!currentAdminPassword || newAdminPassword.trim().length < 10) {
+      setSecurityActionError('Enter current password and a new password of at least 10 characters.');
+      return;
+    }
+    if (newAdminPassword !== confirmNewAdminPassword) {
+      setSecurityActionError('New passwords do not match.');
+      return;
+    }
+    setIsRotatingPassword(true);
+    try {
+      const res = await authFetch('/api/admin/rotate-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: currentAdminPassword,
+          newPassword: newAdminPassword.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        setSecurityActionError(data?.error || 'Failed to rotate password.');
+        return;
+      }
+      setCurrentAdminPassword('');
+      setNewAdminPassword('');
+      setConfirmNewAdminPassword('');
+      setSecurityActionStatus('Admin password rotated and all existing Admin sessions revoked. Please sign in again.');
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('fuhsi_session_expired'));
+      }, 900);
+    } catch {
+      setSecurityActionError('Network error rotating Admin password.');
+    } finally {
+      setIsRotatingPassword(false);
+    }
+  };
+
+  const handleRevokeAllAdminSessions = async () => {
+    setSecurityActionError(null);
+    setSecurityActionStatus(null);
+    try {
+      const res = await authFetch('/api/auth/logout-all', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        setSecurityActionError(data?.error || 'Could not revoke sessions.');
+        return;
+      }
+      setSecurityActionStatus(`Revoked ${data.revokedCount || 1} active session(s). Signing out...`);
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('fuhsi_session_expired'));
+      }, 700);
+    } catch {
+      setSecurityActionError('Network error revoking active sessions.');
+    }
+  };
 
   // Identity Lookup State
   const [lookupQuery, setLookupQuery] = useState('');
@@ -765,6 +878,122 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
               Admin Trade Desk, Student Verification Vault & Content Moderation Console
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* ADMIN SECURITY, AUDIT LOGS & SESSION CONTROL */}
+      <div id="security-audit-desk" className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+              <Key className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="font-extrabold text-slate-900 text-sm">Admin Security, Session Revocation & Audit Logs</h2>
+              <p className="text-[11px] text-slate-500">
+                Server-verified sessions ({activeSessionsList.length} active) & tamper-logged RBAC security events.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void loadSecurityAuditLogs()}
+              disabled={auditLoading}
+              className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw size={12} className={auditLoading ? 'animate-spin' : ''} />
+              <span>Refresh Logs</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRevokeAllAdminSessions()}
+              className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <Lock size={12} />
+              <span>Revoke All Admin Sessions</span>
+            </button>
+          </div>
+        </div>
+
+        {securityActionStatus && (
+          <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold">
+            {securityActionStatus}
+          </div>
+        )}
+        {securityActionError && (
+          <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">
+            {securityActionError}
+          </div>
+        )}
+
+        <form onSubmit={handleRotateAdminPassword} className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+          <input
+            type="password"
+            value={currentAdminPassword}
+            onChange={(e) => setCurrentAdminPassword(e.target.value)}
+            placeholder="Current Admin Password"
+            className="rounded-xl border border-slate-300 px-3 py-2 bg-white text-slate-900"
+            required
+          />
+          <input
+            type="password"
+            value={newAdminPassword}
+            onChange={(e) => setNewAdminPassword(e.target.value)}
+            placeholder="New Password (10+ chars)"
+            className="rounded-xl border border-slate-300 px-3 py-2 bg-white text-slate-900"
+            required
+          />
+          <input
+            type="password"
+            value={confirmNewAdminPassword}
+            onChange={(e) => setConfirmNewAdminPassword(e.target.value)}
+            placeholder="Confirm New Password"
+            className="rounded-xl border border-slate-300 px-3 py-2 bg-white text-slate-900"
+            required
+          />
+          <button
+            type="submit"
+            disabled={isRotatingPassword}
+            className="rounded-xl bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 text-white font-extrabold px-3 py-2 cursor-pointer"
+          >
+            {isRotatingPassword ? 'Rotating...' : 'Rotate Password'}
+          </button>
+        </form>
+
+        {auditError && (
+          <div className="text-xs text-rose-700 font-semibold">{auditError}</div>
+        )}
+
+        <div className="max-h-56 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl text-[11px]">
+          {auditLogsList.length === 0 ? (
+            <div className="p-4 text-center text-slate-400 italic">No security audit events loaded yet.</div>
+          ) : (
+            auditLogsList.slice(0, 40).map((entry, idx) => (
+              <div key={entry.id || `${entry.timestamp}_${idx}`} className="p-2.5 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span
+                      className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
+                        entry.status === 'DENY' || entry.status === 'CRITICAL'
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-emerald-100 text-emerald-800'
+                      }`}
+                    >
+                      {entry.status}
+                    </span>
+                    <span className="font-mono font-bold text-slate-900">{entry.event}</span>
+                    {entry.actorNickname && (
+                      <span className="text-slate-600 font-semibold">{entry.actorNickname}</span>
+                    )}
+                    {entry.ip && <span className="text-slate-400 font-mono">{entry.ip}</span>}
+                  </div>
+                  <p className="text-slate-600 mt-0.5 break-words">{entry.details}</p>
+                </div>
+                <span className="text-slate-400 font-mono shrink-0">{entry.timestamp.slice(0, 19).replace('T', ' ')}</span>
+              </div>
+            ))
+          )}
         </div>
       </div>
 

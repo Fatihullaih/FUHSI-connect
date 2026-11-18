@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_SERVER_DB } from './src/data/serverDefaults';
 import {
@@ -32,12 +32,286 @@ import {
 import { MAINTENANCE_MODE, MAINTENANCE_MESSAGE } from './src/config/maintenance';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
+const DEFAULT_DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.FUHSI_DATA_DIR
+  ? path.resolve(process.env.FUHSI_DATA_DIR)
+  : DEFAULT_DATA_DIR;
+
+// Security invariant: port 3000 with production data NEVER bypasses MAINTENANCE_MODE.
+// Isolated security verification runs on a separate port and temporary DATA_DIR.
+const IS_ISOLATED_TEST_INSTANCE =
+  PORT !== 3000 &&
+  DATA_DIR !== DEFAULT_DATA_DIR &&
+  process.env.FUHSI_TEST_BYPASS_MAINTENANCE === '1';
+
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+const AVATARS_DIR = path.join(DATA_DIR, 'avatars');
+const SECRETS_FILE = path.join(DATA_DIR, 'auth_secrets.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const AUDIT_LOGS_FILE = path.join(DATA_DIR, 'audit_logs.json');
+const ROTATED_SECRET_NOTICE_FILE = path.join(DATA_DIR, 'rotated_admin_secret_ONCE.txt');
+
+const SESSION_COOKIE_NAME = 'fuhsi_session';
+const ADMIN_SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const STUDENT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+const RESERVED_HANDLES = new Set([
+  'modula',
+  'admin',
+  'administrator',
+  'superadmin',
+  'fuhsiadmin',
+  'root',
+  'system',
+  'support',
+  'usr_admin_modula',
+  'anon',
+  'anonymous',
+]);
+
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '10mb' }));
 
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+if (!fs.existsSync(AVATARS_DIR)) {
+  try {
+    fs.mkdirSync(AVATARS_DIR, { recursive: true });
+  } catch (e) {
+    console.error('Failed to create avatars directory:', e);
+  }
+}
+
+// ============================================================================
+// CRYPTOGRAPHY, SESSIONS, AND AUDIT LOGGING
+// ============================================================================
+
+interface SessionRecord {
+  sessionId: string;
+  userId: string;
+  isAdmin: boolean;
+  sessionVersion: number;
+  createdAt: number;
+  expiresAt: number;
+  revokedAt?: number;
+  ip?: string;
+  userAgent?: string;
+}
+
+interface AuditLogEntry {
+  id: string;
+  timestamp: string;
+  event: string;
+  actorId: string;
+  actorNickname: string;
+  actorIsAdmin: boolean;
+  targetId?: string;
+  ip: string;
+  userAgent: string;
+  status: 'ALLOW' | 'DENY' | 'INFO';
+  details?: string;
+}
+
+function hashPassword(plain: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(plain, salt, 64).toString('hex');
+  return `scrypt$${salt}$${derived}`;
+}
+
+function verifyPassword(plain: string, storedHash?: string | null): boolean {
+  if (!plain || !storedHash || typeof storedHash !== 'string') return false;
+  const parts = storedHash.split('$');
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+  const [, salt, hexHash] = parts;
+  if (!salt || !hexHash) return false;
+  try {
+    const expectedBuf = Buffer.from(hexHash, 'hex');
+    const actualBuf = crypto.scryptSync(plain, salt, 64);
+    if (expectedBuf.length !== actualBuf.length) return false;
+    return crypto.timingSafeEqual(expectedBuf, actualBuf);
+  } catch {
+    return false;
+  }
+}
+
+function loadOrCreateHmacSecret(): string {
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length >= 32) {
+    return process.env.SESSION_SECRET.trim();
+  }
+  try {
+    if (fs.existsSync(SECRETS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(SECRETS_FILE, 'utf-8'));
+      if (parsed && typeof parsed.hmacSecret === 'string' && parsed.hmacSecret.length >= 32) {
+        return parsed.hmacSecret;
+      }
+    }
+  } catch (e) {
+    console.warn('[Secrets] Could not read auth_secrets.json, regenerating:', e);
+  }
+  const hmacSecret = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(SECRETS_FILE, JSON.stringify({ hmacSecret, createdAt: new Date().toISOString() }, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+  } catch (e) {
+    console.error('[Secrets] Failed saving auth_secrets.json:', e);
+  }
+  return hmacSecret;
+}
+
+const HMAC_SECRET = loadOrCreateHmacSecret();
+
+const sessionsMap = new Map<string, SessionRecord>();
+
+function loadSessionsFromDisk(): void {
+  try {
+    if (fs.existsSync(SESSIONS_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf-8'));
+      if (Array.isArray(raw)) {
+        const now = Date.now();
+        for (const s of raw) {
+          if (s && s.sessionId && s.userId && now < (s.expiresAt || 0) + 24 * 60 * 60 * 1000) {
+            sessionsMap.set(String(s.sessionId), s);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Sessions] Failed loading sessions.json:', e);
+  }
+}
+
+function persistSessionsToDisk(): void {
+  try {
+    const now = Date.now();
+    const list = Array.from(sessionsMap.values()).filter(
+      (s) => now < s.expiresAt + 24 * 60 * 60 * 1000
+    );
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(list, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  } catch (e) {
+    console.error('[Sessions] Failed persisting sessions.json:', e);
+  }
+}
+
+loadSessionsFromDisk();
+
+let auditLogs: AuditLogEntry[] = [];
+try {
+  if (fs.existsSync(AUDIT_LOGS_FILE)) {
+    const parsedLogs = JSON.parse(fs.readFileSync(AUDIT_LOGS_FILE, 'utf-8'));
+    if (Array.isArray(parsedLogs)) auditLogs = parsedLogs.slice(-2000);
+  }
+} catch {}
+
+function appendAuditLog(entry: Omit<AuditLogEntry, 'id' | 'timestamp'>): void {
+  try {
+    const fullEntry: AuditLogEntry = {
+      id: `aud_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+      timestamp: new Date().toISOString(),
+      ...entry,
+    };
+    auditLogs.push(fullEntry);
+    if (auditLogs.length > 2000) {
+      auditLogs = auditLogs.slice(-2000);
+    }
+    fs.writeFileSync(AUDIT_LOGS_FILE, JSON.stringify(auditLogs, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+  } catch (e) {
+    console.warn('[Audit] Failed writing audit_logs.json:', e);
+  }
+}
+
+function getClientIp(req: express.Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) {
+    return xff.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function getUserAgent(req: express.Request): string {
+  return String(req.headers['user-agent'] || '').slice(0, 220);
+}
+
+function signSessionToken(sessionId: string): string {
+  const sig = crypto.createHmac('sha256', HMAC_SECRET).update(sessionId).digest('hex');
+  return `${sessionId}.${sig}`;
+}
+
+function parseCookies(req: express.Request): Record<string, string> {
+  const header = req.headers.cookie;
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  header.split(';').forEach((part) => {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx <= 0) return;
+    const key = part.slice(0, eqIdx).trim();
+    const val = part.slice(eqIdx + 1).trim();
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  });
+  return out;
+}
+
+function extractRequestToken(req: express.Request): string {
+  const auth = req.headers.authorization;
+  if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
+    const bearer = auth.slice(7).trim();
+    if (bearer) return bearer;
+  }
+  const cookies = parseCookies(req);
+  if (cookies[SESSION_COOKIE_NAME]) {
+    return cookies[SESSION_COOKIE_NAME];
+  }
+  return '';
+}
+
+function isHttpsRequest(req: express.Request): boolean {
+  const proto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  return Boolean(req.secure || proto.includes('https'));
+}
+
+function setSessionCookie(req: express.Request, res: express.Response, token: string, maxAgeMs: number): void {
+  const maxAgeSec = Math.max(60, Math.floor(maxAgeMs / 1000));
+  const parts = [
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    `Max-Age=${maxAgeSec}`,
+  ];
+  if (isHttpsRequest(req)) {
+    parts.push('SameSite=None', 'Secure');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearSessionCookie(req: express.Request, res: express.Response): void {
+  const parts = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'Max-Age=0'];
+  if (isHttpsRequest(req)) {
+    parts.push('SameSite=None', 'Secure');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+// ============================================================================
+// MAINTENANCE GATE
+// ============================================================================
+
 app.use('/api', (_req, res, next) => {
-  if (MAINTENANCE_MODE) {
+  if (MAINTENANCE_MODE && !IS_ISOLATED_TEST_INSTANCE) {
     return res.status(503).json({
       success: false,
       maintenance: true,
@@ -47,19 +321,32 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 
-// Central Server Database Persistence File
-const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
-const AVATARS_DIR = path.join(process.cwd(), 'data', 'avatars');
-
-if (!fs.existsSync(AVATARS_DIR)) {
-  try {
-    fs.mkdirSync(AVATARS_DIR, { recursive: true });
-  } catch (e) {
-    console.error('Failed to create avatars directory:', e);
-  }
-}
+// ============================================================================
+// SERVER DATABASE INITIALIZATION & STARTUP SECURITY MIGRATION
+// ============================================================================
 
 let activeDb: typeof DEFAULT_SERVER_DB = { ...DEFAULT_SERVER_DB };
+
+function normalizeServerHandle(nick?: any): string {
+  if (!nick || typeof nick !== 'string') return '';
+  return nick.trim().toLowerCase().replace(/^@+/, '');
+}
+
+function isReservedHandle(cleanHandle: string): boolean {
+  const clean = normalizeServerHandle(cleanHandle);
+  if (!clean) return true;
+  if (RESERVED_HANDLES.has(clean)) return true;
+  if (clean.includes('anonymous') || clean.includes('anon')) return true;
+  return false;
+}
+
+function stripPlaintextPasswordsFromUser(u: any): any {
+  if (!u || typeof u !== 'object') return u;
+  const copy = { ...u };
+  delete copy.password;
+  delete copy.savedPassword;
+  return copy;
+}
 
 function sanitizeServerDb(dbObj: typeof DEFAULT_SERVER_DB): typeof DEFAULT_SERVER_DB {
   const deletedPostSet = new Set((dbObj.deletedPostIds || []).map((id: any) => String(id)));
@@ -68,9 +355,17 @@ function sanitizeServerDb(dbObj: typeof DEFAULT_SERVER_DB): typeof DEFAULT_SERVE
     ...dbObj,
     deletedPostIds: Array.from(deletedPostSet),
     deletedCommentIds: Array.from(deletedCommentSet),
-    users: (dbObj.users || []).filter((u: any) => !isDemoUser(u) && !isDemoNickname(u.nickname)),
+    users: (dbObj.users || [])
+      .filter((u: any) => !isDemoUser(u) && !isDemoNickname(u.nickname))
+      .map((u: any) => stripPlaintextPasswordsFromUser(u)),
     posts: (dbObj.posts || []).filter((p: any) => !isDemoPost(p) && !deletedPostSet.has(String(p.id))),
-    comments: (dbObj.comments || []).filter((c: any) => !isDemoComment(c) && !deletedPostSet.has(String(c.postId)) && !deletedCommentSet.has(String(c.id)) && !deletedCommentSet.has(String(c.parentId))),
+    comments: (dbObj.comments || []).filter(
+      (c: any) =>
+        !isDemoComment(c) &&
+        !deletedPostSet.has(String(c.postId)) &&
+        !deletedCommentSet.has(String(c.id)) &&
+        !deletedCommentSet.has(String(c.parentId))
+    ),
     marketplaceItems: (dbObj.marketplaceItems || []).filter((m: any) => !isDemoMarketplaceItem(m)),
     pendingMarketplaceItems: (dbObj.pendingMarketplaceItems || []).filter((m: any) => !isDemoMarketplaceItem(m)),
     verificationRequests: (dbObj.verificationRequests || []).filter((v: any) => !isDemoVerificationRequest(v)),
@@ -83,17 +378,232 @@ function sanitizeServerDb(dbObj: typeof DEFAULT_SERVER_DB): typeof DEFAULT_SERVE
       const other = conv.otherUserNickname;
       return !isDemoNickname(p1) && !isDemoNickname(p2) && !isDemoNickname(other);
     }),
-    chatReports: (dbObj.chatReports || []).filter((cr: any) => !isDemoNickname(cr.reportedNickname) && !isDemoNickname(cr.reporterNickname)),
-    chatRestrictions: (dbObj.chatRestrictions || []).filter((cr: any) => !isDemoNickname(cr.nickname) && !isDemoNickname(cr.userNickname)),
-    follows: (dbObj.follows || []).filter((f: any) => !isDemoNickname(f?.followerNickname) && !isDemoNickname(f?.followingNickname)),
+    chatReports: (dbObj.chatReports || []).filter(
+      (cr: any) => !isDemoNickname(cr.reportedNickname) && !isDemoNickname(cr.reporterNickname)
+    ),
+    chatRestrictions: (dbObj.chatRestrictions || []).filter(
+      (cr: any) => !isDemoNickname(cr.nickname) && !isDemoNickname(cr.userNickname)
+    ),
+    follows: (dbObj.follows || []).filter(
+      (f: any) => !isDemoNickname(f?.followerNickname) && !isDemoNickname(f?.followingNickname)
+    ),
     supersededUsernames: (dbObj as any).supersededUsernames || {},
   };
 }
 
-function normalizeServerHandle(nick?: any): string {
-  if (!nick || typeof nick !== 'string') return '';
-  return nick.trim().toLowerCase().replace(/^@+/, '');
+function revokeAllSessionsForUser(userId: string, reason: string): number {
+  const now = Date.now();
+  let count = 0;
+  for (const [sid, rec] of sessionsMap.entries()) {
+    if (String(rec.userId) === String(userId) && !rec.revokedAt) {
+      rec.revokedAt = now;
+      sessionsMap.set(sid, rec);
+      count++;
+    }
+  }
+  activeDb.users = (activeDb.users || []).map((u: any) => {
+    if (u && String(u.id) === String(userId)) {
+      return {
+        ...u,
+        sessionVersion: (Number(u.sessionVersion) || 1) + 1,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return u;
+  });
+  persistSessionsToDisk();
+  persistServerDb();
+  appendAuditLog({
+    event: 'SESSIONS_REVOKED',
+    actorId: userId,
+    actorNickname: userId === 'usr_admin_modula' ? '@modula' : userId,
+    actorIsAdmin: userId === 'usr_admin_modula',
+    targetId: userId,
+    ip: 'system',
+    userAgent: 'server',
+    status: 'INFO',
+    details: `${reason} (${count} session(s) invalidated)`,
+  });
+  return count;
 }
+
+function runSecurityStartupMigration(): boolean {
+  let didMutate = false;
+  const nowIso = new Date().toISOString();
+
+  const usersList = Array.isArray(activeDb.users) ? activeDb.users : [];
+  let modulaFound = false;
+
+  const migratedUsers = usersList.map((rawUser: any) => {
+    if (!rawUser) return rawUser;
+    const u = { ...rawUser };
+    const isModula =
+      String(u.id) === 'usr_admin_modula' || normalizeServerHandle(u.nickname) === 'modula';
+
+    if (isModula) {
+      modulaFound = true;
+      u.id = 'usr_admin_modula';
+      u.nickname = '@modula';
+      u.accountType = 'Admin';
+      u.isAdmin = true;
+      u.isApproved = true;
+      u.isVerified = true;
+      u.badgeType = 'GOLD';
+      u.badgeTitle = u.badgeTitle || 'Official Admin';
+      u.department = '';
+      u.level = '';
+      u.matricNumber = '';
+    } else {
+      // Strictly ensure no non-modula user carries accidental admin privileges
+      if (u.isAdmin || String(u.accountType).toLowerCase() === 'admin') {
+        u.isAdmin = false;
+        u.accountType = u.accountType === 'Guest' ? 'Guest' : 'Student';
+        didMutate = true;
+      }
+    }
+
+    if (typeof u.sessionVersion !== 'number' || u.sessionVersion < 1) {
+      u.sessionVersion = 1;
+      didMutate = true;
+    }
+
+    const rawPlain = u.savedPassword || u.password;
+    if (!u.passwordHash) {
+      if (typeof rawPlain === 'string' && rawPlain.trim()) {
+        u.passwordHash = hashPassword(rawPlain.trim());
+        didMutate = true;
+      } else if (!isModula) {
+        // Recover hashed password for existing non-admin students if stripped before hashing
+        try {
+          const evPath = path.join(DATA_DIR, 'forensic_evidence_2026-11-17.json');
+          if (fs.existsSync(evPath)) {
+            const evRaw = JSON.parse(fs.readFileSync(evPath, 'utf-8'));
+            const evMatch = (evRaw?.users || []).find((eu: any) => eu && String(eu.id) === String(u.id));
+            const evPass = evMatch?.savedPassword || evMatch?.password;
+            if (typeof evPass === 'string' && evPass.trim()) {
+              u.passwordHash = hashPassword(evPass.trim());
+              didMutate = true;
+            }
+          }
+        } catch {
+          // Ignore if forensic snapshot unavailable
+        }
+      }
+    }
+
+    if ('password' in u || 'savedPassword' in u) {
+      delete u.password;
+      delete u.savedPassword;
+      didMutate = true;
+    }
+
+    return u;
+  });
+
+  if (!modulaFound) {
+    migratedUsers.unshift({
+      id: 'usr_admin_modula',
+      nickname: '@modula',
+      accountType: 'Admin',
+      realName: 'Administrator',
+      matricNumber: '',
+      studentEmail: '',
+      emergencyHomePhone: '',
+      department: '',
+      level: '',
+      bio: 'Platform Administrator (@modula).',
+      avatarKey: '1',
+      badgeType: 'GOLD',
+      badgeTitle: 'Official Admin',
+      reputationScore: 9999,
+      isVerified: true,
+      isApproved: true,
+      isDeclined: false,
+      isAdmin: true,
+      sessionVersion: 1,
+      joinedDate: nowIso,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+    didMutate = true;
+  }
+
+  activeDb.users = migratedUsers;
+
+  // Enforce immediate Admin password rotation & token revocation if missing, legacy-compromised, or env-overridden
+  const modIdx = activeDb.users.findIndex((u: any) => String(u?.id) === 'usr_admin_modula');
+  if (modIdx !== -1) {
+    const modUser = activeDb.users[modIdx];
+    const rawEnvAdminPass = process.env.ADMIN_PASSWORD?.trim() || '';
+    const legacyToken = Buffer.from('aWJyYWhlZW0=', 'base64').toString('utf-8');
+    // Strictly ignore any environment secret matching the compromised password or shorter than 12 characters
+    const envAdminPass =
+      rawEnvAdminPass && rawEnvAdminPass !== legacyToken && rawEnvAdminPass.length >= 12
+        ? rawEnvAdminPass
+        : '';
+    const stillLegacy = verifyPassword(legacyToken, modUser.passwordHash);
+    const missingHash = !modUser.passwordHash;
+    const needsIncidentRotation = !modUser.securityRotatedAt || stillLegacy || missingHash;
+    const envChanged = Boolean(envAdminPass && !verifyPassword(envAdminPass, modUser.passwordHash));
+
+    if (needsIncidentRotation || envChanged) {
+      const nextAdminPass = envAdminPass
+        ? envAdminPass
+        : `FuhsiMod!${crypto.randomBytes(12).toString('base64url')}`;
+
+      activeDb.users[modIdx] = {
+        ...modUser,
+        passwordHash: hashPassword(nextAdminPass),
+        sessionVersion: (Number(modUser.sessionVersion) || 1) + 1,
+        securityRotatedAt: nowIso,
+        updatedAt: nowIso,
+      };
+      delete activeDb.users[modIdx].password;
+      delete activeDb.users[modIdx].savedPassword;
+
+      // Revoke ALL prior @modula sessions
+      const now = Date.now();
+      for (const [sid, rec] of sessionsMap.entries()) {
+        if (String(rec.userId) === 'usr_admin_modula' || rec.isAdmin) {
+          rec.revokedAt = now;
+          sessionsMap.set(sid, rec);
+        }
+      }
+      persistSessionsToDisk();
+
+      if (!envAdminPass) {
+        try {
+          fs.writeFileSync(
+            ROTATED_SECRET_NOTICE_FILE,
+            `ROTATED_ADMIN_PASSWORD=${nextAdminPass}\nROTATED_AT=${nowIso}\n`,
+            { encoding: 'utf-8', mode: 0o600 }
+          );
+        } catch (e) {
+          console.error('[Security Migration] Could not store rotated admin secret notice:', e);
+        }
+      }
+
+      appendAuditLog({
+        event: 'ADMIN_PASSWORD_ROTATED_AND_SESSIONS_REVOKED',
+        actorId: 'system',
+        actorNickname: 'system',
+        actorIsAdmin: true,
+        targetId: 'usr_admin_modula',
+        ip: 'localhost',
+        userAgent: 'startup-migration',
+        status: 'INFO',
+        details: 'Rotated @modula password away from compromised secret, revoked all admin sessions, stripped all plaintext passwords.',
+      });
+      didMutate = true;
+    }
+  }
+
+  return didMutate;
+}
+
+// ============================================================================
+// USERNAME CASCADE HELPERS
+// ============================================================================
 
 function cascadeUsernameChangeInActiveDb(params: {
   userId?: string;
@@ -112,21 +622,16 @@ function cascadeUsernameChangeInActiveDb(params: {
     (oldAliases || []).map((a) => normalizeServerHandle(a)).filter((a) => Boolean(a) && a !== cleanNew)
   );
 
-  // Pull in any pre-existing aliases that already point to this userId or any alias in aliasSet
   const currentSup = ((activeDb as any).supersededUsernames || {}) as Record<string, any>;
   Object.entries(currentSup).forEach(([k, entry]) => {
     const cleanK = normalizeServerHandle(k);
     const eUid = entry?.userId ? String(entry.userId).trim() : '';
     const eTarget = normalizeServerHandle(entry?.newNickname);
-    if (
-      (cleanUserId && eUid === cleanUserId) ||
-      (eTarget && (eTarget === cleanNew || aliasSet.has(eTarget)))
-    ) {
+    if ((cleanUserId && eUid === cleanUserId) || (eTarget && (eTarget === cleanNew || aliasSet.has(eTarget)))) {
       if (cleanK && cleanK !== cleanNew) aliasSet.add(cleanK);
     }
   });
 
-  // 1. Update supersededUsernames registry and re-point chained entries
   const nextSup: Record<string, any> = { ...currentSup };
   Object.entries(nextSup).forEach(([k, entry]) => {
     const cleanK = normalizeServerHandle(k);
@@ -151,7 +656,6 @@ function cascadeUsernameChangeInActiveDb(params: {
       changedAt: nowIso,
     };
   });
-  // If user switched back to a previously superseded name, remove it from superseded map
   if (nextSup[cleanNew]) {
     delete nextSup[cleanNew];
   }
@@ -195,7 +699,7 @@ function cascadeUsernameChangeInActiveDb(params: {
       const pNick = p.authorNickname || p.nickname || p.customNickname;
       const isAuthorMatch = Boolean((cleanUserId && pAuthorId === cleanUserId) || isTargetHandle(pNick));
 
-      let nextPost = { ...p };
+      const nextPost = { ...p };
       if (isAuthorMatch) {
         if (nextPost.authorNickname !== newNickname) {
           nextPost.authorNickname = newNickname;
@@ -260,7 +764,9 @@ function cascadeUsernameChangeInActiveDb(params: {
 
       if (nextPost.quotedPost) {
         const qp = nextPost.quotedPost;
-        const qpMatch = Boolean((cleanUserId && qp.authorId === cleanUserId) || isTargetHandle(qp.authorNickname || qp.nickname));
+        const qpMatch = Boolean(
+          (cleanUserId && qp.authorId === cleanUserId) || isTargetHandle(qp.authorNickname || qp.nickname)
+        );
         if (qpMatch) {
           nextPost.quotedPost = {
             ...qp,
@@ -273,7 +779,9 @@ function cascadeUsernameChangeInActiveDb(params: {
 
       if (nextPost.repostedPost) {
         const rp = nextPost.repostedPost;
-        const rpMatch = Boolean((cleanUserId && rp.authorId === cleanUserId) || isTargetHandle(rp.authorNickname || rp.nickname));
+        const rpMatch = Boolean(
+          (cleanUserId && rp.authorId === cleanUserId) || isTargetHandle(rp.authorNickname || rp.nickname)
+        );
         if (rpMatch) {
           nextPost.repostedPost = {
             ...rp,
@@ -299,7 +807,7 @@ function cascadeUsernameChangeInActiveDb(params: {
       let cChanged = false;
       const cAuthorId = c.authorId ? String(c.authorId).trim() : '';
       const isAuthorMatch = Boolean((cleanUserId && cAuthorId === cleanUserId) || isTargetHandle(c.authorNickname));
-      let nextComment = { ...c };
+      const nextComment = { ...c };
 
       if (isAuthorMatch) {
         if (nextComment.authorNickname !== newNickname) {
@@ -339,7 +847,6 @@ function cascadeUsernameChangeInActiveDb(params: {
     });
   }
 
-  // Cascade across follows
   if (Array.isArray(activeDb.follows)) {
     const seenFollowIds = new Set<string>();
     activeDb.follows = activeDb.follows
@@ -378,7 +885,6 @@ function cascadeUsernameChangeInActiveDb(params: {
       });
   }
 
-  // Cascade across verification requests
   if (Array.isArray(activeDb.verificationRequests)) {
     activeDb.verificationRequests = activeDb.verificationRequests.map((v: any) => {
       if (!v) return v;
@@ -389,7 +895,6 @@ function cascadeUsernameChangeInActiveDb(params: {
     });
   }
 
-  // Cascade across marketplace listings
   const updateMpList = (list: any[]) =>
     (list || []).map((m: any) => {
       if (!m) return m;
@@ -405,12 +910,11 @@ function cascadeUsernameChangeInActiveDb(params: {
     activeDb.pendingMarketplaceItems = updateMpList(activeDb.pendingMarketplaceItems);
   }
 
-  // Cascade across directMessages & chatConversations
   if (Array.isArray(activeDb.directMessages)) {
     activeDb.directMessages = activeDb.directMessages.map((d: any) => {
       if (!d) return d;
       let dChanged = false;
-      let nextD = { ...d };
+      const nextD = { ...d };
       if ((cleanUserId && d.senderId === cleanUserId) || isTargetHandle(d.senderNickname)) {
         nextD.senderNickname = newNickname;
         if (cleanUserId) nextD.senderId = cleanUserId;
@@ -450,11 +954,10 @@ function cascadeUsernameChangeInActiveDb(params: {
     });
   }
 
-  // Cascade across reports
   if (Array.isArray(activeDb.reports)) {
     activeDb.reports = activeDb.reports.map((r: any) => {
       if (!r) return r;
-      let nextR = { ...r };
+      const nextR = { ...r };
       let rChanged = false;
       if (isTargetHandle(r.authorNickname)) {
         nextR.authorNickname = newNickname;
@@ -472,7 +975,6 @@ function cascadeUsernameChangeInActiveDb(params: {
     });
   }
 
-  // Migrate user notifications under superseded handle keys to new clean handle key
   if (activeDb.notifications && typeof activeDb.notifications === 'object') {
     const nextNotifs: Record<string, any[]> = { ...activeDb.notifications };
     let migratedList = Array.isArray(nextNotifs[cleanNew]) ? [...nextNotifs[cleanNew]] : [];
@@ -495,11 +997,23 @@ function cascadeUsernameChangeInActiveDb(params: {
 function reconcileSupersededHandlesInActiveDb(): boolean {
   let didChange = false;
   try {
-    const sup = ((activeDb as any).supersededUsernames || {}) as Record<string, { newNickname?: string; userId?: string; changedAt?: string }>;
+    const sup = ((activeDb as any).supersededUsernames || {}) as Record<
+      string,
+      { newNickname?: string; userId?: string; changedAt?: string }
+    >;
     const users = Array.isArray(activeDb.users) ? activeDb.users : [];
-    const groupedByTarget = new Map<string, { userId?: string; newNickname: string; aliases: Set<string>; avatarKey?: string; avatarUrl?: string }>();
+    const groupedByTarget = new Map<
+      string,
+      { userId?: string; newNickname: string; aliases: Set<string>; avatarKey?: string; avatarUrl?: string }
+    >();
 
-    const ensureGroup = (key: string, userId: string | undefined, newNickname: string, avatarKey?: string, avatarUrl?: string) => {
+    const ensureGroup = (
+      key: string,
+      userId: string | undefined,
+      newNickname: string,
+      avatarKey?: string,
+      avatarUrl?: string
+    ) => {
       if (!groupedByTarget.has(key)) {
         groupedByTarget.set(key, { userId, newNickname, aliases: new Set(), avatarKey, avatarUrl });
       }
@@ -539,7 +1053,7 @@ function reconcileSupersededHandlesInActiveDb(): boolean {
       if (!currentNick) return;
       const cleanCurr = normalizeServerHandle(currentNick);
       if (!cleanCurr || oldClean === cleanCurr) return;
-      const uid = targetUser?.id ? String(targetUser.id) : (entry.userId ? String(entry.userId) : undefined);
+      const uid = targetUser?.id ? String(targetUser.id) : entry.userId ? String(entry.userId) : undefined;
       const key = uid || cleanCurr;
       const g = ensureGroup(key, uid, currentNick, targetUser?.avatarKey, targetUser?.avatarUrl);
       g.aliases.add(oldClean);
@@ -587,6 +1101,19 @@ function reconcileSupersededHandlesInActiveDb(): boolean {
   return didChange;
 }
 
+function persistServerDb() {
+  try {
+    const dataDir = path.dirname(DB_FILE);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    activeDb = sanitizeServerDb(activeDb);
+    fs.writeFileSync(DB_FILE, JSON.stringify(activeDb, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[DB Error] Failed to persist DB to file:', err);
+  }
+}
+
 function initAndLoadServerDb() {
   try {
     const dataDir = path.dirname(DB_FILE);
@@ -596,34 +1123,45 @@ function initAndLoadServerDb() {
 
     if (!fs.existsSync(DB_FILE)) {
       activeDb = sanitizeServerDb({ ...DEFAULT_SERVER_DB, deletedUserIds: [], deletedUserNicknames: [] });
+      runSecurityStartupMigration();
       persistServerDb();
-      console.log('[DB Init] Created initial data/db.json on server disk.');
+      console.log('[DB Init] Created initial secured data/db.json on server disk.');
     } else {
       const content = fs.readFileSync(DB_FILE, 'utf-8');
       const parsed = JSON.parse(content);
 
       const savedDeletedIds = new Set((parsed.deletedUserIds || []).map((id: any) => String(id)));
-      const savedDeletedNicks = new Set((parsed.deletedUserNicknames || []).map((n: any) => String(n).toLowerCase().replace(/^@/, '')));
+      const savedDeletedNicks = new Set(
+        (parsed.deletedUserNicknames || []).map((n: any) => String(n).toLowerCase().replace(/^@/, ''))
+      );
 
-      const nonDeletedDefaultUsers = DEFAULT_SERVER_DB.users.filter((u: any) => {
-        const uId = String(u.id || '');
-        const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-        return !savedDeletedIds.has(uId) && !savedDeletedNicks.has(uNick);
-      });
-
-      const loadedUsers = (parsed.users || []).filter((u: any) => {
-        const uId = String(u.id || '');
-        const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-        return !savedDeletedIds.has(uId) && !savedDeletedNicks.has(uNick);
-      });
+      const loadedUsers = (parsed.users || [])
+        .filter((u: any) => {
+          const uId = String(u.id || '');
+          const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
+          return !savedDeletedIds.has(uId) && !savedDeletedNicks.has(uNick);
+        })
+        .map((u: any) => {
+          const copy = { ...u };
+          const rawPlain = copy.savedPassword || copy.password;
+          if (!copy.passwordHash && typeof rawPlain === 'string' && rawPlain.trim()) {
+            copy.passwordHash = hashPassword(rawPlain.trim());
+          }
+          delete copy.password;
+          delete copy.savedPassword;
+          return copy;
+        });
 
       activeDb = sanitizeServerDb({
         ...DEFAULT_SERVER_DB,
         ...parsed,
-        supersededUsernames: { ...((DEFAULT_SERVER_DB as any).supersededUsernames || {}), ...(parsed.supersededUsernames || {}) },
+        supersededUsernames: {
+          ...((DEFAULT_SERVER_DB as any).supersededUsernames || {}),
+          ...(parsed.supersededUsernames || {}),
+        },
         deletedUserIds: Array.from(savedDeletedIds),
         deletedUserNicknames: Array.from(savedDeletedNicks),
-        users: mergeUsers(nonDeletedDefaultUsers, loadedUsers),
+        users: loadedUsers,
         posts: parsed.posts || [],
         comments: parsed.comments || [],
         marketplaceItems: parsed.marketplaceItems || [],
@@ -639,32 +1177,304 @@ function initAndLoadServerDb() {
         follows: mergeFollows([], parsed.follows || []),
         notifications: parsed.notifications || {},
       });
+
+      runSecurityStartupMigration();
       reconcileSupersededHandlesInActiveDb();
       persistServerDb();
-      console.log('[DB Init] Loaded and sanitized central database from data/db.json on server disk.');
+      console.log('[DB Init] Loaded, migrated, and secured central database from disk.');
     }
   } catch (err) {
     console.error('[DB Error] Failed to initialize server DB file:', err);
     activeDb = sanitizeServerDb({ ...DEFAULT_SERVER_DB, deletedUserIds: [], deletedUserNicknames: [] });
+    runSecurityStartupMigration();
     persistServerDb();
   }
 }
 
-function persistServerDb() {
-  try {
-    const dataDir = path.dirname(DB_FILE);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    activeDb = sanitizeServerDb(activeDb);
-    fs.writeFileSync(DB_FILE, JSON.stringify(activeDb, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('[DB Error] Failed to persist DB to file:', err);
-  }
+initAndLoadServerDb();
+
+// ============================================================================
+// AUTHORIZATION, SANITIZATION, AND SCOPING HELPERS
+// ============================================================================
+
+interface AuthedRequest extends express.Request {
+  sessionUser?: any;
+  sessionRecord?: SessionRecord;
 }
 
-// Load DB on startup
-initAndLoadServerDb();
+function getUserAliasesSet(user: any): Set<string> {
+  const aliases = new Set<string>();
+  if (!user) return aliases;
+  const add = (h?: any) => {
+    const clean = normalizeServerHandle(h);
+    if (clean) aliases.add(clean);
+  };
+  add(user.nickname);
+  if (Array.isArray(user.previousNicknames)) {
+    user.previousNicknames.forEach(add);
+  }
+  const sup = ((activeDb as any).supersededUsernames || {}) as Record<string, any>;
+  Object.entries(sup).forEach(([oldHandle, entry]) => {
+    if (
+      (entry?.userId && user.id && String(entry.userId) === String(user.id)) ||
+      (entry?.newNickname && aliases.has(normalizeServerHandle(entry.newNickname)))
+    ) {
+      add(oldHandle);
+    }
+  });
+  return aliases;
+}
+
+function sanitizeUserForApi(u: any, viewer?: any): any {
+  if (!u || typeof u !== 'object') return u;
+  const clean: any = { ...u };
+  delete clean.password;
+  delete clean.savedPassword;
+  delete clean.passwordHash;
+  delete clean.securityRotatedAt;
+  delete clean.sessionVersion;
+
+  const isViewerAdmin = Boolean(viewer?.isAdmin);
+  const isSelf = Boolean(viewer?.id && String(viewer.id) === String(u.id));
+  if (!isViewerAdmin && !isSelf) {
+    delete clean.studentEmail;
+    delete clean.emergencyHomePhone;
+    delete clean.matricNumber;
+    delete clean.realNameHidden;
+  }
+  return clean;
+}
+
+function sanitizeDbForCaller(dbObj: typeof DEFAULT_SERVER_DB, viewer: any): any {
+  const isViewerAdmin = Boolean(viewer?.isAdmin);
+  const viewerId = String(viewer?.id || '');
+  const viewerAliases = getUserAliasesSet(viewer);
+  const viewerCleanNick = normalizeServerHandle(viewer?.nickname);
+
+  const sanitizedUsers = (dbObj.users || []).map((u: any) => sanitizeUserForApi(u, viewer));
+
+  const scopedDms = isViewerAdmin
+    ? dbObj.directMessages || []
+    : (dbObj.directMessages || []).filter((dm: any) => {
+        if (!dm) return false;
+        if ((dm.senderId && String(dm.senderId) === viewerId) || (dm.receiverId && String(dm.receiverId) === viewerId)) {
+          return true;
+        }
+        const sNick = normalizeServerHandle(dm.senderNickname);
+        const rNick = normalizeServerHandle(dm.receiverNickname);
+        return viewerAliases.has(sNick) || viewerAliases.has(rNick);
+      });
+
+  const scopedConvs = isViewerAdmin
+    ? dbObj.chatConversations || []
+    : (dbObj.chatConversations || []).filter((c: any) => {
+        if (!c) return false;
+        const p1 = normalizeServerHandle(c.participant1Nickname);
+        const p2 = normalizeServerHandle(c.participant2Nickname);
+        const other = normalizeServerHandle(c.otherUserNickname);
+        const owner = normalizeServerHandle(c.ownerNickname);
+        const parts = Array.isArray(c.participants) ? c.participants.map(normalizeServerHandle) : [];
+        if (parts.some((p: string) => viewerAliases.has(p))) return true;
+        if (viewerAliases.has(p1) || viewerAliases.has(p2) || viewerAliases.has(owner)) return true;
+        if (other && c.userId && String(c.userId) === viewerId) return true;
+        return false;
+      });
+
+  const scopedNotifications: Record<string, any[]> = {};
+  if (isViewerAdmin) {
+    Object.assign(scopedNotifications, dbObj.notifications || {});
+  } else if (dbObj.notifications && typeof dbObj.notifications === 'object') {
+    if (Array.isArray((dbObj.notifications as any)['__all__'])) {
+      scopedNotifications['__all__'] = (dbObj.notifications as any)['__all__'];
+    }
+    viewerAliases.forEach((alias) => {
+      if (Array.isArray((dbObj.notifications as any)[alias])) {
+        scopedNotifications[alias] = (dbObj.notifications as any)[alias];
+      }
+    });
+    if (viewerCleanNick && Array.isArray((dbObj.notifications as any)[viewerCleanNick])) {
+      scopedNotifications[viewerCleanNick] = (dbObj.notifications as any)[viewerCleanNick];
+    }
+  }
+
+  const scopedVerifs = isViewerAdmin
+    ? dbObj.verificationRequests || []
+    : (dbObj.verificationRequests || []).filter(
+        (v: any) =>
+          v &&
+          ((v.userId && String(v.userId) === viewerId) ||
+            viewerAliases.has(normalizeServerHandle(v.applicantNickname)))
+      );
+
+  const scopedHelpDesk = isViewerAdmin
+    ? dbObj.helpDeskInquiries || []
+    : (dbObj.helpDeskInquiries || []).filter(
+        (h: any) =>
+          h &&
+          ((h.userId && String(h.userId) === viewerId) ||
+            viewerAliases.has(normalizeServerHandle(h.userNickname)))
+      );
+
+  return {
+    users: sanitizedUsers,
+    posts: dbObj.posts || [],
+    comments: dbObj.comments || [],
+    marketplaceItems: dbObj.marketplaceItems || [],
+    pendingMarketplaceItems: isViewerAdmin ? dbObj.pendingMarketplaceItems || [] : [],
+    verificationRequests: scopedVerifs,
+    reports: isViewerAdmin ? dbObj.reports || [] : [],
+    verificationFee: dbObj.verificationFee,
+    notifications: scopedNotifications,
+    verifCandidates: isViewerAdmin ? dbObj.verifCandidates || [] : [],
+    sentEmails: isViewerAdmin ? dbObj.sentEmails || [] : [],
+    directMessages: scopedDms,
+    chatConversations: scopedConvs,
+    chatReports: isViewerAdmin ? dbObj.chatReports || [] : [],
+    chatRestrictions: dbObj.chatRestrictions || [],
+    follows: dbObj.follows || [],
+    marketplaceReports: isViewerAdmin ? dbObj.marketplaceReports || [] : [],
+    helpDeskInquiries: scopedHelpDesk,
+    deletedUserIds: dbObj.deletedUserIds || [],
+    deletedUserNicknames: dbObj.deletedUserNicknames || [],
+    deletedPostIds: dbObj.deletedPostIds || [],
+    deletedCommentIds: (dbObj as any).deletedCommentIds || [],
+    supersededUsernames: (dbObj as any).supersededUsernames || {},
+  };
+}
+
+function authenticateSessionFromRequest(req: express.Request): {
+  user: any;
+  session: SessionRecord;
+} | null {
+  const token = extractRequestToken(req);
+  if (!token) return null;
+  const dotIdx = token.indexOf('.');
+  if (dotIdx <= 0) return null;
+  const sessionId = token.slice(0, dotIdx);
+  const sig = token.slice(dotIdx + 1);
+  if (!sessionId || !sig) return null;
+
+  const expectedSig = crypto.createHmac('sha256', HMAC_SECRET).update(sessionId).digest('hex');
+  try {
+    const sigBuf = Buffer.from(sig, 'hex');
+    const expBuf = Buffer.from(expectedSig, 'hex');
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  const record = sessionsMap.get(sessionId);
+  if (!record) return null;
+  if (record.revokedAt) return null;
+  if (Date.now() > record.expiresAt) {
+    sessionsMap.delete(sessionId);
+    persistSessionsToDisk();
+    return null;
+  }
+
+  const user = (activeDb.users || []).find((u: any) => u && String(u.id) === String(record.userId));
+  if (!user) return null;
+
+  const currentVersion = Number(user.sessionVersion) || 1;
+  if (currentVersion !== record.sessionVersion) return null;
+  if (Boolean(user.isAdmin) !== Boolean(record.isAdmin)) return null;
+  if (!user.isAdmin && (user.isApproved === false || user.isDeclined || user.isBanned)) {
+    return null;
+  }
+
+  return { user, session: record };
+}
+
+function requireAuth(req: AuthedRequest, res: express.Response, next: express.NextFunction) {
+  const authed = authenticateSessionFromRequest(req);
+  if (!authed) {
+    appendAuditLog({
+      event: 'UNAUTHORIZED_ACCESS_DENIED',
+      actorId: 'anonymous',
+      actorNickname: 'anonymous',
+      actorIsAdmin: false,
+      ip: getClientIp(req),
+      userAgent: getUserAgent(req),
+      status: 'DENY',
+      details: `${req.method} ${req.path} rejected without valid session.`,
+    });
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please sign in to continue.',
+    });
+  }
+  req.sessionUser = authed.user;
+  req.sessionRecord = authed.session;
+  next();
+}
+
+function requireAdmin(req: AuthedRequest, res: express.Response, next: express.NextFunction) {
+  const authed = authenticateSessionFromRequest(req);
+  if (!authed) {
+    appendAuditLog({
+      event: 'ADMIN_UNAUTHENTICATED_DENIED',
+      actorId: 'anonymous',
+      actorNickname: 'anonymous',
+      actorIsAdmin: false,
+      ip: getClientIp(req),
+      userAgent: getUserAgent(req),
+      status: 'DENY',
+      details: `${req.method} ${req.path} rejected without session.`,
+    });
+    return res.status(401).json({ success: false, error: 'Authentication required.' });
+  }
+  if (!authed.user.isAdmin || String(authed.user.id) !== 'usr_admin_modula') {
+    appendAuditLog({
+      event: 'ADMIN_FORBIDDEN_ATTEMPT',
+      actorId: String(authed.user.id),
+      actorNickname: String(authed.user.nickname || ''),
+      actorIsAdmin: false,
+      ip: getClientIp(req),
+      userAgent: getUserAgent(req),
+      status: 'DENY',
+      details: `Non-admin account attempted ${req.method} ${req.path}.`,
+    });
+    return res.status(403).json({
+      success: false,
+      error: 'Forbidden: Administrator privileges required.',
+    });
+  }
+  req.sessionUser = authed.user;
+  req.sessionRecord = authed.session;
+  next();
+}
+
+function createSessionForUser(req: express.Request, res: express.Response, user: any): {
+  sessionToken: string;
+  sessionRecord: SessionRecord;
+} {
+  const isAdmin = Boolean(user.isAdmin && String(user.id) === 'usr_admin_modula');
+  const ttlMs = isAdmin ? ADMIN_SESSION_TTL_MS : STUDENT_SESSION_TTL_MS;
+  const sessionId = `sess_${crypto.randomBytes(18).toString('hex')}`;
+  const now = Date.now();
+  const sessionRecord: SessionRecord = {
+    sessionId,
+    userId: String(user.id),
+    isAdmin,
+    sessionVersion: Number(user.sessionVersion) || 1,
+    createdAt: now,
+    expiresAt: now + ttlMs,
+    ip: getClientIp(req),
+    userAgent: getUserAgent(req),
+  };
+  sessionsMap.set(sessionId, sessionRecord);
+  persistSessionsToDisk();
+
+  const sessionToken = signSessionToken(sessionId);
+  setSessionCookie(req, res, sessionToken, ttlMs);
+  return { sessionToken, sessionRecord };
+}
+
+// ============================================================================
+// FIRESTORE OPTIONAL BACKGROUND HYDRATION (ONLY WHEN NOT IN MAINTENANCE)
+// ============================================================================
 
 let isFirestoreSyncRunning = false;
 let firestoreQuotaPausedUntil = 0;
@@ -684,8 +1494,8 @@ async function syncFirestoreToActiveDb() {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const { initializeApp, getApps } = await import('firebase/app');
     const { getFirestore, collection, getDocs, deleteDoc, doc } = await import('firebase/firestore');
-    const app = !getApps().length ? initializeApp(config) : getApps()[0];
-    const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
+    const fbApp = !getApps().length ? initializeApp(config) : getApps()[0];
+    const firestoreDb = getFirestore(fbApp, config.firestoreDatabaseId || '(default)');
 
     let hitQuota = false;
     const safeGetDocs = async (colName: string) => {
@@ -699,15 +1509,15 @@ async function syncFirestoreToActiveDb() {
       }
     };
 
-    // 1. Fetch tombstones from deleted_users in Firestore
     const delSnap = await safeGetDocs('deleted_users');
     if (hitQuota) {
       firestoreQuotaPausedUntil = Date.now() + 60 * 60 * 1000;
-      console.warn('[Firestore Sync] Daily Firestore read quota reached. Pausing server-side Firestore polling for 60 minutes and serving from local central DB.');
       return;
     }
     const fsDeletedIds = new Set<string>((activeDb.deletedUserIds || []).map(String));
-    const fsDeletedNicks = new Set<string>((activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, '')));
+    const fsDeletedNicks = new Set<string>(
+      (activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, ''))
+    );
     delSnap.forEach((d: any) => {
       const data = d.data();
       if (data) {
@@ -720,20 +1530,19 @@ async function syncFirestoreToActiveDb() {
     activeDb.deletedUserIds = Array.from(fsDeletedIds);
     activeDb.deletedUserNicknames = Array.from(fsDeletedNicks);
 
-    // 2. Fetch users, posts, comments, follows, verifications, marketplace items, direct messages, and notifications in parallel
-    const [usersSnap, postsSnap, commentsSnap, followsSnap, verifsSnap, mpSnap, dmsSnap, notifsSnap] = await Promise.all([
-      safeGetDocs('users'),
-      safeGetDocs('posts'),
-      safeGetDocs('comments'),
-      safeGetDocs('follows'),
-      safeGetDocs('verification_requests'),
-      safeGetDocs('marketplace_approved'),
-      safeGetDocs('direct_messages'),
-      safeGetDocs('notifications'),
-    ]);
+    const [usersSnap, postsSnap, commentsSnap, followsSnap, verifsSnap, mpSnap, dmsSnap, notifsSnap] =
+      await Promise.all([
+        safeGetDocs('users'),
+        safeGetDocs('posts'),
+        safeGetDocs('comments'),
+        safeGetDocs('follows'),
+        safeGetDocs('verification_requests'),
+        safeGetDocs('marketplace_approved'),
+        safeGetDocs('direct_messages'),
+        safeGetDocs('notifications'),
+      ]);
     if (hitQuota) {
       firestoreQuotaPausedUntil = Date.now() + 60 * 60 * 1000;
-      console.warn('[Firestore Sync] Daily Firestore read quota reached. Pausing server-side Firestore polling for 60 minutes and serving from local central DB.');
       return;
     }
 
@@ -742,19 +1551,17 @@ async function syncFirestoreToActiveDb() {
       const data = d.data();
       if (data && (data.nickname || data.studentEmail)) {
         const uId = String(data.id || d.id);
-        const uNick = String(data.nickname || '').toLowerCase().replace(/^@/, '');
+        const uNick = normalizeServerHandle(data.nickname);
+        if (uId === 'usr_admin_modula' || uNick === 'modula') return; // Never let Firestore overwrite hardened Admin record
         if (fsDeletedIds.has(uId) || fsDeletedNicks.has(uNick)) {
           deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
         } else {
-          firestoreUsers.push({ ...data, id: uId });
+          // Strip privilege & plaintext password fields from untrusted Firestore records
+          const safeU = stripPlaintextPasswordsFromUser({ ...data, id: uId, isAdmin: false });
+          if (safeU.accountType === 'Admin') safeU.accountType = 'Student';
+          firestoreUsers.push(safeU);
         }
       }
-    });
-
-    activeDb.users = (activeDb.users || []).filter((u: any) => {
-      const uId = String(u.id || '');
-      const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-      return !fsDeletedIds.has(uId) && !fsDeletedNicks.has(uNick);
     });
 
     if (firestoreUsers.length > 0) {
@@ -762,7 +1569,7 @@ async function syncFirestoreToActiveDb() {
     }
 
     const deletedPostSet = new Set((activeDb.deletedPostIds || []).map(String));
-    const deletedCommentSet = new Set((activeDb.deletedCommentIds || []).map(String));
+    const deletedCommentSet = new Set(((activeDb as any).deletedCommentIds || []).map(String));
 
     const firestorePosts: any[] = [];
     postsSnap.forEach((d: any) => {
@@ -770,7 +1577,7 @@ async function syncFirestoreToActiveDb() {
       if (!raw) return;
       const pId = String(raw.id || d.id);
       if (deletedPostSet.has(pId)) return;
-      const pNick = String(raw.authorNickname || '').toLowerCase().replace(/^@/, '');
+      const pNick = normalizeServerHandle(raw.authorNickname);
       const pAuthorId = String(raw.authorId || '');
       if ((pAuthorId && fsDeletedIds.has(pAuthorId)) || (pNick && fsDeletedNicks.has(pNick))) return;
       const p = { ...raw, id: pId };
@@ -790,7 +1597,7 @@ async function syncFirestoreToActiveDb() {
       const cId = String(raw.id || d.id);
       if (deletedCommentSet.has(cId) || (raw.parentId && deletedCommentSet.has(String(raw.parentId)))) return;
       if (raw.postId && deletedPostSet.has(String(raw.postId))) return;
-      const cNick = String(raw.authorNickname || '').toLowerCase().replace(/^@/, '');
+      const cNick = normalizeServerHandle(raw.authorNickname);
       const cAuthorId = String(raw.authorId || '');
       if ((cAuthorId && fsDeletedIds.has(cAuthorId)) || (cNick && fsDeletedNicks.has(cNick))) return;
       const c = { ...raw, id: cId };
@@ -805,23 +1612,6 @@ async function syncFirestoreToActiveDb() {
     }
     if (firestorePosts.length > 0) {
       activeDb.posts = mergePosts(activeDb.posts || [], firestorePosts);
-    }
-
-    // Reconcile top-level commentsCount on active posts from merged comments
-    if (Array.isArray(activeDb.posts) && Array.isArray(activeDb.comments)) {
-      const commentCountsByPost = new Map<string, number>();
-      for (const c of activeDb.comments) {
-        if (c && c.postId && !c.parentId) {
-          commentCountsByPost.set(String(c.postId), (commentCountsByPost.get(String(c.postId)) || 0) + 1);
-        }
-      }
-      activeDb.posts = activeDb.posts.map((p: any) => {
-        const count = commentCountsByPost.get(String(p.id)) || 0;
-        if (count > 0 || (p.commentsCount || 0) !== count) {
-          return { ...p, commentsCount: Math.max(count, 0), commentCount: Math.max(count, 0) };
-        }
-        return p;
-      });
     }
 
     const firestoreFollows: any[] = [];
@@ -863,10 +1653,6 @@ async function syncFirestoreToActiveDb() {
       if (!raw) return;
       const msg = { ...raw, id: raw.id || d.id };
       if (!isDemoDirectMessage(msg)) {
-        const sNick = String(msg.senderNickname || '').toLowerCase().replace(/^@/, '');
-        const rNick = String(msg.receiverNickname || '').toLowerCase().replace(/^@/, '');
-        if ((msg.senderId && fsDeletedIds.has(String(msg.senderId))) || (msg.receiverId && fsDeletedIds.has(String(msg.receiverId)))) return;
-        if ((sNick && fsDeletedNicks.has(sNick)) || (rNick && fsDeletedNicks.has(rNick))) return;
         firestoreDms.push(msg);
       }
     });
@@ -898,18 +1684,14 @@ async function syncFirestoreToActiveDb() {
 
     reconcileSupersededHandlesInActiveDb();
     persistServerDb();
-    console.log(
-      `[Firestore Sync] Synced ${activeDb.users.length} users, ${(activeDb.posts || []).length} posts, ${(activeDb.comments || []).length} comments, ${(activeDb.directMessages || []).length} DMs into server DB.`
-    );
   } catch (err: any) {
-    console.warn('[Firestore Sync] Non-critical Firestore sync notice:', err?.message || err);
+    console.warn('[Firestore Sync] Notice:', err?.message || err);
   } finally {
     isFirestoreSyncRunning = false;
   }
 }
 
-// Only hydrate from Firestore on cold startup when local DB lacks users/posts, and avoid aggressive background polling that burns daily Firestore read quotas
-if (!MAINTENANCE_MODE) {
+if (!MAINTENANCE_MODE && !IS_ISOLATED_TEST_INSTANCE) {
   if ((activeDb.users || []).length <= 1 || (activeDb.posts || []).length === 0) {
     syncFirestoreToActiveDb().catch(() => {});
   }
@@ -918,23 +1700,719 @@ if (!MAINTENANCE_MODE) {
   }, 30 * 60 * 1000);
 }
 
-// Central DB API Endpoints
-app.get('/api/db', (req, res) => {
-  return res.json({ success: true, db: activeDb });
+// ============================================================================
+// AUTHENTICATION ENDPOINTS
+// ============================================================================
+
+app.get('/api/auth/session', (req, res) => {
+  const authed = authenticateSessionFromRequest(req);
+  if (!authed) {
+    return res.json({ success: true, authenticated: false, user: null });
+  }
+  return res.json({
+    success: true,
+    authenticated: true,
+    user: sanitizeUserForApi(authed.user, authed.user),
+    session: {
+      expiresAt: authed.session.expiresAt,
+      isAdmin: authed.session.isAdmin,
+    },
+  });
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    const trimmedUsername = String(username || '').trim();
+    const trimmedPassword = String(password || '').trim();
+    const ip = getClientIp(req);
+    const userAgent = getUserAgent(req);
+
+    if (!trimmedUsername) {
+      return res.status(400).json({ success: false, error: 'Please enter your Username.' });
+    }
+    if (!trimmedPassword) {
+      return res.status(400).json({ success: false, error: 'Please enter your password.' });
+    }
+
+    const cleanUsername = normalizeServerHandle(trimmedUsername);
+
+    const findMatch = (list: any[]) =>
+      list.find((u: any) => u && u.nickname && normalizeServerHandle(u.nickname) === cleanUsername);
+
+    let matched = findMatch(activeDb.users || []);
+
+    if (!matched && (activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
+      const sup = (activeDb as any).supersededUsernames[cleanUsername];
+      if (sup && sup.userId) {
+        matched = (activeDb.users || []).find((u: any) => String(u.id) === String(sup.userId));
+      }
+    }
+
+    if (!matched) {
+      appendAuditLog({
+        event: cleanUsername === 'modula' ? 'ADMIN_LOGIN_FAILED' : 'LOGIN_FAILED',
+        actorId: 'unknown',
+        actorNickname: `@${cleanUsername}`,
+        actorIsAdmin: false,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: 'Account not found.',
+      });
+      return res.status(404).json({ success: false, error: 'Account not found. Please check your login details.' });
+    }
+
+    const isAdminTarget = Boolean(matched.isAdmin || String(matched.id) === 'usr_admin_modula');
+
+    if (!verifyPassword(trimmedPassword, matched.passwordHash)) {
+      appendAuditLog({
+        event: isAdminTarget ? 'ADMIN_LOGIN_FAILED' : 'LOGIN_FAILED',
+        actorId: String(matched.id),
+        actorNickname: String(matched.nickname || `@${cleanUsername}`),
+        actorIsAdmin: false,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: 'Invalid password.',
+      });
+      return res.status(401).json({ success: false, error: 'Incorrect password. Please try again.' });
+    }
+
+    if (matched.isBanned) {
+      appendAuditLog({
+        event: 'LOGIN_BLOCKED_BANNED',
+        actorId: String(matched.id),
+        actorNickname: String(matched.nickname || ''),
+        actorIsAdmin: false,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: 'Banned account attempted login.',
+      });
+      return res.status(403).json({ success: false, error: 'This account has been suspended by administration.' });
+    }
+
+    if (matched.isApproved === false && !isAdminTarget) {
+      return res.status(403).json({
+        success: false,
+        error:
+          'Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.',
+        isPending: true,
+      });
+    }
+
+    const { sessionToken, sessionRecord } = createSessionForUser(req, res, matched);
+
+    appendAuditLog({
+      event: isAdminTarget ? 'ADMIN_LOGIN_SUCCESS' : 'LOGIN_SUCCESS',
+      actorId: String(matched.id),
+      actorNickname: String(matched.nickname || ''),
+      actorIsAdmin: isAdminTarget,
+      ip,
+      userAgent,
+      status: 'ALLOW',
+      details: `Issued session ${sessionRecord.sessionId.slice(0, 12)}...`,
+    });
+
+    return res.json({
+      success: true,
+      user: sanitizeUserForApi(matched, matched),
+      sessionToken,
+    });
+  } catch (err: any) {
+    console.error('[Auth API] Login error:', err);
+    return res.status(500).json({ success: false, error: 'Authentication service error' });
+  }
+});
+
+app.post('/api/auth/register', (req, res) => {
+  try {
+    const body = req.body || {};
+    const ip = getClientIp(req);
+    const userAgent = getUserAgent(req);
+
+    // Strictly reject any admin escalation attributes at registration
+    if (body.isAdmin === true || String(body.accountType || '').toLowerCase() === 'admin') {
+      appendAuditLog({
+        event: 'PRIVILEGE_ESCALATION_BLOCKED',
+        actorId: 'registration',
+        actorNickname: String(body.nickname || 'unknown'),
+        actorIsAdmin: false,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: 'Attempted admin role injection during registration.',
+      });
+      return res.status(403).json({
+        success: false,
+        error: 'Administrator accounts cannot be self-registered.',
+      });
+    }
+
+    const rawNick = String(body.nickname || '').trim();
+    const cleanNick = normalizeServerHandle(rawNick);
+    if (!cleanNick || isReservedHandle(cleanNick)) {
+      return res.status(400).json({
+        success: false,
+        error: 'This username is reserved or not permitted. Please choose another username.',
+      });
+    }
+    const formattedNick = rawNick.startsWith('@') ? rawNick : `@${rawNick}`;
+
+    const realName = String(body.realName || '').trim();
+    const studentEmail = String(body.studentEmail || '').trim();
+    const phone = String(body.emergencyHomePhone || '').trim();
+    const password = String(body.password || '').trim();
+    const requestedType = body.accountType === 'Guest' ? 'Guest' : 'Student';
+    const department = requestedType === 'Student' ? String(body.department || '').trim() : '';
+    const level = requestedType === 'Student' ? String(body.level || '').trim() : '';
+    const matricNumber = requestedType === 'Student' ? normalizeMatricNumber(String(body.matricNumber || '')) : '';
+    const avatarKey = String(body.avatarKey || '1').trim();
+
+    if (!realName || !studentEmail || !phone || password.length < 4) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please fill in all required registration details and a password (min 4 characters).',
+      });
+    }
+
+    if (requestedType === 'Student' && (!department || !level || !matricNumber)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Department, Level, and Matric Number are required for Student registration.',
+      });
+    }
+
+    const existingNick = (activeDb.users || []).find(
+      (u: any) => u && normalizeServerHandle(u.nickname) === cleanNick
+    );
+    if (existingNick) {
+      return res.status(409).json({
+        success: false,
+        error: 'This Username is already taken. Please choose another username.',
+      });
+    }
+
+    const existingEmail = (activeDb.users || []).find(
+      (u: any) => u && String(u.studentEmail || '').trim().toLowerCase() === studentEmail.toLowerCase()
+    );
+    if (existingEmail) {
+      return res.status(409).json({
+        success: false,
+        error: 'An account with this email address already exists.',
+      });
+    }
+
+    if (requestedType === 'Student' && matricNumber) {
+      const existingMatric = (activeDb.users || []).find(
+        (u: any) => u && u.matricNumber && normalizeMatricNumber(u.matricNumber) === matricNumber
+      );
+      if (existingMatric) {
+        return res.status(409).json({
+          success: false,
+          error: 'This matriculation number is already associated with an account.',
+        });
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const newId = `usr_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    const newUser: any = {
+      id: newId,
+      nickname: formattedNick,
+      previousNicknames: [],
+      accountType: requestedType,
+      realName,
+      realNameHidden: realName,
+      studentEmail,
+      emergencyHomePhone: phone,
+      matricNumber,
+      department,
+      level,
+      bio: requestedType === 'Guest' ? 'Guest Member on FUHSI Connect.' : `${department} Student at FUHSI.`,
+      avatarKey,
+      avatarUrl: '',
+      badgeType: 'BLUE',
+      badgeTitle: '',
+      reputationScore: 100,
+      isVerified: false,
+      verificationStatus: 'unverified',
+      isApproved: true,
+      isDeclined: false,
+      isAdmin: false,
+      searchDiscoverable: true,
+      allowDirectMessagesFrom: 'everyone',
+      defaultPostAudience: 'everyone',
+      isPrivate: false,
+      showActiveStatus: true,
+      isOnline: true,
+      lastActiveAt: nowIso,
+      joinedDate: nowIso,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      sessionVersion: 1,
+      passwordHash: hashPassword(password),
+    };
+
+    activeDb.deletedUserNicknames = (activeDb.deletedUserNicknames || []).filter(
+      (n: string) => normalizeServerHandle(n) !== cleanNick
+    );
+    activeDb.deletedUserIds = (activeDb.deletedUserIds || []).filter((id: string) => id !== newId);
+
+    activeDb.users.push(newUser);
+    persistServerDb();
+
+    const { sessionToken } = createSessionForUser(req, res, newUser);
+    appendAuditLog({
+      event: 'REGISTER_SUCCESS',
+      actorId: newId,
+      actorNickname: formattedNick,
+      actorIsAdmin: false,
+      ip,
+      userAgent,
+      status: 'ALLOW',
+      details: `Registered new ${requestedType} account.`,
+    });
+
+    return res.status(201).json({
+      success: true,
+      user: sanitizeUserForApi(newUser, newUser),
+      sessionToken,
+    });
+  } catch (err: any) {
+    console.error('[Register API] Error:', err);
+    return res.status(500).json({ success: false, error: 'Registration failed' });
+  }
+});
+
+app.post('/api/auth/logout', (req: AuthedRequest, res) => {
+  const authed = authenticateSessionFromRequest(req);
+  if (authed) {
+    authed.session.revokedAt = Date.now();
+    sessionsMap.set(authed.session.sessionId, authed.session);
+    persistSessionsToDisk();
+
+    activeDb.users = (activeDb.users || []).map((u: any) =>
+      u && String(u.id) === String(authed.user.id)
+        ? { ...u, isOnline: false, lastActiveAt: new Date().toISOString() }
+        : u
+    );
+    persistServerDb();
+
+    appendAuditLog({
+      event: authed.user.isAdmin ? 'ADMIN_LOGOUT' : 'LOGOUT',
+      actorId: String(authed.user.id),
+      actorNickname: String(authed.user.nickname || ''),
+      actorIsAdmin: Boolean(authed.user.isAdmin),
+      ip: getClientIp(req),
+      userAgent: getUserAgent(req),
+      status: 'INFO',
+      details: `Session ${authed.session.sessionId.slice(0, 12)}... revoked on logout.`,
+    });
+  }
+  clearSessionCookie(req, res);
+  return res.json({ success: true });
+});
+
+app.post('/api/auth/logout-all', requireAuth, (req: AuthedRequest, res) => {
+  const user = req.sessionUser!;
+  const revokedCount = revokeAllSessionsForUser(String(user.id), 'User requested logout-all-sessions');
+  clearSessionCookie(req, res);
+  return res.json({ success: true, revokedCount });
+});
+
+// Password recovery: strictly non-admin only; never exposes PII or bypasses reset tokens
+app.post('/api/auth/forgot-identify', (req, res) => {
+  try {
+    const cleanInput = String(req.body?.identifier || '').trim().toLowerCase();
+    const cleanNick = cleanInput.replace(/^@+/, '');
+    if (!cleanInput) {
+      return res.status(400).json({ success: false, error: 'Please enter your Username or Email Address.' });
+    }
+
+    if (cleanNick === 'modula' || cleanInput === 'usr_admin_modula') {
+      return res.status(403).json({
+        success: false,
+        error: 'Administrator password recovery cannot be performed via self-service. Rotate via authenticated Admin Console or server environment.',
+      });
+    }
+
+    const matched = (activeDb.users || []).find((u: any) => {
+      if (!u || u.isAdmin || String(u.id) === 'usr_admin_modula') return false;
+      const uEmail = String(u.studentEmail || '').trim().toLowerCase();
+      const uNick = normalizeServerHandle(u.nickname);
+      return uEmail === cleanInput || uNick === cleanNick;
+    });
+
+    if (!matched) {
+      return res.status(404).json({
+        success: false,
+        error: 'No student/guest account found matching that Username or Email Address.',
+      });
+    }
+
+    if (matched.isAdmin || String(matched.id) === 'usr_admin_modula') {
+      return res.status(403).json({
+        success: false,
+        error: 'Administrator password recovery is disabled here.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        nickname: matched.nickname,
+        accountType: matched.accountType === 'Guest' ? 'Guest' : 'Student',
+      },
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Failed looking up account' });
+  }
+});
+
+interface ResetSessionEntry {
+  userId: string;
+  identifier: string;
+  token: string;
+  expiresAt: number;
+  createdAt: number;
+}
+const activeResetSessions = new Map<string, ResetSessionEntry>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, session] of activeResetSessions.entries()) {
+    if (now > session.expiresAt) {
+      activeResetSessions.delete(key);
+    }
+  }
+}, 60000);
+
+app.post('/api/auth/verify-reset-identity', (req, res) => {
+  try {
+    const { identifier, phone, matricNumber, matricNo, matricOrName } = req.body || {};
+    const effectiveMatric = matricNo || matricNumber || matricOrName;
+    const ip = getClientIp(req);
+    const userAgent = getUserAgent(req);
+
+    if (!identifier) {
+      return res.status(400).json({ success: false, error: 'Registered Email Address or Username is required.' });
+    }
+
+    const cleanInput = String(identifier).trim().toLowerCase();
+    const cleanNick = cleanInput.replace(/^@+/, '');
+
+    if (cleanNick === 'modula' || cleanInput === 'usr_admin_modula') {
+      appendAuditLog({
+        event: 'ADMIN_RESET_BLOCKED',
+        actorId: 'anonymous',
+        actorNickname: '@modula',
+        actorIsAdmin: false,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: 'Attempted self-service identity verification against @modula.',
+      });
+      return res.status(403).json({
+        success: false,
+        error: 'Administrator password recovery is restricted.',
+      });
+    }
+
+    const matchedUser = (activeDb.users || []).find((u: any) => {
+      if (!u || isDemoUser(u) || isDemoNickname(u.nickname)) return false;
+      const uEmail = String(u.studentEmail || '').trim().toLowerCase();
+      const uNick = normalizeServerHandle(u.nickname);
+      return uEmail === cleanInput || uNick === cleanNick;
+    });
+
+    if (!matchedUser) {
+      return res.status(404).json({
+        success: false,
+        error: 'No registered account found with the provided details.',
+      });
+    }
+
+    if (matchedUser.isAdmin || String(matchedUser.id) === 'usr_admin_modula') {
+      return res.status(403).json({
+        success: false,
+        error: 'Administrator password recovery is restricted.',
+      });
+    }
+
+    const registeredPhone = String(matchedUser.emergencyHomePhone || '').replace(/\D/g, '');
+    const enteredPhone = String(phone || '').replace(/\D/g, '');
+    if (!registeredPhone || !enteredPhone || registeredPhone !== enteredPhone) {
+      return res.status(401).json({
+        success: false,
+        error: 'The registered phone number provided does not match our account records.',
+      });
+    }
+
+    if (matchedUser.matricNumber) {
+      const registeredMatric = normalizeMatricNumber(matchedUser.matricNumber);
+      const enteredMatric = normalizeMatricNumber(String(effectiveMatric || ''));
+      if (!enteredMatric || enteredMatric !== registeredMatric) {
+        return res.status(401).json({
+          success: false,
+          error: 'The Matric No. provided does not match our account records.',
+        });
+      }
+    } else if (matchedUser.realName) {
+      const regName = String(matchedUser.realName).trim().toLowerCase();
+      const entName = String(effectiveMatric || '').trim().toLowerCase();
+      if (!entName || entName !== regName) {
+        return res.status(401).json({
+          success: false,
+          error: 'The Full Name provided does not match our account records.',
+        });
+      }
+    }
+
+    const token = `rst_${crypto.randomBytes(24).toString('hex')}`;
+    const sessionKey = String(matchedUser.id);
+    activeResetSessions.set(sessionKey, {
+      userId: matchedUser.id,
+      identifier: matchedUser.studentEmail || matchedUser.nickname,
+      token,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      createdAt: Date.now(),
+    });
+
+    return res.json({
+      success: true,
+      message: 'Account ownership verified successfully.',
+      resetToken: token,
+      user: {
+        nickname: matchedUser.nickname,
+        accountType: matchedUser.accountType || 'Student',
+      },
+    });
+  } catch (error: any) {
+    console.error('[Verify Reset Identity Error]:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error verifying account ownership.' });
+  }
+});
+
+app.post('/api/auth/reset-password', (req, res) => {
+  try {
+    const { identifier, resetToken, token, newPassword } = req.body || {};
+    const effectiveToken = String(resetToken || token || '').trim();
+    const ip = getClientIp(req);
+    const userAgent = getUserAgent(req);
+
+    if (!identifier || !newPassword || !effectiveToken) {
+      return res.status(400).json({
+        success: false,
+        error: 'Account identifier, valid reset verification token, and new password are required.',
+      });
+    }
+
+    const cleanPassword = String(newPassword).trim();
+    if (cleanPassword.length < 4) {
+      return res.status(400).json({ success: false, error: 'New password must be at least 4 characters.' });
+    }
+
+    const cleanInput = String(identifier).trim().toLowerCase();
+    const cleanNick = cleanInput.replace(/^@+/, '');
+
+    if (cleanNick === 'modula' || cleanInput === 'usr_admin_modula') {
+      return res.status(403).json({
+        success: false,
+        error: 'Administrator password recovery cannot be performed via this endpoint.',
+      });
+    }
+
+    const userIndex = (activeDb.users || []).findIndex((u: any) => {
+      const uEmail = String(u.studentEmail || '').trim().toLowerCase();
+      const uNick = normalizeServerHandle(u.nickname);
+      return uEmail === cleanInput || uNick === cleanNick;
+    });
+
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, error: 'User account not found.' });
+    }
+
+    const matchedUser = activeDb.users[userIndex];
+    if (matchedUser.isAdmin || String(matchedUser.id) === 'usr_admin_modula') {
+      return res.status(403).json({ success: false, error: 'Administrator password recovery is disabled here.' });
+    }
+
+    const sessionKey = String(matchedUser.id);
+    const resetSession = activeResetSessions.get(sessionKey);
+
+    if (!resetSession || resetSession.token !== effectiveToken) {
+      appendAuditLog({
+        event: 'PASSWORD_RESET_INVALID_TOKEN',
+        actorId: String(matchedUser.id),
+        actorNickname: String(matchedUser.nickname || ''),
+        actorIsAdmin: false,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: 'Missing or mismatched password reset token.',
+      });
+      return res.status(403).json({
+        success: false,
+        error: 'Invalid or expired password reset session. Please verify your details again.',
+      });
+    }
+
+    if (Date.now() > resetSession.expiresAt) {
+      activeResetSessions.delete(sessionKey);
+      return res.status(400).json({
+        success: false,
+        error: 'Password reset session has expired. Please verify your details again.',
+      });
+    }
+
+    activeDb.users[userIndex] = {
+      ...matchedUser,
+      passwordHash: hashPassword(cleanPassword),
+      sessionVersion: (Number(matchedUser.sessionVersion) || 1) + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    delete activeDb.users[userIndex].password;
+    delete activeDb.users[userIndex].savedPassword;
+
+    revokeAllSessionsForUser(String(matchedUser.id), 'Password reset completed');
+    activeResetSessions.delete(sessionKey);
+    persistServerDb();
+
+    appendAuditLog({
+      event: 'PASSWORD_RESET_SUCCESS',
+      actorId: String(matchedUser.id),
+      actorNickname: String(matchedUser.nickname || ''),
+      actorIsAdmin: false,
+      ip,
+      userAgent,
+      status: 'INFO',
+      details: 'Password reset via verified identity token; prior sessions revoked.',
+    });
+
+    return res.json({
+      success: true,
+      message: 'Password reset successfully! Your new password is now active.',
+    });
+  } catch (error: any) {
+    console.error('[Password Reset Error]:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error resetting password.' });
+  }
+});
+
+// ============================================================================
+// ADMIN SECURITY CONSOLE ENDPOINTS
+// ============================================================================
+
+app.get('/api/admin/audit-logs', requireAdmin, (_req: AuthedRequest, res) => {
+  const now = Date.now();
+  const activeSessions = Array.from(sessionsMap.values())
+    .filter((s) => !s.revokedAt && s.expiresAt > now)
+    .map((s) => ({
+      sessionIdPrefix: s.sessionId.slice(0, 12),
+      userId: s.userId,
+      isAdmin: s.isAdmin,
+      createdAt: new Date(s.createdAt).toISOString(),
+      expiresAt: new Date(s.expiresAt).toISOString(),
+      ip: s.ip || '',
+      userAgent: s.userAgent || '',
+    }));
+
+  return res.json({
+    success: true,
+    logs: [...auditLogs].reverse().slice(0, 300),
+    activeSessions,
+  });
+});
+
+app.post('/api/admin/rotate-password', requireAdmin, (req: AuthedRequest, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  const modIdx = (activeDb.users || []).findIndex((u: any) => String(u?.id) === 'usr_admin_modula');
+  if (modIdx === -1) {
+    return res.status(404).json({ success: false, error: 'Admin account not found.' });
+  }
+
+  const modUser = activeDb.users[modIdx];
+  if (!verifyPassword(String(currentPassword || '').trim(), modUser.passwordHash)) {
+    appendAuditLog({
+      event: 'ADMIN_PASSWORD_ROTATE_FAILED',
+      actorId: 'usr_admin_modula',
+      actorNickname: '@modula',
+      actorIsAdmin: true,
+      ip: getClientIp(req),
+      userAgent: getUserAgent(req),
+      status: 'DENY',
+      details: 'Incorrect current password supplied to password rotation endpoint.',
+    });
+    return res.status(401).json({ success: false, error: 'Current password is incorrect.' });
+  }
+
+  const cleanNew = String(newPassword || '').trim();
+  if (cleanNew.length < 10) {
+    return res.status(400).json({
+      success: false,
+      error: 'New administrator password must be at least 10 characters.',
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  activeDb.users[modIdx] = {
+    ...modUser,
+    passwordHash: hashPassword(cleanNew),
+    sessionVersion: (Number(modUser.sessionVersion) || 1) + 1,
+    securityRotatedAt: nowIso,
+    updatedAt: nowIso,
+  };
+  delete activeDb.users[modIdx].password;
+  delete activeDb.users[modIdx].savedPassword;
+
+  revokeAllSessionsForUser('usr_admin_modula', 'Admin rotated password');
+  persistServerDb();
+  clearSessionCookie(req, res);
+
+  appendAuditLog({
+    event: 'ADMIN_PASSWORD_ROTATED',
+    actorId: 'usr_admin_modula',
+    actorNickname: '@modula',
+    actorIsAdmin: true,
+    ip: getClientIp(req),
+    userAgent: getUserAgent(req),
+    status: 'INFO',
+    details: 'Administrator password rotated and all active admin sessions revoked.',
+  });
+
+  return res.json({
+    success: true,
+    reauthRequired: true,
+    message: 'Admin password rotated and all sessions revoked. Please log in with your new password.',
+  });
+});
+
+// ============================================================================
+// CENTRAL DATABASE & PROTECTED DOMAIN ENDPOINTS
+// ============================================================================
+
+app.get('/api/db', requireAuth, (req: AuthedRequest, res) => {
+  return res.json({
+    success: true,
+    db: sanitizeDbForCaller(activeDb, req.sessionUser),
+  });
 });
 
 let lastPresencePersistTime = 0;
 
-// Lightweight cross-device presence heartbeat endpoint (syncs online/active status via server DB even when Firestore is quota-limited)
-app.post('/api/presence', (req, res) => {
+app.post('/api/presence', requireAuth, (req: AuthedRequest, res) => {
   try {
-    const { userId, nickname, isOnline, lastActiveAt, showActiveStatus } = req.body || {};
-    const rawId = userId ? String(userId).trim() : '';
-    const cleanNick = nickname ? String(nickname).toLowerCase().replace(/^@+/, '').trim() : '';
-    if (!rawId && !cleanNick) {
-      return res.status(400).json({ success: false, error: 'User identifier required' });
+    const caller = req.sessionUser!;
+    const { isOnline, lastActiveAt, showActiveStatus } = req.body || {};
+    const requestedId = req.body?.userId ? String(req.body.userId).trim() : '';
+
+    if (requestedId && requestedId !== String(caller.id) && !caller.isAdmin) {
+      return res.status(403).json({ success: false, error: 'Forbidden: cannot update another user presence.' });
     }
 
+    const targetId = caller.isAdmin && requestedId ? requestedId : String(caller.id);
     const nowIso = lastActiveAt || new Date().toISOString();
     const incomingMs = Date.parse(nowIso) || Date.now();
     let updated = false;
@@ -942,9 +2420,7 @@ app.post('/api/presence', (req, res) => {
 
     activeDb.users = (activeDb.users || []).map((u: any) => {
       if (!u) return u;
-      const uId = String(u.id || '').trim();
-      const uNick = String(u.nickname || '').toLowerCase().replace(/^@+/, '').trim();
-      if ((rawId && uId === rawId) || (cleanNick && uNick === cleanNick)) {
+      if (String(u.id || '') === targetId) {
         const existingMs = u.lastActiveAt ? Date.parse(u.lastActiveAt) || 0 : 0;
         if (incomingMs >= existingMs || isOnline === false) {
           updated = true;
@@ -952,7 +2428,7 @@ app.post('/api/presence', (req, res) => {
           return {
             ...u,
             isOnline: isOnline !== undefined ? Boolean(isOnline) : true,
-            lastActiveAt: incomingMs >= existingMs ? nowIso : (u.lastActiveAt || nowIso),
+            lastActiveAt: incomingMs >= existingMs ? nowIso : u.lastActiveAt || nowIso,
             ...(showActiveStatus !== undefined ? { showActiveStatus: Boolean(showActiveStatus) } : {}),
           };
         }
@@ -971,131 +2447,19 @@ app.post('/api/presence', (req, res) => {
   }
 });
 
-function isUsernameSuperseded(cleanUsername: string): boolean {
-  if (!(activeDb as any).supersededUsernames || !(activeDb as any).supersededUsernames[cleanUsername]) {
-    return false;
-  }
-  // Check if any user in activeDb currently has cleanUsername as their active nickname
-  const currentUserWithThisNick = (activeDb.users || []).find((u: any) => {
-    if (!u || !u.nickname) return false;
-    const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
-    return uNick === cleanUsername;
-  });
-  if (currentUserWithThisNick) {
-    delete (activeDb as any).supersededUsernames[cleanUsername];
-    persistServerDb();
-    return false;
-  }
-  return true;
-}
-
-// Centralized Authentication Endpoint - strictly validates against the current authoritative central record
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/users/change-username', requireAuth, async (req: AuthedRequest, res) => {
   try {
-    const { username, password } = req.body || {};
-    const trimmedUsername = String(username || '').trim();
-    const trimmedPassword = String(password || '').trim();
+    const caller = req.sessionUser!;
+    const { userId, newNickname, oldNickname, previousNicknames: incomingPrevNicks, avatarKey, avatarUrl } =
+      req.body || {};
 
-    if (!trimmedUsername) {
-      return res.status(400).json({ success: false, error: 'Please enter your Username.' });
-    }
-    if (!trimmedPassword) {
-      return res.status(400).json({ success: false, error: 'Please enter your password.' });
+    const targetUserId = String(userId || caller.id);
+    if (!caller.isAdmin && targetUserId !== String(caller.id)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: cannot modify another user handle.' });
     }
 
-    const cleanUsername = trimmedUsername.toLowerCase().replace(/^@+/, '').trim();
-
-    // Executive Admin account handle (@modula) with password (ibraheem)
-    if (cleanUsername === 'modula') {
-      if (trimmedPassword === 'ibraheem') {
-        const modulaAdmin = {
-          id: 'usr_admin_modula',
-          nickname: '@modula',
-          accountType: 'Admin',
-          realName: 'Administrator',
-          matricNumber: '',
-          department: '',
-          level: '',
-          bio: 'Platform Administrator (@modula).',
-          avatarKey: '1',
-          badgeType: 'GOLD',
-          badgeTitle: 'Official Admin',
-          reputationScore: 9999,
-          isVerified: true,
-          isApproved: true,
-          isAdmin: true,
-        };
-        return res.json({ success: true, user: modulaAdmin });
-      } else {
-        return res.status(401).json({ success: false, error: 'Incorrect password. Please try again.' });
-      }
-    }
-
-    const findMatch = (list: any[]) => {
-      const lowerInput = trimmedUsername.toLowerCase();
-      const cleanNick = lowerInput.replace(/^@+/, '').trim();
-
-      return list.find((u: any) => {
-        if (!u || !u.nickname) return false;
-        const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
-        return uNick === cleanNick;
-      });
-    };
-
-    // Look up user across active database
-    let matched = findMatch(activeDb.users || []);
-
-    // Also check superseded usernames (e.g. if username was updated, match by previous username)
-    if (!matched && (activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
-      const sup = (activeDb as any).supersededUsernames[cleanUsername];
-      if (sup && sup.userId) {
-        matched = (activeDb.users || []).find((u: any) => u.id === sup.userId);
-      }
-    }
-
-    // If not found in memory activeDb, try fresh Firestore sync to ensure recent updates are caught
-    if (!matched) {
-      await syncFirestoreToActiveDb().catch(() => {});
-      matched = findMatch(activeDb.users || []);
-      if (!matched && (activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[cleanUsername]) {
-        const sup = (activeDb as any).supersededUsernames[cleanUsername];
-        if (sup && sup.userId) {
-          matched = (activeDb.users || []).find((u: any) => u.id === sup.userId);
-        }
-      }
-    }
-
-    if (!matched) {
-      return res.status(404).json({ success: false, error: 'Account not found. Please check your login details.' });
-    }
-
-    // Verify password strictly
-    const expectedPassword = matched.savedPassword || matched.password || 'password123';
-    if (trimmedPassword !== expectedPassword) {
-      return res.status(401).json({ success: false, error: 'Incorrect password. Please try again.' });
-    }
-
-    if (matched.isApproved === false && !matched.isAdmin) {
-      return res.status(403).json({
-        success: false,
-        error: 'Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.',
-        isPending: true,
-      });
-    }
-
-    return res.json({ success: true, user: matched });
-  } catch (err: any) {
-    console.error('[Auth API] Login error:', err);
-    return res.status(500).json({ success: false, error: 'Authentication service error' });
-  }
-});
-
-// Dedicated Central Username Change Endpoint - ensures authoritative central synchronization across all devices
-app.post('/api/users/change-username', async (req, res) => {
-  try {
-    const { userId, newNickname, oldNickname, previousNicknames: incomingPrevNicks, avatarKey, avatarUrl } = req.body || {};
-    if (!userId || !newNickname) {
-      return res.status(400).json({ success: false, error: 'User ID and new username are required' });
+    if (!newNickname) {
+      return res.status(400).json({ success: false, error: 'New username is required' });
     }
 
     const rawNew = String(newNickname).trim();
@@ -1107,27 +2471,20 @@ app.post('/api/users/change-username', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid username' });
     }
 
-    if (cleanNew.includes('anonymous') || cleanNew.includes('anon')) {
-      return res.status(400).json({ success: false, error: 'Username cannot contain anonymous or anon' });
+    if (targetUserId !== 'usr_admin_modula' && isReservedHandle(cleanNew)) {
+      return res.status(400).json({ success: false, error: 'This username is reserved or not permitted.' });
     }
 
-    // Ensure central DB has synced from Firestore if user is missing in memory
-    let userIndex = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === String(userId));
-    if (userIndex === -1) {
-      await syncFirestoreToActiveDb().catch(() => {});
-      userIndex = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === String(userId));
-    }
-
+    const userIndex = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === targetUserId);
     if (userIndex === -1) {
       return res.status(404).json({ success: false, error: 'User account not found' });
     }
 
-    // Check if new username is already actively used by any other user
     const existingOther = (activeDb.users || []).find((u: any) => {
       if (!u || !u.nickname) return false;
       const uId = String(u.id || '');
       const uNick = normalizeServerHandle(u.nickname);
-      return uId !== String(userId) && uNick === cleanNew;
+      return uId !== targetUserId && uNick === cleanNew;
     });
 
     if (existingOther) {
@@ -1138,7 +2495,6 @@ app.post('/api/users/change-username', async (req, res) => {
     const currentNickClean = normalizeServerHandle(currentUser.nickname);
     const previousNickClean = cleanOld || currentNickClean;
 
-    // Collect all historical handle aliases belonging strictly to this user
     const prevListRaw = [
       ...(Array.isArray(currentUser.previousNicknames) ? currentUser.previousNicknames : []),
       ...(Array.isArray(incomingPrevNicks) ? incomingPrevNicks : []),
@@ -1162,9 +2518,8 @@ app.post('/api/users/change-username', async (req, res) => {
       updatedAt: nowIso,
     };
 
-    // Cascade username change across ALL posts, comments, follows, verifications, marketplace, DMs & notifications
     const cascadeResult = cascadeUsernameChangeInActiveDb({
-      userId: String(userId),
+      userId: targetUserId,
       oldAliases: [previousNickClean, currentNickClean, ...Array.from(prevSet)],
       newNickname: formattedNew,
       nowIso,
@@ -1174,103 +2529,9 @@ app.post('/api/users/change-username', async (req, res) => {
 
     persistServerDb();
 
-    // Sync user and cascaded posts/comments to Firestore
-    try {
-      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        const { initializeApp, getApps } = await import('firebase/app');
-        const { getFirestore, doc, setDoc, deleteDoc, collection, getDocs } = await import('firebase/firestore');
-        const app = !getApps().length ? initializeApp(config) : getApps()[0];
-        const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
-
-        await setDoc(doc(firestoreDb, 'users', String(userId)), {
-          nickname: formattedNew,
-          previousNicknames: nextPreviousNicknames,
-          updatedAt: nowIso,
-        }, { merge: true });
-
-        if (previousNickClean) {
-          await deleteDoc(doc(firestoreDb, 'users', previousNickClean)).catch(() => {});
-        }
-
-        // Update cascaded posts in Firestore
-        const postUpdates = cascadeResult.updatedPosts || [];
-        if (postUpdates.length > 0) {
-          await Promise.all(
-            postUpdates.map((p: any) =>
-              setDoc(
-                doc(firestoreDb, 'posts', String(p.id)),
-                {
-                  authorId: p.authorId || String(userId),
-                  authorNickname: p.authorNickname,
-                  ...(p.nickname ? { nickname: p.nickname } : {}),
-                  ...(p.likedBy ? { likedBy: p.likedBy } : {}),
-                  ...(p.repostedBy ? { repostedBy: p.repostedBy } : {}),
-                  ...(p.repostRecords ? { repostRecords: p.repostRecords } : {}),
-                  ...(p.bookmarkedBy ? { bookmarkedBy: p.bookmarkedBy } : {}),
-                  ...(p.quotedPost ? { quotedPost: p.quotedPost } : {}),
-                  ...(p.repostedPost ? { repostedPost: p.repostedPost } : {}),
-                  updatedAt: nowIso,
-                },
-                { merge: true }
-              ).catch(() => {})
-            )
-          );
-        } else {
-          // Also scan Firestore posts directly in case any former post wasn't in activeDb yet
-          const fsPostsSnap = await getDocs(collection(firestoreDb, 'posts')).catch(() => null);
-          if (fsPostsSnap) {
-            const aliasCheckSet = new Set([previousNickClean, currentNickClean, ...Array.from(prevSet)].filter(Boolean));
-            const extraPromises: Promise<any>[] = [];
-            fsPostsSnap.forEach((d: any) => {
-              const pData = d.data();
-              if (!pData) return;
-              const pNick = normalizeServerHandle(pData.authorNickname || pData.nickname);
-              if (String(pData.authorId || '') === String(userId) || aliasCheckSet.has(pNick)) {
-                extraPromises.push(
-                  setDoc(
-                    doc(firestoreDb, 'posts', d.id),
-                    { authorId: String(userId), authorNickname: formattedNew, updatedAt: nowIso },
-                    { merge: true }
-                  ).catch(() => {})
-                );
-              }
-            });
-            if (extraPromises.length > 0) await Promise.all(extraPromises);
-          }
-        }
-
-        // Update cascaded comments in Firestore
-        const commentUpdates = cascadeResult.updatedComments || [];
-        if (commentUpdates.length > 0) {
-          await Promise.all(
-            commentUpdates.map((c: any) =>
-              setDoc(
-                doc(firestoreDb, 'comments', String(c.id)),
-                {
-                  authorId: c.authorId || String(userId),
-                  authorNickname: c.authorNickname,
-                  ...(c.replyToNickname ? { replyToNickname: c.replyToNickname } : {}),
-                  ...(c.likedBy ? { likedBy: c.likedBy } : {}),
-                  updatedAt: nowIso,
-                },
-                { merge: true }
-              ).catch(() => {})
-            )
-          );
-        }
-      }
-    } catch (fsErr) {
-      console.warn('[Username Change] Firestore sync warning:', fsErr);
-    }
-
-    console.log(
-      `[Username Change] Central account ${userId} changed: @${previousNickClean} -> ${formattedNew} (cascaded ${cascadeResult.updatedPosts.length} posts, ${cascadeResult.updatedComments.length} comments)`
-    );
     return res.json({
       success: true,
-      user: activeDb.users[userIndex],
+      user: sanitizeUserForApi(activeDb.users[userIndex], caller),
       updatedPostsCount: cascadeResult.updatedPosts.length,
       updatedCommentsCount: cascadeResult.updatedComments.length,
       supersededUsernames: (activeDb as any).supersededUsernames || {},
@@ -1281,100 +2542,72 @@ app.post('/api/users/change-username', async (req, res) => {
   }
 });
 
-// Retrieve current authoritative user account by internal ID
-app.get('/api/users/:userId', async (req, res) => {
+app.get('/api/users/:userId', requireAuth, (req: AuthedRequest, res) => {
   try {
-    const rawId = req.params.userId || '';
+    const rawId = String(req.params.userId || '');
     if (!rawId) return res.status(400).json({ success: false, error: 'User ID is required' });
 
-    let matched = (activeDb.users || []).find((u: any) => u && String(u.id) === String(rawId));
-    if (!matched) {
-      await syncFirestoreToActiveDb().catch(() => {});
-      matched = (activeDb.users || []).find((u: any) => u && String(u.id) === String(rawId));
-    }
-
+    const matched = (activeDb.users || []).find((u: any) => u && String(u.id) === rawId);
     if (!matched) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
-    return res.json({ success: true, user: matched });
-  } catch (err: any) {
+    return res.json({
+      success: true,
+      user: sanitizeUserForApi(matched, req.sessionUser),
+    });
+  } catch {
     return res.status(500).json({ success: false, error: 'User lookup error' });
   }
 });
 
-// Central Avatar Management Endpoints (Permanent Cloud/Server Storage)
-app.post('/api/avatar/upload', (req, res) => {
+app.post('/api/avatar/upload', requireAuth, (req: AuthedRequest, res) => {
   try {
-    const { userId, nickname, avatarDataUrl } = req.body || {};
-    if (!userId && !nickname) {
-      return res.status(400).json({ success: false, error: 'User ID or nickname is required' });
+    const caller = req.sessionUser!;
+    const { userId, avatarDataUrl } = req.body || {};
+    const targetId = String(userId || caller.id);
+
+    if (!caller.isAdmin && targetId !== String(caller.id)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: cannot modify another user avatar.' });
+    }
+    if (targetId === 'usr_admin_modula' && String(caller.id) !== 'usr_admin_modula') {
+      return res.status(403).json({ success: false, error: 'Forbidden.' });
     }
 
-    const cleanNick = String(nickname || '').toLowerCase().replace(/^@/, '');
-    const cleanUserId = String(userId || cleanNick);
-    const safeFilename = cleanUserId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeFilename = targetId.replace(/[^a-zA-Z0-9_-]/g, '_');
     const avatarFilePath = path.join(AVATARS_DIR, `${safeFilename}.jpg`);
 
-    if (!avatarDataUrl || avatarDataUrl.trim() === '') {
-      // User requested deliberate removal of profile picture
+    if (!avatarDataUrl || String(avatarDataUrl).trim() === '') {
       if (fs.existsSync(avatarFilePath)) {
         try {
           fs.unlinkSync(avatarFilePath);
-        } catch (e) {}
+        } catch {}
       }
-
-      if (Array.isArray(activeDb.users)) {
-        activeDb.users = activeDb.users.map((u: any) => {
-          const uId = String(u.id || '');
-          const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-          if ((userId && uId === String(userId)) || (cleanNick && uNick === cleanNick)) {
-            return { ...u, avatarUrl: '', updatedAt: new Date().toISOString() };
-          }
-          return u;
-        });
-        persistServerDb();
-      }
-
+      activeDb.users = (activeDb.users || []).map((u: any) =>
+        u && String(u.id) === targetId ? { ...u, avatarUrl: '', updatedAt: new Date().toISOString() } : u
+      );
+      persistServerDb();
       return res.json({ success: true, avatarUrl: '' });
     }
 
-    // Process and write the Base64 image directly to permanent storage on server disk
-    const base64Data = avatarDataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const rawDataUrl = String(avatarDataUrl);
+    if (!rawDataUrl.startsWith('data:image/')) {
+      return res.status(400).json({ success: false, error: 'Invalid avatar image format.' });
+    }
+
+    const base64Data = rawDataUrl.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
     fs.writeFileSync(avatarFilePath, buffer);
 
-    // Save avatar permanently in activeDb
-    if (Array.isArray(activeDb.users)) {
-      let matched = false;
-      activeDb.users = activeDb.users.map((u: any) => {
-        const uId = String(u.id || '');
-        const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-        if ((userId && uId === String(userId)) || (cleanNick && uNick === cleanNick)) {
-          matched = true;
-          return {
-            ...u,
-            avatarUrl: avatarDataUrl,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return u;
-      });
-
-      if (!matched && (userId || nickname)) {
-        activeDb.users.push({
-          id: userId || `usr_${Date.now()}`,
-          nickname: nickname || '@Student',
-          avatarUrl: avatarDataUrl,
-          updatedAt: new Date().toISOString(),
-        } as any);
-      }
-
-      persistServerDb();
-    }
+    activeDb.users = (activeDb.users || []).map((u: any) =>
+      u && String(u.id) === targetId
+        ? { ...u, avatarUrl: rawDataUrl, updatedAt: new Date().toISOString() }
+        : u
+    );
+    persistServerDb();
 
     return res.json({
       success: true,
-      avatarUrl: avatarDataUrl,
+      avatarUrl: rawDataUrl,
       fileUrl: `/api/avatar/${encodeURIComponent(safeFilename)}`,
     });
   } catch (err: any) {
@@ -1385,7 +2618,7 @@ app.post('/api/avatar/upload', (req, res) => {
 
 app.get('/api/avatar/:userId', (req, res) => {
   try {
-    const rawTarget = req.params.userId || '';
+    const rawTarget = String(req.params.userId || '');
     const cleanNick = rawTarget.toLowerCase().replace(/^@/, '');
     const safeFilename = rawTarget.replace(/[^a-zA-Z0-9_-]/g, '_');
     const directPath = path.join(AVATARS_DIR, `${safeFilename}.jpg`);
@@ -1396,20 +2629,23 @@ app.get('/api/avatar/:userId', (req, res) => {
       return fs.createReadStream(directPath).pipe(res);
     }
 
-    // Try finding by nickname in activeDb
     if (Array.isArray(activeDb.users)) {
       const user = activeDb.users.find((u: any) => {
         const uId = String(u.id || '');
-        const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-        return uId === rawTarget || safeFilename === uId.replace(/[^a-zA-Z0-9_-]/g, '_') || (cleanNick && uNick === cleanNick);
+        const uNick = normalizeServerHandle(u.nickname);
+        return (
+          uId === rawTarget ||
+          safeFilename === uId.replace(/[^a-zA-Z0-9_-]/g, '_') ||
+          (cleanNick && uNick === cleanNick)
+        );
       });
 
-      if (user && user.avatarUrl && user.avatarUrl.startsWith('data:image/')) {
-        const base64Data = user.avatarUrl.replace(/^data:image\/\w+;base64,/, '');
+      if (user && user.avatarUrl && String(user.avatarUrl).startsWith('data:image/')) {
+        const base64Data = String(user.avatarUrl).replace(/^data:image\/\w+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
         try {
           fs.writeFileSync(directPath, buffer);
-        } catch (e) {}
+        } catch {}
         res.setHeader('Content-Type', 'image/jpeg');
         res.setHeader('Cache-Control', 'public, max-age=86400');
         return res.send(buffer);
@@ -1417,14 +2653,19 @@ app.get('/api/avatar/:userId', (req, res) => {
     }
 
     return res.status(404).send('Avatar not found');
-  } catch (err) {
+  } catch {
     return res.status(500).send('Error retrieving avatar');
   }
 });
 
-app.delete('/api/avatar/:userId', (req, res) => {
+app.delete('/api/avatar/:userId', requireAuth, (req: AuthedRequest, res) => {
   try {
-    const rawTarget = req.params.userId || '';
+    const caller = req.sessionUser!;
+    const rawTarget = String(req.params.userId || '');
+    if (!caller.isAdmin && rawTarget !== String(caller.id)) {
+      return res.status(403).json({ success: false, error: 'Forbidden: cannot delete another user avatar.' });
+    }
+
     const cleanNick = rawTarget.toLowerCase().replace(/^@/, '');
     const safeFilename = rawTarget.replace(/[^a-zA-Z0-9_-]/g, '_');
     const directPath = path.join(AVATARS_DIR, `${safeFilename}.jpg`);
@@ -1432,20 +2673,18 @@ app.delete('/api/avatar/:userId', (req, res) => {
     if (fs.existsSync(directPath)) {
       try {
         fs.unlinkSync(directPath);
-      } catch (e) {}
+      } catch {}
     }
 
-    if (Array.isArray(activeDb.users)) {
-      activeDb.users = activeDb.users.map((u: any) => {
-        const uId = String(u.id || '');
-        const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-        if (uId === rawTarget || (cleanNick && uNick === cleanNick)) {
-          return { ...u, avatarUrl: '', updatedAt: new Date().toISOString() };
-        }
-        return u;
-      });
-      persistServerDb();
-    }
+    activeDb.users = (activeDb.users || []).map((u: any) => {
+      const uId = String(u.id || '');
+      const uNick = normalizeServerHandle(u.nickname);
+      if (uId === rawTarget || (cleanNick && uNick === cleanNick)) {
+        return { ...u, avatarUrl: '', updatedAt: new Date().toISOString() };
+      }
+      return u;
+    });
+    persistServerDb();
 
     return res.json({ success: true });
   } catch (err: any) {
@@ -1453,142 +2692,126 @@ app.delete('/api/avatar/:userId', (req, res) => {
   }
 });
 
-// Dedicated Permanent Account Deletion Endpoint - guarantees cross-device permanent eradication
-app.post('/api/user/delete', async (req, res) => {
+function executePermanentUserDeletion(targetUserId: string, cleanNick: string, cleanEmail: string): void {
+  const deletedIds = new Set((activeDb.deletedUserIds || []).map(String));
+  const deletedNicks = new Set(
+    (activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, ''))
+  );
+  if (targetUserId) deletedIds.add(targetUserId);
+  if (cleanNick) deletedNicks.add(cleanNick);
+  activeDb.deletedUserIds = Array.from(deletedIds);
+  activeDb.deletedUserNicknames = Array.from(deletedNicks);
+
+  activeDb.users = (activeDb.users || []).filter((u: any) => {
+    const uId = String(u.id || '');
+    const uNick = normalizeServerHandle(u.nickname);
+    const uEmail = String(u.studentEmail || '').toLowerCase();
+    if (targetUserId && uId === targetUserId) return false;
+    if (cleanNick && uNick === cleanNick) return false;
+    if (cleanEmail && uEmail === cleanEmail) return false;
+    return true;
+  });
+
+  const deletedPostIdsSet = new Set<string>();
+  activeDb.posts = (activeDb.posts || []).filter((p: any) => {
+    const pNick = normalizeServerHandle(p.authorNickname);
+    const pId = String(p.authorId || '');
+    if ((targetUserId && pId === targetUserId) || (cleanNick && pNick === cleanNick)) {
+      deletedPostIdsSet.add(String(p.id));
+      return false;
+    }
+    return true;
+  });
+  activeDb.posts = (activeDb.posts || []).filter(
+    (p: any) => !(p.repostedPostId && deletedPostIdsSet.has(String(p.repostedPostId)))
+  );
+  activeDb.comments = (activeDb.comments || []).filter((c: any) => {
+    const cNick = normalizeServerHandle(c.authorNickname);
+    const cId = String(c.authorId || '');
+    return !(
+      (targetUserId && cId === targetUserId) ||
+      (cleanNick && cNick === cleanNick) ||
+      (c.postId && deletedPostIdsSet.has(String(c.postId)))
+    );
+  });
+  activeDb.marketplaceItems = (activeDb.marketplaceItems || []).filter((m: any) => {
+    const mNick = normalizeServerHandle(m.sellerNickname);
+    const mId = String(m.sellerId || '');
+    return !((targetUserId && mId === targetUserId) || (cleanNick && mNick === cleanNick));
+  });
+  activeDb.pendingMarketplaceItems = (activeDb.pendingMarketplaceItems || []).filter((m: any) => {
+    const mNick = normalizeServerHandle(m.sellerNickname);
+    const mId = String(m.sellerId || '');
+    return !((targetUserId && mId === targetUserId) || (cleanNick && mNick === cleanNick));
+  });
+  activeDb.directMessages = (activeDb.directMessages || []).filter((d: any) => {
+    const sNick = normalizeServerHandle(d.senderNickname);
+    const rNick = normalizeServerHandle(d.receiverNickname);
+    return !(cleanNick && (sNick === cleanNick || rNick === cleanNick));
+  });
+  activeDb.chatConversations = (activeDb.chatConversations || []).filter((c: any) => {
+    const oNick = normalizeServerHandle(c.otherUserNickname);
+    return !(cleanNick && oNick === cleanNick);
+  });
+  activeDb.verificationRequests = (activeDb.verificationRequests || []).filter((v: any) => {
+    const vNick = normalizeServerHandle(v.applicantNickname);
+    return !(cleanNick && vNick === cleanNick);
+  });
+  activeDb.follows = (activeDb.follows || []).filter((f: any) => {
+    const f1 = normalizeServerHandle(f.followerNickname);
+    const f2 = normalizeServerHandle(f.followingNickname);
+    return !(cleanNick && (f1 === cleanNick || f2 === cleanNick));
+  });
+
+  if (targetUserId) {
+    revokeAllSessionsForUser(targetUserId, 'Account permanently deleted');
+  }
+  persistServerDb();
+}
+
+app.post('/api/user/delete', requireAuth, (req: AuthedRequest, res) => {
   try {
-    const { userId, nickname, studentEmail, matricNumber } = req.body || {};
-    const rawId = userId ? String(userId).trim() : '';
-    const cleanNick = nickname ? String(nickname).trim().toLowerCase().replace(/^@/, '') : '';
+    const caller = req.sessionUser!;
+    const { userId, nickname, studentEmail } = req.body || {};
+    const rawId = userId ? String(userId).trim() : String(caller.id);
+    const cleanNick = nickname ? normalizeServerHandle(nickname) : normalizeServerHandle(caller.nickname);
     const cleanEmail = studentEmail ? String(studentEmail).trim().toLowerCase() : '';
-    const cleanMatric = matricNumber ? String(matricNumber).trim().toUpperCase() : '';
 
     if (rawId === 'usr_admin_modula' || cleanNick === 'modula') {
       return res.status(400).json({ success: false, error: 'Platform administrator (@modula) cannot be deleted.' });
     }
 
-    if (!rawId && !cleanNick && !cleanEmail) {
-      return res.status(400).json({ success: false, error: 'User identifier required for deletion.' });
+    if (!caller.isAdmin && rawId !== String(caller.id)) {
+      appendAuditLog({
+        event: 'UNAUTHORIZED_ACCOUNT_DELETE_BLOCKED',
+        actorId: String(caller.id),
+        actorNickname: String(caller.nickname || ''),
+        actorIsAdmin: false,
+        targetId: rawId,
+        ip: getClientIp(req),
+        userAgent: getUserAgent(req),
+        status: 'DENY',
+        details: 'Student attempted to delete another account.',
+      });
+      return res.status(403).json({ success: false, error: 'Forbidden: cannot delete another user account.' });
     }
 
-    // 1. Add to server-side deleted tombstones
-    const deletedIds = new Set((activeDb.deletedUserIds || []).map(String));
-    const deletedNicks = new Set((activeDb.deletedUserNicknames || []).map((n: string) => n.toLowerCase().replace(/^@/, '')));
-    if (rawId) deletedIds.add(rawId);
-    if (cleanNick) deletedNicks.add(cleanNick);
-    activeDb.deletedUserIds = Array.from(deletedIds);
-    activeDb.deletedUserNicknames = Array.from(deletedNicks);
-
-    // 2. Cascade delete from activeDb users
-    activeDb.users = (activeDb.users || []).filter((u: any) => {
-      const uId = String(u.id || '');
-      const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-      const uEmail = String(u.studentEmail || '').toLowerCase();
-      if (rawId && uId === rawId) return false;
-      if (cleanNick && uNick === cleanNick) return false;
-      if (cleanEmail && uEmail === cleanEmail) return false;
-      return true;
-    });
-
-    // Cascade delete posts, comments, marketplace, dms, etc.
-    const deletedPostIdsSet = new Set<string>();
-    activeDb.posts = (activeDb.posts || []).filter((p: any) => {
-      const pNick = String(p.authorNickname || '').toLowerCase().replace(/^@/, '');
-      const pId = String(p.authorId || '');
-      if ((rawId && pId === rawId) || (cleanNick && pNick === cleanNick)) {
-        deletedPostIdsSet.add(String(p.id));
-        return false;
-      }
-      return true;
-    });
-    activeDb.posts = (activeDb.posts || []).filter((p: any) => {
-      if (p.repostedPostId && deletedPostIdsSet.has(String(p.repostedPostId))) return false;
-      return true;
-    });
-    activeDb.comments = (activeDb.comments || []).filter((c: any) => {
-      const cNick = String(c.authorNickname || '').toLowerCase().replace(/^@/, '');
-      const cId = String(c.authorId || '');
-      if ((rawId && cId === rawId) || (cleanNick && cNick === cleanNick) || (c.postId && deletedPostIdsSet.has(String(c.postId)))) {
-        return false;
-      }
-      return true;
-    });
-    activeDb.marketplaceItems = (activeDb.marketplaceItems || []).filter((m: any) => {
-      const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
-      const mId = String(m.sellerId || '');
-      return !((rawId && mId === rawId) || (cleanNick && mNick === cleanNick));
-    });
-    activeDb.pendingMarketplaceItems = (activeDb.pendingMarketplaceItems || []).filter((m: any) => {
-      const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
-      const mId = String(m.sellerId || '');
-      return !((rawId && mId === rawId) || (cleanNick && mNick === cleanNick));
-    });
-    activeDb.directMessages = (activeDb.directMessages || []).filter((d: any) => {
-      const sNick = String(d.senderNickname || '').toLowerCase().replace(/^@/, '');
-      const rNick = String(d.receiverNickname || '').toLowerCase().replace(/^@/, '');
-      return !(cleanNick && (sNick === cleanNick || rNick === cleanNick));
-    });
-    activeDb.chatConversations = (activeDb.chatConversations || []).filter((c: any) => {
-      const oNick = String(c.otherUserNickname || '').toLowerCase().replace(/^@/, '');
-      return !(cleanNick && oNick === cleanNick);
-    });
-    activeDb.verificationRequests = (activeDb.verificationRequests || []).filter((v: any) => {
-      const vNick = String(v.applicantNickname || '').toLowerCase().replace(/^@/, '');
-      return !(cleanNick && vNick === cleanNick);
-    });
-    activeDb.follows = (activeDb.follows || []).filter((f: any) => {
-      const f1 = String(f.followerNickname || '').toLowerCase().replace(/^@/, '');
-      const f2 = String(f.followingNickname || '').toLowerCase().replace(/^@/, '');
-      return !(cleanNick && (f1 === cleanNick || f2 === cleanNick));
-    });
-
-    persistServerDb();
-
-    // 3. Delete from Firestore asynchronously server-side (guaranteed cloud cleanup)
-    try {
-      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        const { initializeApp, getApps } = await import('firebase/app');
-        const { getFirestore, collection, getDocs, deleteDoc, doc, setDoc } = await import('firebase/firestore');
-        const app = !getApps().length ? initializeApp(config) : getApps()[0];
-        const firestoreDb = getFirestore(app, config.firestoreDatabaseId || '(default)');
-
-        const tombstoneData = {
-          userId: rawId || null,
-          nickname: cleanNick || null,
-          studentEmail: cleanEmail || null,
-          matricNumber: cleanMatric || null,
-          deletedAt: new Date().toISOString(),
-        };
-
-        // Write tombstone to Firestore
-        if (rawId) {
-          await setDoc(doc(firestoreDb, 'deleted_users', rawId), tombstoneData).catch(() => {});
-          await deleteDoc(doc(firestoreDb, 'users', rawId)).catch(() => {});
-        }
-        if (cleanNick) {
-          await setDoc(doc(firestoreDb, 'deleted_users', cleanNick), tombstoneData).catch(() => {});
-          const nickDocId = cleanNick.replace(/[^a-z0-9_]/g, '');
-          if (nickDocId) {
-            await deleteDoc(doc(firestoreDb, 'users', nickDocId)).catch(() => {});
-          }
-        }
-
-        // Query Firestore users to remove any remaining document matching this account
-        const userDocsSnap = await getDocs(collection(firestoreDb, 'users')).catch(() => ({ forEach: () => {} }));
-        userDocsSnap.forEach((d: any) => {
-          const u = d.data();
-          const dId = String(u.id || d.id);
-          const dNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-          const dEmail = String(u.studentEmail || '').toLowerCase();
-          if ((rawId && dId === rawId) || (cleanNick && dNick === cleanNick) || (cleanEmail && dEmail === cleanEmail)) {
-            deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
-          }
-        });
-      }
-    } catch (fsErr) {
-      console.warn('[Server Account Deletion] Non-critical Firestore purge error:', fsErr);
+    executePermanentUserDeletion(rawId, cleanNick, cleanEmail);
+    if (!caller.isAdmin) {
+      clearSessionCookie(req, res);
     }
+
+    appendAuditLog({
+      event: 'ACCOUNT_DELETED',
+      actorId: String(caller.id),
+      actorNickname: String(caller.nickname || ''),
+      actorIsAdmin: Boolean(caller.isAdmin),
+      targetId: rawId,
+      ip: getClientIp(req),
+      userAgent: getUserAgent(req),
+      status: 'INFO',
+      details: `Account ${rawId} (@${cleanNick}) permanently deleted.`,
+    });
 
     return res.json({ success: true, deletedUserId: rawId, deletedNickname: cleanNick });
   } catch (err: any) {
@@ -1597,670 +2820,575 @@ app.post('/api/user/delete', async (req, res) => {
   }
 });
 
-app.delete('/api/users/:userId', async (req, res) => {
-  req.body = { ...req.body, userId: req.params.userId };
-  const { userId, nickname, studentEmail, matricNumber } = req.body || {};
-  const rawId = userId ? String(userId).trim() : '';
-  const cleanNick = nickname ? String(nickname).trim().toLowerCase().replace(/^@/, '') : '';
+app.delete('/api/users/:userId', requireAuth, (req: AuthedRequest, res) => {
+  const caller = req.sessionUser!;
+  const rawId = String(req.params.userId || '').trim();
+  if (!rawId) return res.status(400).json({ success: false, error: 'User ID required.' });
 
-  if (rawId === 'usr_admin_modula' || cleanNick === 'modula') {
+  if (rawId === 'usr_admin_modula') {
     return res.status(400).json({ success: false, error: 'Platform administrator (@modula) cannot be deleted.' });
   }
-
-  // Delegate to deletion logic
-  try {
-    const deletedIds = new Set((activeDb.deletedUserIds || []).map(String));
-    if (rawId) deletedIds.add(rawId);
-    activeDb.deletedUserIds = Array.from(deletedIds);
-    activeDb.users = (activeDb.users || []).filter((u: any) => String(u.id || '') !== rawId);
-    persistServerDb();
-    return res.json({ success: true, deletedUserId: rawId });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+  if (!caller.isAdmin && rawId !== String(caller.id)) {
+    return res.status(403).json({ success: false, error: 'Forbidden: cannot delete another user account.' });
   }
+
+  const targetUser = (activeDb.users || []).find((u: any) => String(u.id) === rawId);
+  const cleanNick = targetUser ? normalizeServerHandle(targetUser.nickname) : '';
+  const cleanEmail = targetUser?.studentEmail ? String(targetUser.studentEmail).toLowerCase() : '';
+  executePermanentUserDeletion(rawId, cleanNick, cleanEmail);
+  if (!caller.isAdmin) {
+    clearSessionCookie(req, res);
+  }
+  return res.json({ success: true, deletedUserId: rawId });
 });
 
-app.post('/api/db/sync', (req, res) => {
+// ============================================================================
+// SERVER-SIDE RBAC ENFORCED /api/db/sync
+// ============================================================================
+
+app.post('/api/db/sync', requireAuth, (req: AuthedRequest, res) => {
   try {
+    const caller = req.sessionUser!;
+    const isCallerAdmin = Boolean(caller.isAdmin && String(caller.id) === 'usr_admin_modula');
+    const callerAliases = getUserAliasesSet(caller);
+    const callerId = String(caller.id);
+    const ip = getClientIp(req);
+    const userAgent = getUserAgent(req);
+
     const rawBody = req.body || {};
-    const updates = (rawBody.updates && typeof rawBody.updates === 'object') ? rawBody.updates : rawBody;
-    if (updates && typeof updates === 'object') {
-      let changed = false;
+    const updates = rawBody.updates && typeof rawBody.updates === 'object' ? rawBody.updates : rawBody;
 
-      // Handle explicitly deleted users first
-      if (Array.isArray(updates.deletedUserIds) || Array.isArray(updates.deletedUserNicknames)) {
-        const toDeleteIds = (updates.deletedUserIds || []).map((id: any) => String(id));
-        const toDeleteNicks = (updates.deletedUserNicknames || []).map((n: any) => String(n).toLowerCase().replace(/^@/, ''));
+    const rejectForbidden = (reason: string) => {
+      appendAuditLog({
+        event: 'PRIVILEGE_ESCALATION_BLOCKED',
+        actorId: callerId,
+        actorNickname: String(caller.nickname || ''),
+        actorIsAdmin: isCallerAdmin,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: reason,
+      });
+      return res.status(403).json({ success: false, error: `Forbidden: ${reason}` });
+    };
 
-        const allDeletedIds = new Set([...(activeDb.deletedUserIds || []), ...toDeleteIds]);
-        const allDeletedNicks = new Set([...(activeDb.deletedUserNicknames || []), ...toDeleteNicks]);
+    if (!updates || typeof updates !== 'object') {
+      return res.status(400).json({ success: false, error: 'Invalid sync payload.' });
+    }
 
-        activeDb.deletedUserIds = Array.from(allDeletedIds);
-        activeDb.deletedUserNicknames = Array.from(allDeletedNicks);
-
-        activeDb.users = (activeDb.users || []).filter((u: any) => {
-          const uId = String(u.id || '');
-          const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-          return !allDeletedIds.has(uId) && !allDeletedNicks.has(uNick);
-        });
-
-        // Cascade delete posts owned by deleted users
-        const deletedPostIdsSet = new Set<string>();
-        activeDb.posts = (activeDb.posts || []).filter((p: any) => {
-          const pNick = String(p.authorNickname || '').toLowerCase().replace(/^@/, '');
-          const pId = String(p.authorId || '');
-          if (allDeletedIds.has(pId) || allDeletedNicks.has(pNick)) {
-            deletedPostIdsSet.add(String(p.id));
-            return false;
-          }
-          return true;
-        });
-
-        // Cascade delete reposts of those posts
-        activeDb.posts = (activeDb.posts || []).filter((p: any) => {
-          if (p.repostedPostId && deletedPostIdsSet.has(String(p.repostedPostId))) {
-            deletedPostIdsSet.add(String(p.id));
-            return false;
-          }
-          return true;
-        });
-
-        // Remove deleted user's likes on remaining posts and recalculate like counts
-        activeDb.posts = (activeDb.posts || []).map((p: any) => {
-          if (Array.isArray(p.likedBy)) {
-            const nextLiked = p.likedBy.filter((l: string) => {
-              const cleanL = String(l).toLowerCase().replace(/^@/, '');
-              return !allDeletedNicks.has(cleanL) && !allDeletedIds.has(String(l));
-            });
-            const newLikes = Math.max(0, nextLiked.length);
-            return { ...p, likedBy: nextLiked, likes: newLikes, likesCount: newLikes };
-          }
-          return p;
-        });
-
-        // Cascade delete comments owned by deleted users or on deleted posts
-        activeDb.comments = (activeDb.comments || []).filter((c: any) => {
-          const cNick = String(c.authorNickname || '').toLowerCase().replace(/^@/, '');
-          const cId = String(c.authorId || '');
-          if (allDeletedIds.has(cId) || allDeletedNicks.has(cNick) || (c.postId && deletedPostIdsSet.has(String(c.postId)))) {
-            return false;
-          }
-          return true;
-        });
-
-        // Recalculate comment count on all remaining posts
-        activeDb.posts = (activeDb.posts || []).map((p: any) => {
-          const cCount = (activeDb.comments || []).filter((c: any) => String(c.postId) === String(p.id)).length;
-          return { ...p, commentCount: cCount, commentsCount: cCount };
-        });
-
-        // Cascade delete marketplace items
-        activeDb.marketplaceItems = (activeDb.marketplaceItems || []).filter((m: any) => {
-          const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
-          const mId = String(m.sellerId || '');
-          return !allDeletedIds.has(mId) && !allDeletedNicks.has(mNick);
-        });
-        activeDb.pendingMarketplaceItems = (activeDb.pendingMarketplaceItems || []).filter((m: any) => {
-          const mNick = String(m.sellerNickname || '').toLowerCase().replace(/^@/, '');
-          const mId = String(m.sellerId || '');
-          return !allDeletedIds.has(mId) && !allDeletedNicks.has(mNick);
-        });
-
-        // Cascade delete direct messages
-        activeDb.directMessages = (activeDb.directMessages || []).filter((d: any) => {
-          const sNick = String(d.senderNickname || '').toLowerCase().replace(/^@/, '');
-          const rNick = String(d.receiverNickname || '').toLowerCase().replace(/^@/, '');
-          const sId = String(d.senderId || '');
-          const rId = String(d.receiverId || '');
-          return !allDeletedIds.has(sId) && !allDeletedIds.has(rId) && !allDeletedNicks.has(sNick) && !allDeletedNicks.has(rNick);
-        });
-
-        // Cascade delete chat conversations
-        activeDb.chatConversations = (activeDb.chatConversations || []).filter((c: any) => {
-          const oNick = String(c.otherUserNickname || '').toLowerCase().replace(/^@/, '');
-          return !allDeletedNicks.has(oNick);
-        });
-
-        // Cascade delete verification requests
-        activeDb.verificationRequests = (activeDb.verificationRequests || []).filter((v: any) => {
-          const vNick = String(v.applicantNickname || '').toLowerCase().replace(/^@/, '');
-          return !allDeletedNicks.has(vNick);
-        });
-
-        // Cascade delete follows
-        activeDb.follows = (activeDb.follows || []).filter((f: any) => {
-          const f1 = String(f.followerNickname || '').toLowerCase().replace(/^@/, '');
-          const f2 = String(f.followingNickname || '').toLowerCase().replace(/^@/, '');
-          return !allDeletedNicks.has(f1) && !allDeletedNicks.has(f2);
-        });
-
-        changed = true;
+    // Strict RBAC checks before applying any mutation for non-admin callers
+    if (!isCallerAdmin) {
+      if (
+        updates.replaceUsers ||
+        updates.replacePosts ||
+        updates.replaceComments ||
+        updates.replaceVerificationRequests ||
+        updates.replaceReports ||
+        updates.replaceVerifCandidates ||
+        updates.replaceDirectMessages ||
+        updates.replaceChatReports ||
+        updates.replaceChatRestrictions ||
+        updates.replaceMarketplaceItems ||
+        updates.replacePendingMarketplaceItems
+      ) {
+        return rejectForbidden('Collection replacement operations require Administrator privileges.');
       }
 
-      // Handle un-deletion / new account creation
-      if (Array.isArray(updates.unDeleteUserNicknames)) {
-        const unNicks = new Set(updates.unDeleteUserNicknames.map((n: any) => String(n).toLowerCase().replace(/^@/, '')));
-        activeDb.deletedUserNicknames = (activeDb.deletedUserNicknames || []).filter((n: string) => !unNicks.has(n.toLowerCase().replace(/^@/, '')));
-        changed = true;
-      }
-      if (Array.isArray(updates.unDeleteUserIds)) {
-        const unIds = new Set(updates.unDeleteUserIds.map((id: any) => String(id)));
-        activeDb.deletedUserIds = (activeDb.deletedUserIds || []).filter((id: string) => !unIds.has(String(id)));
-        changed = true;
-      }
-
-      // Handle globally deleted posts
-      if (Array.isArray(updates.deletedPostIds) && updates.deletedPostIds.length > 0) {
-        const toDeletePostIds = new Set(updates.deletedPostIds.map((id: any) => String(id)));
-        const allDeletedPostIds = new Set([...(activeDb.deletedPostIds || []), ...toDeletePostIds]);
-        activeDb.deletedPostIds = Array.from(allDeletedPostIds);
-        activeDb.posts = (activeDb.posts || []).filter((p: any) => !allDeletedPostIds.has(String(p.id)));
-        activeDb.comments = (activeDb.comments || []).filter((c: any) => !allDeletedPostIds.has(String(c.postId)));
-        changed = true;
-      }
-
-      // Handle globally deleted comments and replies
-      if (Array.isArray(updates.deletedCommentIds) && updates.deletedCommentIds.length > 0) {
-        const toDeleteCommentIds = new Set(updates.deletedCommentIds.map((id: any) => String(id)));
-        const allDeletedCommentIds = new Set([...(activeDb.deletedCommentIds || []), ...toDeleteCommentIds]);
-        activeDb.deletedCommentIds = Array.from(allDeletedCommentIds);
-        activeDb.comments = (activeDb.comments || []).filter((c: any) => !allDeletedCommentIds.has(String(c.id)) && !allDeletedCommentIds.has(String(c.parentId)));
-        changed = true;
+      if (
+        updates.verificationFee !== undefined ||
+        updates.verifCandidates !== undefined ||
+        updates.chatRestrictions !== undefined ||
+        updates.sentEmails !== undefined ||
+        updates.deletedUserIds !== undefined ||
+        updates.deletedUserNicknames !== undefined ||
+        updates.unDeleteUserIds !== undefined ||
+        updates.unDeleteUserNicknames !== undefined
+      ) {
+        return rejectForbidden('Admin configuration and user deletion tombstones require Administrator privileges.');
       }
 
       if (Array.isArray(updates.users)) {
-        const deletedIds = new Set((activeDb.deletedUserIds || []).map((id: any) => String(id)));
-        const deletedNicks = new Set((activeDb.deletedUserNicknames || []).map((n: any) => String(n).toLowerCase().replace(/^@/, '')));
-
-        const filteredIncoming = updates.users.filter((u: any) => {
-          const uId = String(u.id || '');
-          const uNick = String(u.nickname || '').toLowerCase().replace(/^@/, '');
-          return !deletedIds.has(uId) && !deletedNicks.has(uNick);
-        });
-
-        // Always safely merge incoming user updates so existing users are never accidentally wiped
-        const userMap = new Map<string, any>();
-        for (const u of (activeDb.users || [])) {
-          const key = u.id || (u.nickname ? u.nickname.toLowerCase().replace(/^@/, '') : '');
-          if (key) userMap.set(key, u);
-        }
-
-        const pendingUsernameCascades: Array<{
-          userId?: string;
-          oldAliases: string[];
-          newNickname: string;
-          nowIso: string;
-          avatarKey?: string;
-          avatarUrl?: string;
-        }> = [];
-
-        for (const incoming of filteredIncoming) {
-          const inId = String(incoming.id || '');
+        for (const incoming of updates.users) {
+          if (!incoming || typeof incoming !== 'object') continue;
+          const inId = String(incoming.id || '').trim();
           const inNick = normalizeServerHandle(incoming.nickname);
-          const inEmail = incoming.studentEmail ? String(incoming.studentEmail).toLowerCase().trim() : '';
-
-          // Match existing account by permanent ID (primary), email (secondary), or previous nickname
-          let matchedKey: string | null = null;
-          if (inId && userMap.has(inId)) {
-            matchedKey = inId;
-          } else {
-            for (const [key, existing] of userMap.entries()) {
-              if (inId && existing.id === inId) {
-                matchedKey = key;
-                break;
-              }
-              const exNick = normalizeServerHandle(existing.nickname);
-              if (inNick && exNick && inNick === exNick) {
-                matchedKey = key;
-                break;
-              }
-              const exEmail = existing.studentEmail ? String(existing.studentEmail).toLowerCase().trim() : '';
-              if (inEmail && exEmail && inEmail === exEmail && !inEmail.includes('admin@fuhsi.edu.ng')) {
-                matchedKey = key;
-                break;
-              }
-            }
+          if (inId === 'usr_admin_modula' || inNick === 'modula') {
+            return rejectForbidden('Cannot modify @modula administrator record.');
           }
-
-          if (matchedKey) {
-            const existing = userMap.get(matchedKey);
-
-            // REQUIREMENT 3, 4, 7: Protect central username from being regressed by stale client devices!
-            let authoritativeNick = existing.nickname;
-            const inNickClean = normalizeServerHandle(incoming.nickname);
-            const exNickClean = normalizeServerHandle(existing.nickname);
-
-            // If incoming has a nickname that is superseded (old), discard it and keep existing!
-            if ((activeDb as any).supersededUsernames && (activeDb as any).supersededUsernames[inNickClean]) {
-              authoritativeNick = existing.nickname;
-            } else if (incoming.nickname && incoming.nickname !== existing.nickname) {
-              const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-              const incomingTime = incoming.updatedAt ? new Date(incoming.updatedAt).getTime() : 0;
-              if (incomingTime > existingTime) {
-                authoritativeNick = incoming.nickname;
-                if (exNickClean && exNickClean !== inNickClean) {
-                  const changeIso = incoming.updatedAt || new Date().toISOString();
-                  pendingUsernameCascades.push({
-                    userId: String(existing.id || incoming.id || ''),
-                    oldAliases: [
-                      exNickClean,
-                      ...(Array.isArray(existing.previousNicknames) ? existing.previousNicknames : []),
-                      ...(Array.isArray(incoming.previousNicknames) ? incoming.previousNicknames : []),
-                    ],
-                    newNickname: incoming.nickname,
-                    nowIso: changeIso,
-                    avatarKey: incoming.avatarKey || existing.avatarKey,
-                    avatarUrl: incoming.avatarUrl !== undefined ? incoming.avatarUrl : existing.avatarUrl,
-                  });
-                }
-              }
-            }
-
-            const authClean = normalizeServerHandle(authoritativeNick);
-            const mergedPrevSet = new Set<string>();
-            [
-              ...(Array.isArray(existing.previousNicknames) ? existing.previousNicknames : []),
-              ...(Array.isArray(incoming.previousNicknames) ? incoming.previousNicknames : []),
-              exNickClean !== authClean ? existing.nickname : '',
-              inNickClean !== authClean ? incoming.nickname : '',
-            ].forEach((n) => {
-              const c = normalizeServerHandle(n);
-              if (c && c !== authClean) mergedPrevSet.add(c);
-            });
-            const mergedPreviousNicknames = Array.from(mergedPrevSet).map((c) => `@${c}`);
-
-            userMap.set(matchedKey, {
-              ...existing,
-              ...incoming,
-              id: existing.id || incoming.id,
-              nickname: authoritativeNick,
-              previousNicknames: mergedPreviousNicknames,
-              emergencyHomePhone: incoming.emergencyHomePhone !== undefined ? incoming.emergencyHomePhone : existing.emergencyHomePhone,
-              realName: incoming.realName !== undefined ? incoming.realName : existing.realName,
-              studentEmail: incoming.studentEmail !== undefined ? incoming.studentEmail : existing.studentEmail,
-              level: incoming.level !== undefined ? incoming.level : existing.level,
-              department: incoming.department !== undefined ? incoming.department : existing.department,
-              matricNumber: (incoming.matricNumber && incoming.matricNumber.trim()) 
-                ? incoming.matricNumber 
-                : (existing.matricNumber || incoming.matricNumber || ''),
-              bio: incoming.bio !== undefined ? incoming.bio : existing.bio,
-              avatarUrl: incoming.avatarUrl !== undefined ? incoming.avatarUrl : existing.avatarUrl,
-              avatarKey: incoming.avatarKey || existing.avatarKey,
-              savedPassword: incoming.savedPassword || (incoming as any).password || existing.savedPassword || (existing as any).password,
-              password: incoming.password || incoming.savedPassword || existing.password || existing.savedPassword,
-              isApproved: incoming.isApproved !== undefined ? incoming.isApproved : existing.isApproved,
-              isDeclined: incoming.isDeclined !== undefined ? incoming.isDeclined : existing.isDeclined,
-              isVerified: incoming.isVerified !== undefined ? incoming.isVerified : existing.isVerified,
-              verificationStatus: incoming.verificationStatus || existing.verificationStatus,
-              badgeType: incoming.badgeType !== undefined ? incoming.badgeType : existing.badgeType,
-              badgeTitle: incoming.badgeTitle !== undefined ? incoming.badgeTitle : existing.badgeTitle,
-              reputationScore: incoming.reputationScore !== undefined ? incoming.reputationScore : existing.reputationScore,
-              lastActiveAt: (() => {
-                const exMs = existing.lastActiveAt ? Date.parse(existing.lastActiveAt) || 0 : 0;
-                const inMs = incoming.lastActiveAt ? Date.parse(incoming.lastActiveAt) || 0 : 0;
-                return inMs >= exMs ? (incoming.lastActiveAt || existing.lastActiveAt) : existing.lastActiveAt;
-              })(),
-              isOnline: (() => {
-                const exMs = existing.lastActiveAt ? Date.parse(existing.lastActiveAt) || 0 : 0;
-                const inMs = incoming.lastActiveAt ? Date.parse(incoming.lastActiveAt) || 0 : 0;
-                if (inMs > exMs) return incoming.isOnline;
-                if (exMs > inMs) return existing.isOnline;
-                return incoming.isOnline !== undefined ? incoming.isOnline : existing.isOnline;
-              })(),
-              updatedAt: incoming.updatedAt || new Date().toISOString(),
-            });
-          } else {
-            const newKey = inId || inNick || `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-            userMap.set(newKey, incoming);
+          if (incoming.isAdmin === true || String(incoming.accountType || '').toLowerCase() === 'admin') {
+            return rejectForbidden('Cannot self-assign or escalate Administrator privileges.');
+          }
+          const isSelf = (inId && inId === callerId) || (!inId && inNick && callerAliases.has(inNick));
+          if (!isSelf) {
+            return rejectForbidden('Students cannot modify or create other users via sync.');
+          }
+          // Verify caller is not escalating their own verification/badge/approval flags
+          if (
+            (incoming.isVerified !== undefined && Boolean(incoming.isVerified) !== Boolean(caller.isVerified)) ||
+            (incoming.badgeType !== undefined && String(incoming.badgeType) !== String(caller.badgeType || 'NONE')) ||
+            (incoming.badgeTitle !== undefined && String(incoming.badgeTitle) !== String(caller.badgeTitle || '')) ||
+            (incoming.isApproved !== undefined && Boolean(incoming.isApproved) !== Boolean(caller.isApproved)) ||
+            (incoming.isDeclined !== undefined && Boolean(incoming.isDeclined) !== Boolean(caller.isDeclined))
+          ) {
+            return rejectForbidden('Cannot self-modify verification badge or account approval status.');
           }
         }
-
-        activeDb.users = Array.from(userMap.values()).filter((u: any) => {
-          const uId = String(u.id || '');
-          const uNick = normalizeServerHandle(u.nickname);
-          return !deletedIds.has(uId) && !deletedNicks.has(uNick);
-        });
-
-        for (const casc of pendingUsernameCascades) {
-          cascadeUsernameChangeInActiveDb(casc);
-        }
-        changed = true;
       }
+
+      if (Array.isArray(updates.deletedPostIds)) {
+        for (const pid of updates.deletedPostIds) {
+          const targetPost = (activeDb.posts || []).find((p: any) => p && String(p.id) === String(pid));
+          if (targetPost) {
+            const pAuthorId = String(targetPost.authorId || '');
+            const pNick = normalizeServerHandle(targetPost.authorNickname);
+            const owns = (pAuthorId && pAuthorId === callerId) || (pNick && callerAliases.has(pNick));
+            if (!owns) {
+              return rejectForbidden(`Cannot delete another student's post (${pid}).`);
+            }
+          }
+        }
+      }
+
+      if (Array.isArray(updates.deletedCommentIds)) {
+        for (const cid of updates.deletedCommentIds) {
+          const targetComment = (activeDb.comments || []).find((c: any) => c && String(c.id) === String(cid));
+          if (targetComment) {
+            const cAuthorId = String(targetComment.authorId || '');
+            const cNick = normalizeServerHandle(targetComment.authorNickname);
+            const parentPost = (activeDb.posts || []).find((p: any) => p && String(p.id) === String(targetComment.postId));
+            const ownsComment = (cAuthorId && cAuthorId === callerId) || (cNick && callerAliases.has(cNick));
+            const ownsParentPost =
+              parentPost &&
+              ((parentPost.authorId && String(parentPost.authorId) === callerId) ||
+                callerAliases.has(normalizeServerHandle(parentPost.authorNickname)));
+            if (!ownsComment && !ownsParentPost) {
+              return rejectForbidden(`Cannot delete another student's comment (${cid}).`);
+            }
+          }
+        }
+      }
+
       if (Array.isArray(updates.posts)) {
-        if (updates.replacePosts) {
-          activeDb.posts = updates.posts;
-        } else {
-          activeDb.posts = mergePosts(activeDb.posts, updates.posts);
+        for (const p of updates.posts) {
+          if (!p || typeof p !== 'object') continue;
+          const existingPost = (activeDb.posts || []).find((ep: any) => ep && String(ep.id) === String(p.id));
+          if (!existingPost) {
+            const pAuthorId = String(p.authorId || '').trim();
+            const pNick = normalizeServerHandle(p.authorNickname);
+            if ((pAuthorId && pAuthorId !== callerId) || (pNick && !callerAliases.has(pNick))) {
+              return rejectForbidden('Cannot create posts impersonating another user.');
+            }
+          } else {
+            const eAuthorId = String(existingPost.authorId || '').trim();
+            const eNick = normalizeServerHandle(existingPost.authorNickname);
+            const isAuthor = (eAuthorId && eAuthorId === callerId) || (eNick && callerAliases.has(eNick));
+            if (!isAuthor) {
+              // Non-authors cannot edit post content/author/quarantine status
+              if (
+                (p.content !== undefined && p.content !== existingPost.content) ||
+                (p.authorId !== undefined && String(p.authorId) !== String(existingPost.authorId)) ||
+                (p.authorNickname !== undefined &&
+                  normalizeServerHandle(p.authorNickname) !== normalizeServerHandle(existingPost.authorNickname)) ||
+                (p.isQuarantined !== undefined && Boolean(p.isQuarantined) !== Boolean(existingPost.isQuarantined))
+              ) {
+                return rejectForbidden('Cannot alter another student post content or moderation state.');
+              }
+            }
+          }
         }
-        changed = true;
       }
+
       if (Array.isArray(updates.comments)) {
-        if (updates.replaceComments) {
-          activeDb.comments = updates.comments;
-        } else {
-          activeDb.comments = mergeComments(activeDb.comments, updates.comments);
+        for (const c of updates.comments) {
+          if (!c || typeof c !== 'object') continue;
+          const existingComment = (activeDb.comments || []).find((ec: any) => ec && String(ec.id) === String(c.id));
+          if (!existingComment) {
+            const cAuthorId = String(c.authorId || '').trim();
+            const cNick = normalizeServerHandle(c.authorNickname);
+            if ((cAuthorId && cAuthorId !== callerId) || (cNick && !callerAliases.has(cNick))) {
+              return rejectForbidden('Cannot create comments impersonating another user.');
+            }
+          } else {
+            const eAuthorId = String(existingComment.authorId || '').trim();
+            const eNick = normalizeServerHandle(existingComment.authorNickname);
+            const isAuthor = (eAuthorId && eAuthorId === callerId) || (eNick && callerAliases.has(eNick));
+            if (!isAuthor && c.content !== undefined && c.content !== existingComment.content) {
+              return rejectForbidden('Cannot alter another student comment content.');
+            }
+          }
         }
-        // Reconcile commentsCount on affected posts in activeDb without clobbering likedBy
-        const affectedIds = new Set(updates.comments.map((c: any) => c?.postId).filter(Boolean).map(String));
-        if (affectedIds.size > 0 && Array.isArray(activeDb.posts)) {
-          activeDb.posts = activeDb.posts.map((p: any) => {
-            if (!affectedIds.has(String(p.id))) return p;
-            const cCount = (activeDb.comments || []).filter((c: any) => c && String(c.postId) === String(p.id) && !c.parentId).length;
-            return { ...p, commentsCount: cCount, commentCount: cCount };
+      }
+
+      if (Array.isArray(updates.verificationRequests)) {
+        for (const v of updates.verificationRequests) {
+          if (!v) continue;
+          if (v.status && v.status !== 'PENDING') {
+            return rejectForbidden('Only Administrators can approve, decline, or revoke verification requests.');
+          }
+        }
+      }
+
+      if (Array.isArray(updates.directMessages)) {
+        if (caller.accountType === 'Guest') {
+          return rejectForbidden('Guest accounts do not have direct messaging access.');
+        }
+        for (const dm of updates.directMessages) {
+          if (!dm) continue;
+          const existingDm = (activeDb.directMessages || []).find((ed: any) => ed && String(ed.id) === String(dm.id));
+          if (!existingDm) {
+            const sNick = normalizeServerHandle(dm.senderNickname);
+            const sId = String(dm.senderId || '').trim();
+            if ((sId && sId !== callerId) || (sNick && !callerAliases.has(sNick))) {
+              return rejectForbidden('Cannot send direct messages impersonating another user.');
+            }
+          }
+        }
+      }
+
+      if (updates.notifications && typeof updates.notifications === 'object') {
+        for (const [bucket, list] of Object.entries(updates.notifications)) {
+          if (bucket === '__all__') {
+            return rejectForbidden('Campus-wide __all__ broadcast notifications are restricted to Administrators.');
+          }
+          if (Array.isArray(list)) {
+            for (const n of list as any[]) {
+              if (n && (n.type === 'ADMIN' || n.type === 'OFFICIAL')) {
+                return rejectForbidden('Official/Admin notification dispatch requires Administrator privileges.');
+              }
+            }
+          }
+        }
+      }
+    }
+
+    let changed = false;
+
+    // Admin deletion tombstones
+    if (isCallerAdmin && (Array.isArray(updates.deletedUserIds) || Array.isArray(updates.deletedUserNicknames))) {
+      const toDeleteIds = (updates.deletedUserIds || [])
+        .map((id: any) => String(id))
+        .filter((id: string) => id !== 'usr_admin_modula');
+      const toDeleteNicks = (updates.deletedUserNicknames || [])
+        .map((n: any) => normalizeServerHandle(n))
+        .filter((n: string) => n !== 'modula');
+
+      for (let i = 0; i < Math.max(toDeleteIds.length, toDeleteNicks.length); i++) {
+        executePermanentUserDeletion(toDeleteIds[i] || '', toDeleteNicks[i] || '', '');
+      }
+      changed = true;
+    }
+
+    if (isCallerAdmin && Array.isArray(updates.unDeleteUserNicknames)) {
+      const unNicks = new Set(updates.unDeleteUserNicknames.map((n: any) => normalizeServerHandle(n)));
+      activeDb.deletedUserNicknames = (activeDb.deletedUserNicknames || []).filter(
+        (n: string) => !unNicks.has(normalizeServerHandle(n))
+      );
+      changed = true;
+    }
+    if (isCallerAdmin && Array.isArray(updates.unDeleteUserIds)) {
+      const unIds = new Set(updates.unDeleteUserIds.map((id: any) => String(id)));
+      activeDb.deletedUserIds = (activeDb.deletedUserIds || []).filter((id: string) => !unIds.has(String(id)));
+      changed = true;
+    }
+
+    // Deleted posts
+    if (Array.isArray(updates.deletedPostIds) && updates.deletedPostIds.length > 0) {
+      const toDeletePostIds = new Set(updates.deletedPostIds.map((id: any) => String(id)));
+      const allDeletedPostIds = new Set([...(activeDb.deletedPostIds || []), ...toDeletePostIds]);
+      activeDb.deletedPostIds = Array.from(allDeletedPostIds);
+      activeDb.posts = (activeDb.posts || []).filter(
+        (p: any) => !allDeletedPostIds.has(String(p.id)) && !toDeletePostIds.has(String(p.repostedPostId))
+      );
+      activeDb.comments = (activeDb.comments || []).filter((c: any) => !allDeletedPostIds.has(String(c.postId)));
+      changed = true;
+    }
+
+    // Deleted comments + recalculate top-level counts
+    if (Array.isArray(updates.deletedCommentIds) && updates.deletedCommentIds.length > 0) {
+      const toDeleteCommentIds = new Set(updates.deletedCommentIds.map((id: any) => String(id)));
+      const allDeletedCommentIds = new Set([
+        ...((activeDb as any).deletedCommentIds || []),
+        ...toDeleteCommentIds,
+      ]);
+      (activeDb as any).deletedCommentIds = Array.from(allDeletedCommentIds);
+      activeDb.comments = (activeDb.comments || []).filter(
+        (c: any) => !allDeletedCommentIds.has(String(c.id)) && !allDeletedCommentIds.has(String(c.parentId))
+      );
+      const countsMap = new Map<string, number>();
+      for (const c of activeDb.comments || []) {
+        if (c && c.postId && !c.parentId) {
+          countsMap.set(String(c.postId), (countsMap.get(String(c.postId)) || 0) + 1);
+        }
+      }
+      activeDb.posts = (activeDb.posts || []).map((p: any) => {
+        const nextCount = countsMap.get(String(p.id)) || 0;
+        return { ...p, commentsCount: nextCount, commentCount: nextCount };
+      });
+      changed = true;
+    }
+
+    // Users merge
+    if (Array.isArray(updates.users)) {
+      const deletedIds = new Set((activeDb.deletedUserIds || []).map((id: any) => String(id)));
+      const deletedNicks = new Set((activeDb.deletedUserNicknames || []).map((n: any) => normalizeServerHandle(n)));
+      const userMap = new Map<string, any>();
+      for (const u of activeDb.users || []) {
+        if (u?.id) userMap.set(String(u.id), u);
+      }
+
+      for (const rawIncoming of updates.users) {
+        if (!rawIncoming) continue;
+        const incoming = stripPlaintextPasswordsFromUser(rawIncoming);
+        const inId = String(incoming.id || '').trim();
+        const inNick = normalizeServerHandle(incoming.nickname);
+        if (deletedIds.has(inId) || deletedNicks.has(inNick)) continue;
+
+        const existing = inId ? userMap.get(inId) : undefined;
+        if (existing) {
+          let authoritativeNick = existing.nickname;
+          const exNickClean = normalizeServerHandle(existing.nickname);
+          if (incoming.nickname && incoming.nickname !== existing.nickname && !isReservedHandle(inNick)) {
+            const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+            const incomingTime = incoming.updatedAt ? new Date(incoming.updatedAt).getTime() : 0;
+            if (incomingTime > existingTime) {
+              authoritativeNick = incoming.nickname;
+            }
+          }
+
+          userMap.set(existing.id, {
+            ...existing,
+            ...incoming,
+            id: existing.id,
+            nickname: authoritativeNick,
+            // Server authoritative credentials & RBAC
+            passwordHash: existing.passwordHash,
+            sessionVersion: existing.sessionVersion || 1,
+            securityRotatedAt: existing.securityRotatedAt,
+            isAdmin: existing.id === 'usr_admin_modula' ? true : Boolean(existing.isAdmin),
+            accountType: existing.id === 'usr_admin_modula' ? 'Admin' : incoming.accountType || existing.accountType,
+            isApproved: isCallerAdmin && incoming.isApproved !== undefined ? incoming.isApproved : existing.isApproved,
+            isDeclined: isCallerAdmin && incoming.isDeclined !== undefined ? incoming.isDeclined : existing.isDeclined,
+            isVerified: isCallerAdmin && incoming.isVerified !== undefined ? incoming.isVerified : existing.isVerified,
+            verificationStatus:
+              isCallerAdmin && incoming.verificationStatus ? incoming.verificationStatus : existing.verificationStatus,
+            badgeType: isCallerAdmin && incoming.badgeType !== undefined ? incoming.badgeType : existing.badgeType,
+            badgeTitle: isCallerAdmin && incoming.badgeTitle !== undefined ? incoming.badgeTitle : existing.badgeTitle,
+            updatedAt: incoming.updatedAt || new Date().toISOString(),
+          });
+          if (existing.isApproved === true && incoming.isApproved === false && !existing.isAdmin) {
+            revokeAllSessionsForUser(String(existing.id), 'Admin revoked account approval');
+          }
+        } else if (isCallerAdmin && inId && inNick && !isReservedHandle(inNick)) {
+          userMap.set(inId, {
+            ...incoming,
+            isAdmin: false,
+            sessionVersion: 1,
           });
         }
+      }
+
+      activeDb.users = Array.from(userMap.values());
+      changed = true;
+    }
+
+    if (Array.isArray(updates.posts)) {
+      if (updates.replacePosts && isCallerAdmin) {
+        activeDb.posts = updates.posts;
+      } else {
+        activeDb.posts = mergePosts(activeDb.posts, updates.posts);
+      }
+      changed = true;
+    }
+
+    if (Array.isArray(updates.comments)) {
+      if (updates.replaceComments && isCallerAdmin) {
+        activeDb.comments = updates.comments;
+      } else {
+        activeDb.comments = mergeComments(activeDb.comments, updates.comments);
+      }
+      const affectedIds = new Set(updates.comments.map((c: any) => c?.postId).filter(Boolean).map(String));
+      if (affectedIds.size > 0 && Array.isArray(activeDb.posts)) {
+        activeDb.posts = activeDb.posts.map((p: any) => {
+          if (!affectedIds.has(String(p.id))) return p;
+          const cCount = (activeDb.comments || []).filter(
+            (c: any) => c && String(c.postId) === String(p.id) && !c.parentId
+          ).length;
+          return { ...p, commentsCount: cCount, commentCount: cCount };
+        });
+      }
+      changed = true;
+    }
+
+    if (updates.postCommentCount && updates.postCommentCount.postId) {
+      const targetId = String(updates.postCommentCount.postId);
+      const safeCount = Math.max(0, Number(updates.postCommentCount.commentsCount) || 0);
+      if (Array.isArray(activeDb.posts)) {
+        activeDb.posts = activeDb.posts.map((p: any) =>
+          String(p.id) === targetId ? { ...p, commentsCount: safeCount, commentCount: safeCount } : p
+        );
         changed = true;
       }
-      if (updates.postCommentCount && updates.postCommentCount.postId) {
-        const targetId = String(updates.postCommentCount.postId);
-        const safeCount = Math.max(0, Number(updates.postCommentCount.commentsCount) || 0);
-        if (Array.isArray(activeDb.posts)) {
-          activeDb.posts = activeDb.posts.map((p: any) =>
-            String(p.id) === targetId ? { ...p, commentsCount: safeCount, commentCount: safeCount } : p
+    }
+
+    if (Array.isArray(updates.marketplaceItems)) {
+      if (updates.replaceMarketplaceItems && isCallerAdmin) {
+        activeDb.marketplaceItems = updates.marketplaceItems;
+      } else {
+        activeDb.marketplaceItems = mergeMarketplaceItems(activeDb.marketplaceItems, updates.marketplaceItems);
+      }
+      changed = true;
+    }
+
+    if (Array.isArray(updates.pendingMarketplaceItems)) {
+      if (updates.replacePendingMarketplaceItems && isCallerAdmin) {
+        activeDb.pendingMarketplaceItems = updates.pendingMarketplaceItems;
+      } else {
+        activeDb.pendingMarketplaceItems = mergeMarketplaceItems(
+          activeDb.pendingMarketplaceItems,
+          updates.pendingMarketplaceItems
+        );
+      }
+      changed = true;
+    }
+
+    if (Array.isArray(updates.verificationRequests)) {
+      if (updates.replaceVerificationRequests && isCallerAdmin) {
+        activeDb.verificationRequests = updates.verificationRequests;
+      } else {
+        activeDb.verificationRequests = mergeVerificationRequests(
+          activeDb.verificationRequests,
+          updates.verificationRequests
+        );
+      }
+      changed = true;
+    }
+
+    if (Array.isArray(updates.reports)) {
+      if (updates.replaceReports && isCallerAdmin) {
+        activeDb.reports = updates.reports;
+      } else {
+        activeDb.reports = mergeReports(activeDb.reports, updates.reports);
+      }
+      changed = true;
+    }
+
+    if (isCallerAdmin && Array.isArray(updates.verifCandidates)) {
+      activeDb.verifCandidates = updates.replaceVerifCandidates
+        ? updates.verifCandidates
+        : mergeVerifCandidates(activeDb.verifCandidates, updates.verifCandidates);
+      changed = true;
+    }
+
+    if (Array.isArray(updates.directMessages)) {
+      if (updates.replaceDirectMessages && isCallerAdmin) {
+        activeDb.directMessages = updates.directMessages;
+      } else {
+        activeDb.directMessages = mergeDirectMessages(activeDb.directMessages, updates.directMessages);
+      }
+      changed = true;
+    }
+
+    if (Array.isArray(updates.chatConversations)) {
+      activeDb.chatConversations = mergeChatConversations(activeDb.chatConversations, updates.chatConversations);
+      changed = true;
+    }
+
+    if (Array.isArray(updates.chatReports)) {
+      if (updates.replaceChatReports && isCallerAdmin) {
+        activeDb.chatReports = updates.chatReports;
+      } else {
+        activeDb.chatReports = mergeChatReports(activeDb.chatReports, updates.chatReports);
+      }
+      changed = true;
+    }
+
+    if (isCallerAdmin && Array.isArray(updates.chatRestrictions)) {
+      activeDb.chatRestrictions = updates.replaceChatRestrictions
+        ? updates.chatRestrictions
+        : mergeChatRestrictions(activeDb.chatRestrictions, updates.chatRestrictions);
+      changed = true;
+    }
+
+    if (Array.isArray(updates.follows)) {
+      if (updates.replaceFollows && isCallerAdmin) {
+        activeDb.follows = updates.follows;
+      } else {
+        // Non-admin follow updates merge safely (add/remove only caller's own follower entries)
+        if (isCallerAdmin) {
+          activeDb.follows = mergeFollows(activeDb.follows, updates.follows);
+        } else if (updates.replaceFollows) {
+          const othersFollows = (activeDb.follows || []).filter(
+            (f: any) => f && !callerAliases.has(normalizeServerHandle(f.followerNickname))
           );
-          changed = true;
-        }
-      }
-      if (Array.isArray(updates.marketplaceItems)) {
-        if (updates.replaceMarketplaceItems) {
-          activeDb.marketplaceItems = updates.marketplaceItems;
-        } else {
-          activeDb.marketplaceItems = mergeMarketplaceItems(activeDb.marketplaceItems, updates.marketplaceItems);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.pendingMarketplaceItems)) {
-        if (updates.replacePendingMarketplaceItems) {
-          activeDb.pendingMarketplaceItems = updates.pendingMarketplaceItems;
-        } else {
-          activeDb.pendingMarketplaceItems = mergeMarketplaceItems(activeDb.pendingMarketplaceItems, updates.pendingMarketplaceItems);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.verificationRequests)) {
-        if (updates.replaceVerificationRequests) {
-          activeDb.verificationRequests = updates.verificationRequests;
-        } else {
-          activeDb.verificationRequests = mergeVerificationRequests(activeDb.verificationRequests, updates.verificationRequests);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.reports)) {
-        if (updates.replaceReports) {
-          activeDb.reports = updates.reports;
-        } else {
-          activeDb.reports = mergeReports(activeDb.reports, updates.reports);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.verifCandidates)) {
-        if (updates.replaceVerifCandidates) {
-          activeDb.verifCandidates = updates.verifCandidates;
-        } else {
-          activeDb.verifCandidates = mergeVerifCandidates(activeDb.verifCandidates, updates.verifCandidates);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.directMessages)) {
-        if (updates.replaceDirectMessages) {
-          activeDb.directMessages = updates.directMessages;
-        } else {
-          activeDb.directMessages = mergeDirectMessages(activeDb.directMessages, updates.directMessages);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.chatConversations)) {
-        if (updates.replaceChatConversations) {
-          activeDb.chatConversations = updates.chatConversations;
-        } else {
-          activeDb.chatConversations = mergeChatConversations(activeDb.chatConversations, updates.chatConversations);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.chatReports)) {
-        if (updates.replaceChatReports) {
-          activeDb.chatReports = updates.chatReports;
-        } else {
-          activeDb.chatReports = mergeChatReports(activeDb.chatReports, updates.chatReports);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.chatRestrictions)) {
-        if (updates.replaceChatRestrictions) {
-          activeDb.chatRestrictions = updates.chatRestrictions;
-        } else {
-          activeDb.chatRestrictions = mergeChatRestrictions(activeDb.chatRestrictions, updates.chatRestrictions);
-        }
-        changed = true;
-      }
-      if (Array.isArray(updates.follows)) {
-        if (updates.replaceFollows) {
-          activeDb.follows = updates.follows;
+          const ownFollows = updates.follows.filter(
+            (f: any) => f && callerAliases.has(normalizeServerHandle(f.followerNickname))
+          );
+          activeDb.follows = mergeFollows(othersFollows, ownFollows);
         } else {
           activeDb.follows = mergeFollows(activeDb.follows, updates.follows);
         }
-        changed = true;
       }
-      if (Array.isArray(updates.marketplaceReports)) {
-        activeDb.marketplaceReports = updates.marketplaceReports;
-        changed = true;
-      }
-      if (Array.isArray(updates.helpDeskInquiries)) {
-        activeDb.helpDeskInquiries = updates.helpDeskInquiries;
-        changed = true;
-      }
-      if (typeof updates.verificationFee === 'number') {
-        activeDb.verificationFee = updates.verificationFee;
-        changed = true;
-      }
-      if (updates.notifications && typeof updates.notifications === 'object') {
-        const currentNotifs = activeDb.notifications || {};
-        const nextNotifs: Record<string, any[]> = { ...currentNotifs };
-        for (const [rawKey, incomingList] of Object.entries(updates.notifications)) {
-          if (!Array.isArray(incomingList)) continue;
-          const cleanKey = rawKey === '__all__' ? '__all__' : String(rawKey).trim().toLowerCase().replace(/^@+/, '');
-          if (!cleanKey) continue;
-          nextNotifs[cleanKey] = mergeNotifications(currentNotifs[cleanKey] || [], incomingList);
-        }
-        activeDb.notifications = nextNotifs;
-        changed = true;
-      }
-
-      if (changed) {
-        persistServerDb();
-      }
+      changed = true;
     }
-    return res.json({ success: true, db: activeDb });
+
+    if (Array.isArray(updates.marketplaceReports)) {
+      activeDb.marketplaceReports = isCallerAdmin
+        ? updates.marketplaceReports
+        : [...(activeDb.marketplaceReports || []), ...updates.marketplaceReports.filter((r: any) => r?.id)];
+      changed = true;
+    }
+
+    if (Array.isArray(updates.helpDeskInquiries)) {
+      activeDb.helpDeskInquiries = isCallerAdmin
+        ? updates.helpDeskInquiries
+        : mergeFollows(activeDb.helpDeskInquiries as any, updates.helpDeskInquiries as any) as any;
+      changed = true;
+    }
+
+    if (isCallerAdmin && typeof updates.verificationFee === 'number') {
+      activeDb.verificationFee = updates.verificationFee;
+      changed = true;
+    }
+
+    if (updates.notifications && typeof updates.notifications === 'object') {
+      const currentNotifs = activeDb.notifications || {};
+      const nextNotifs: Record<string, any[]> = { ...currentNotifs };
+      for (const [rawKey, incomingList] of Object.entries(updates.notifications)) {
+        if (!Array.isArray(incomingList)) continue;
+        const cleanKey = rawKey === '__all__' ? '__all__' : String(rawKey).trim().toLowerCase().replace(/^@+/, '');
+        if (!cleanKey) continue;
+        if (cleanKey === '__all__' && !isCallerAdmin) continue;
+        nextNotifs[cleanKey] = mergeNotifications(currentNotifs[cleanKey] || [], incomingList);
+      }
+      activeDb.notifications = nextNotifs;
+      changed = true;
+    }
+
+    if (changed) {
+      persistServerDb();
+    }
+
+    return res.json({
+      success: true,
+      db: sanitizeDbForCaller(activeDb, caller),
+    });
   } catch (err: any) {
     console.error('[DB Sync Error]:', err);
     return res.status(500).json({ success: false, error: err?.message || 'Sync failed' });
   }
 });
 
-// In-Memory Authoritative Store for Active Password Reset Sessions
-interface ResetSessionEntry {
-  userId: string;
-  identifier: string;
-  token: string;
-  expiresAt: number;
-  createdAt: number;
-}
-
-const activeResetSessions = new Map<string, ResetSessionEntry>();
-
-// Clean up expired reset sessions periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, session] of activeResetSessions.entries()) {
-    if (now > session.expiresAt) {
-      activeResetSessions.delete(key);
-    }
-  }
-}, 60000);
-
-// 1. POST /api/auth/verify-reset-identity
-// Verifies registered account ownership without requiring external email OTP dispatch
-app.post('/api/auth/verify-reset-identity', (req, res) => {
-  try {
-    const { identifier, phone, matricNumber, matricNo, matricOrName } = req.body || {};
-    const effectiveMatric = matricNo || matricNumber || matricOrName;
-
-    if (!identifier) {
-      return res.status(400).json({ success: false, error: 'Registered Email Address is required.' });
-    }
-
-    const cleanInput = String(identifier).trim().toLowerCase();
-    const cleanNick = cleanInput.replace(/^@+/, '');
-
-    // Locate the user in active database
-    const matchedUser = (activeDb.users || []).find((u: any) => {
-      if (!u || isDemoUser(u) || isDemoNickname(u.nickname)) return false;
-      const uEmail = String(u.studentEmail || '').trim().toLowerCase();
-      const uNick = String(u.nickname || '').trim().toLowerCase().replace(/^@+/, '');
-      const uId = String(u.id || '').trim().toLowerCase();
-      return uEmail === cleanInput || uNick === cleanNick || uId === cleanInput;
-    });
-
-    if (!matchedUser) {
-      return res.status(404).json({
-        success: false,
-        error: 'No registered account found with the provided email address.',
-      });
-    }
-
-    // Verify authorized ownership against registered records
-    const registeredPhone = String(matchedUser.emergencyHomePhone || '').replace(/\D/g, '');
-    const enteredPhone = String(phone || '').replace(/\D/g, '');
-
-    if (!enteredPhone || registeredPhone !== enteredPhone) {
-      return res.status(401).json({
-        success: false,
-        error: 'The registered phone number provided does not match our account records.',
-      });
-    }
-
-    // If account has a registered matric number, check it strictly
-    if (matchedUser.matricNumber) {
-      const registeredMatric = normalizeMatricNumber(matchedUser.matricNumber);
-      const enteredMatric = normalizeMatricNumber(String(effectiveMatric || ''));
-      if (!enteredMatric || enteredMatric !== registeredMatric) {
-        return res.status(401).json({
-          success: false,
-          error: 'The Matric No. provided does not match our account records.',
-        });
-      }
-    }
-
-    // Identity verified! Issue a secure one-time session token valid for 15 minutes
-    const token = `rst_${Date.now()}_${Math.random().toString(36).substring(2, 12)}`;
-    const sessionKey = String(matchedUser.id || cleanNick);
-
-    activeResetSessions.set(sessionKey, {
-      userId: matchedUser.id,
-      identifier: matchedUser.studentEmail || matchedUser.nickname,
-      token,
-      expiresAt: Date.now() + 15 * 60 * 1000,
-      createdAt: Date.now(),
-    });
-
-    return res.json({
-      success: true,
-      message: 'Account ownership verified successfully.',
-      resetToken: token,
-      user: {
-        id: matchedUser.id,
-        nickname: matchedUser.nickname,
-        realName: matchedUser.realName,
-        studentEmail: matchedUser.studentEmail,
-        accountType: matchedUser.accountType || 'Student',
-      },
-    });
-  } catch (error: any) {
-    console.error('[Verify Reset Identity Error]:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error verifying account ownership.' });
-  }
-});
-
-// 2. POST /api/auth/reset-password
-app.post('/api/auth/reset-password', async (req, res) => {
-  try {
-    const { identifier, resetToken, token, newPassword } = req.body || {};
-    const effectiveToken = resetToken || token;
-
-    if (!identifier || !newPassword) {
-      return res.status(400).json({ success: false, error: 'Account identifier and new password are required.' });
-    }
-
-    const cleanPassword = String(newPassword).trim();
-    if (cleanPassword.length < 4) {
-      return res.status(400).json({ success: false, error: 'New password must be at least 4 characters.' });
-    }
-
-    const cleanInput = String(identifier).trim().toLowerCase();
-    const cleanNick = cleanInput.replace(/^@+/, '');
-
-    // Locate the user in active database
-    const userIndex = (activeDb.users || []).findIndex((u: any) => {
-      const uEmail = String(u.studentEmail || '').trim().toLowerCase();
-      const uNick = String(u.nickname || '').trim().toLowerCase().replace(/^@+/, '');
-      const uId = String(u.id || '').trim().toLowerCase();
-      return uEmail === cleanInput || uNick === cleanNick || uId === cleanInput;
-    });
-
-    if (userIndex === -1) {
-      return res.status(404).json({ success: false, error: 'User account not found.' });
-    }
-
-    const matchedUser = activeDb.users[userIndex];
-    const sessionKey = String(matchedUser.id || cleanNick);
-    const session = activeResetSessions.get(sessionKey);
-
-    // If a reset token was provided or session was opened, verify it
-    if (effectiveToken) {
-      if (!session || session.token !== effectiveToken) {
-        return res.status(403).json({
-          success: false,
-          error: 'Invalid or expired password reset session. Please verify your details again.',
-        });
-      }
-      if (Date.now() > session.expiresAt) {
-        activeResetSessions.delete(sessionKey);
-        return res.status(400).json({
-          success: false,
-          error: 'Password reset session has expired. Please verify your details again.',
-        });
-      }
-    }
-
-    // Update password securely in central server DB
-    activeDb.users[userIndex].password = cleanPassword;
-    activeDb.users[userIndex].savedPassword = cleanPassword;
-    activeDb.users[userIndex].updatedAt = new Date().toISOString();
-    persistServerDb();
-
-    // Invalidate reset session so it cannot be reused
-    activeResetSessions.delete(sessionKey);
-
-    console.log(`[Password Reset Success] Password updated for user: ${matchedUser.nickname || matchedUser.id}`);
-    return res.json({
-      success: true,
-      message: 'Password reset successfully! Your new password is now active.',
-      user: {
-        id: matchedUser.id,
-        nickname: matchedUser.nickname,
-        studentEmail: matchedUser.studentEmail,
-      },
-    });
-  } catch (error: any) {
-    console.error('[Password Reset Error]:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error resetting password.' });
-  }
-});
+// ============================================================================
+// SERVER STARTUP (VITE DEV / STATIC DIST)
+// ============================================================================
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ...(IS_ISOLATED_TEST_INSTANCE ? { hmr: false } : {}),
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

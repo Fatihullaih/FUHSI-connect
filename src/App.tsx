@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   EMPTY_USER_PROFILE,
-  INITIAL_USER_PROFILE,
   INITIAL_POSTS,
   INITIAL_COMMENTS,
   INITIAL_MARKETPLACE_ITEMS,
@@ -102,6 +101,12 @@ import { updateActiveUserPresence } from './utils/presenceUtils';
 import { isUserMatchingAudience } from './utils/audienceUtils';
 import { MAINTENANCE_MODE } from './config/maintenance';
 import { MaintenanceScreen } from './components/MaintenanceScreen';
+import {
+  authFetch,
+  clearAllClientAuthCaches,
+  clearSessionToken,
+  stripSensitiveUserFields,
+} from './utils/authSession';
 
 const reconcilePostAuthorWithUsers = (post: Post, usersList: UserProfile[]): Post => {
   if (!post || !Array.isArray(usersList) || usersList.length === 0) return post;
@@ -182,63 +187,8 @@ const FullApp: React.FC = () => {
   const [showPwaModal, setShowPwaModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const raw = localStorage.getItem('fuhsi_active_user');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (
-            parsed &&
-            typeof parsed === 'object' &&
-            parsed.id &&
-            parsed.nickname &&
-            !isUserPermanentlyDeleted(parsed) &&
-            (parsed.isApproved !== false || parsed.isAdmin)
-          ) {
-            const cleanNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
-            // Reject any legacy, random, or auto-generated guest accounts
-            if (cleanNick.startsWith('guest_') || String(parsed.id).startsWith('usr_guest_')) {
-              localStorage.removeItem('fuhsi_active_user');
-              return false;
-            }
-            // Reject any demo or fallback accounts
-            if (isDemoUser(parsed) || isDemoNickname(parsed.nickname)) {
-              localStorage.removeItem('fuhsi_active_user');
-              return false;
-            }
-            // Check that user exists in registered database unless @modula
-            if (!isModulaAccount(parsed)) {
-              const storedUsersStr = localStorage.getItem('fuhsi_users_db');
-              if (storedUsersStr) {
-                try {
-                  const storedUsers: UserProfile[] = JSON.parse(storedUsersStr);
-                  const userExists = storedUsers.some(
-                    (u) => (u.id && u.id === parsed.id) ||
-                           (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanNick)
-                  );
-                  if (!userExists) {
-                    localStorage.removeItem('fuhsi_active_user');
-                    return false;
-                  }
-                } catch {
-                  localStorage.removeItem('fuhsi_active_user');
-                  return false;
-                }
-              }
-            }
-            return true;
-          } else {
-            localStorage.removeItem('fuhsi_active_user');
-          }
-        }
-      }
-    } catch (e) {
-      console.error(e);
-      try { localStorage.removeItem('fuhsi_active_user'); } catch {}
-    }
-    return false;
-  });
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [isCheckingSession, setIsCheckingSession] = useState<boolean>(!MAINTENANCE_MODE);
   const [appTotalMembers, setAppTotalMembers] = useState<number>(() => getApprovedMembersCount());
   const [activeChatRecipient, setActiveChatRecipient] = useState<{
     nickname: string;
@@ -407,56 +357,8 @@ const FullApp: React.FC = () => {
     setStoredTheme(nextTheme);
   };
 
-  // App Core State with Persistent LocalStorage Initialization
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const raw = localStorage.getItem('fuhsi_active_user');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (
-            parsed &&
-            typeof parsed === 'object' &&
-            parsed.id &&
-            parsed.nickname &&
-            !isUserPermanentlyDeleted(parsed) &&
-            (parsed.isApproved !== false || parsed.isAdmin)
-          ) {
-            const cleanNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
-            if (
-              cleanNick.startsWith('guest_') ||
-              String(parsed.id).startsWith('usr_guest_') ||
-              isDemoUser(parsed) ||
-              isDemoNickname(parsed.nickname)
-            ) {
-              return EMPTY_USER_PROFILE;
-            }
-            if (!isModulaAccount(parsed)) {
-              const storedUsersStr = localStorage.getItem('fuhsi_users_db');
-              if (storedUsersStr) {
-                try {
-                  const storedUsers: UserProfile[] = JSON.parse(storedUsersStr);
-                  const userExists = storedUsers.some(
-                    (u) => (u.id && u.id === parsed.id) ||
-                           (u.nickname && u.nickname.toLowerCase().replace(/^@/, '') === cleanNick)
-                  );
-                  if (!userExists) {
-                    return EMPTY_USER_PROFILE;
-                  }
-                } catch {
-                  return EMPTY_USER_PROFILE;
-                }
-              }
-            }
-            return isModulaAccount(parsed) ? sanitizeModulaProfile(parsed) : sanitizeUserProfile(parsed);
-          }
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return EMPTY_USER_PROFILE;
-  });
+  // App Core State initialized strictly empty until server session verification succeeds
+  const [userProfile, setUserProfile] = useState<UserProfile>(EMPTY_USER_PROFILE);
   const lastProfileSaveTimestampRef = useRef<number>(0);
   
   const [comments, setComments] = useState<Comment[]>(() => {
@@ -703,8 +605,9 @@ const FullApp: React.FC = () => {
     } catch (e) { console.error(e); }
   }, [reports]);
 
-  // Real-time Cloud Firestore Database Listener (Instant Sync across all devices)
+  // Real-time Cloud Firestore Database Listener (only active for authenticated sessions)
   useEffect(() => {
+    if (!isLoggedIn || MAINTENANCE_MODE) return;
     let isMounted = true;
 
     // Seed initial data to Firestore if Firestore is empty
@@ -800,15 +703,14 @@ const FullApp: React.FC = () => {
         setComments(recCommentsFromUsers);
       }
 
-      // Reconcile active logged-in user profile
+      // Reconcile active logged-in user profile strictly by permanent internal ID (no handle/role fallback)
       const activeUserJson = localStorage.getItem('fuhsi_active_user');
       if (activeUserJson) {
         try {
           const parsed = JSON.parse(activeUserJson);
           const cleanParsedNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
           const found = mergedUsers.find(
-            (u) => (u.id && parsed.id && u.id === parsed.id) ||
-                   (isModulaAccount(parsed) && isModulaAccount(u))
+            (u) => Boolean(u.id && parsed.id && u.id === parsed.id)
           );
 
           const isDeleted = isUserPermanentlyDeleted(parsed);
@@ -819,28 +721,20 @@ const FullApp: React.FC = () => {
             isDemoNickname(parsed.nickname) ||
             (isDeleted && !parsed.isAdmin)
           ) {
-            localStorage.removeItem('fuhsi_active_user');
+            clearAllClientAuthCaches();
             setUserProfile(EMPTY_USER_PROFILE);
             setIsLoggedIn(false);
             setShowAuthModal(true);
             return;
-          } else if (!found && !isModulaAccount(parsed)) {
-            // User was created or updated locally and not yet synced to remote snapshot
-            // Preserve the user, upsert into DB, and sync to server
-            upsertUser(parsed);
-            pushServerDbSync({ users: [parsed] } as any).catch((err) => console.warn('Server user sync notice:', err));
-            saveUserToFirestore(parsed).catch((err) => console.warn('Firestore user sync notice:', err));
-            setUserProfile(parsed);
-            return;
           } else if (found) {
             if (found.isApproved === false && !parsed.isAdmin) {
-              localStorage.removeItem('fuhsi_active_user');
+              clearAllClientAuthCaches();
               setUserProfile(EMPTY_USER_PROFILE);
               setIsLoggedIn(false);
               setShowAuthModal(true);
             } else {
               setUserProfile((prev) => {
-                if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
+                if (!prev) return stripSensitiveUserFields(isModulaAccount(found) ? sanitizeModulaProfile(found) : found);
                 // Requirement 3 & 7 & 8: Central username is authoritative across all devices
                 const isUsernameChanged = Boolean(found.nickname && found.nickname !== prev.nickname);
                 const nextNickname = isUsernameChanged ? found.nickname : prev.nickname;
@@ -1317,7 +1211,7 @@ const FullApp: React.FC = () => {
       unsubChatGroups();
       unsubFollows();
     };
-  }, []);
+  }, [isLoggedIn]);
 
   // Real-time Firestore listener for current user's platform notifications & broadcasts
   useEffect(() => {
@@ -1370,8 +1264,9 @@ const FullApp: React.FC = () => {
     };
   }, [userProfile?.nickname, isLoggedIn]);
 
-  // Periodic Cross-Device Central Database Synchronizer
+  // Periodic Cross-Device Central Database Synchronizer (only active for authenticated sessions)
   useEffect(() => {
+    if (!isLoggedIn || MAINTENANCE_MODE) return;
     let isMounted = true;
 
     const syncWithCentralServerDb = async () => {
@@ -1437,10 +1332,8 @@ const FullApp: React.FC = () => {
             try {
               const parsed = JSON.parse(activeUserJson);
               const cleanParsedNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
-              const cleanParsedEmail = (parsed.studentEmail || '').toLowerCase().trim();
               const found = mergedUsers.find(
-                (u) => (u.id && parsed.id && u.id === parsed.id) ||
-                       (isModulaAccount(parsed) && isModulaAccount(u))
+                (u) => Boolean(u.id && parsed.id && u.id === parsed.id)
               );
               const isDeleted = isUserPermanentlyDeleted(parsed);
               if (
@@ -1450,27 +1343,20 @@ const FullApp: React.FC = () => {
                 isDemoNickname(parsed.nickname) ||
                 (isDeleted && !parsed.isAdmin)
               ) {
-                localStorage.removeItem('fuhsi_active_user');
+                clearAllClientAuthCaches();
                 setUserProfile(EMPTY_USER_PROFILE);
                 setIsLoggedIn(false);
                 setShowAuthModal(true);
                 return;
-              } else if (!found && !isModulaAccount(parsed)) {
-                // User was created or updated locally and not yet synced to remote snapshot
-                // Preserve the user, upsert into DB, and sync to server
-                upsertUser(parsed);
-                pushServerDbSync({ users: [parsed] } as any).catch((err) => console.warn('Server user sync notice:', err));
-                saveUserToFirestore(parsed).catch((err) => console.warn('Firestore user sync notice:', err));
-                setUserProfile(parsed);
               } else if (found) {
                 if (found.isApproved === false && !parsed.isAdmin) {
-                  localStorage.removeItem('fuhsi_active_user');
+                  clearAllClientAuthCaches();
                   setUserProfile(EMPTY_USER_PROFILE);
                   setIsLoggedIn(false);
                   setShowAuthModal(true);
                 } else {
                   setUserProfile((prev) => {
-                    if (!prev) return isModulaAccount(found) ? sanitizeModulaProfile(found) : found;
+                    if (!prev) return stripSensitiveUserFields(isModulaAccount(found) ? sanitizeModulaProfile(found) : found);
                     // Requirement 3 & 7 & 8: Central username is authoritative across all devices
                     const isUsernameChanged = Boolean(found.nickname && found.nickname !== prev.nickname);
                     const nextNickname = isUsernameChanged ? found.nickname : prev.nickname;
@@ -1841,7 +1727,7 @@ const FullApp: React.FC = () => {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleFocus);
     };
-  }, []);
+  }, [isLoggedIn]);
 
   useEffect(() => {
     if (isLoggedIn && userProfile && userProfile.id && userProfile.nickname && !isUserPermanentlyDeleted(userProfile)) {
@@ -1956,121 +1842,117 @@ const FullApp: React.FC = () => {
     }
   }, [verificationRequests, userProfile?.nickname]);
 
-  // Requirement: Session & Security - Restore authenticated user session on initial load or reload
+  // Authoritative Server Session Restoration on Load & 401 Expiry Listener
   useEffect(() => {
-    try {
-      const activeUserJson = localStorage.getItem('fuhsi_active_user');
-      if (!activeUserJson) {
-        setIsLoggedIn(false);
-        setUserProfile(EMPTY_USER_PROFILE);
-        setShowAuthModal(true);
-        cleanupModulaFirestoreDoc().catch(() => {});
-        return;
-      }
-      let parsed = JSON.parse(activeUserJson);
-      if (!parsed || !parsed.nickname || !parsed.id || isUserPermanentlyDeleted(parsed)) {
-        localStorage.removeItem('fuhsi_active_user');
-        setIsLoggedIn(false);
-        setUserProfile(EMPTY_USER_PROFILE);
-        setShowAuthModal(true);
-        cleanupModulaFirestoreDoc().catch(() => {});
-        return;
-      }
-      const cleanNick = (parsed.nickname || '').toLowerCase().replace(/^@/, '');
-      if (
-        cleanNick.startsWith('guest_') ||
-        String(parsed.id).startsWith('usr_guest_') ||
-        isDemoUser(parsed) ||
-        isDemoNickname(parsed.nickname)
-      ) {
-        localStorage.removeItem('fuhsi_active_user');
-        setIsLoggedIn(false);
-        setUserProfile(EMPTY_USER_PROFILE);
-        setShowAuthModal(true);
-        cleanupModulaFirestoreDoc().catch(() => {});
-        return;
-      }
-
-      // Check if user exists in registered users database unless @modula
-      const storedUsers = localStorage.getItem('fuhsi_users_db');
-      let found: UserProfile | undefined = undefined;
-      if (storedUsers) {
-        try {
-          const list: UserProfile[] = JSON.parse(storedUsers);
-          found = list.find(
-            (u) => (u.id && parsed.id && u.id === parsed.id) ||
-                   (isModulaAccount(parsed) && isModulaAccount(u))
-          );
-        } catch {}
-      }
-
-      // If user does not exist in registered users and is not @modula admin, reject
-      if (!found && !isModulaAccount(parsed)) {
-        localStorage.removeItem('fuhsi_active_user');
-        setIsLoggedIn(false);
-        setUserProfile(EMPTY_USER_PROFILE);
-        setShowAuthModal(true);
-        cleanupModulaFirestoreDoc().catch(() => {});
-        return;
-      }
-
-      if (found) {
-        parsed = {
-          ...parsed,
-          ...found,
-          nickname: found.nickname || parsed.nickname,
-          matricNumber: isModulaAccount(parsed) ? '' : (found.matricNumber || parsed.matricNumber || ''),
-          avatarUrl: found.avatarUrl || parsed.avatarUrl,
-        };
-      }
-      if (isModulaAccount(parsed)) {
-        parsed = sanitizeModulaProfile(parsed);
-        localStorage.setItem('fuhsi_active_user', JSON.stringify(parsed));
-      }
-
-      if (parsed.isApproved === false && !parsed.isAdmin) {
-        localStorage.removeItem('fuhsi_active_user');
-        setIsLoggedIn(false);
-        setUserProfile(EMPTY_USER_PROFILE);
-        setShowAuthModal(true);
-        cleanupModulaFirestoreDoc().catch(() => {});
-        return;
-      }
-
-      setUserProfile(parsed);
-      setIsLoggedIn(true);
-      setShowAuthModal(false);
-      cleanupModulaFirestoreDoc().catch(() => {});
-
-      // Asynchronously fetch current authoritative account from central server by permanent internal ID
-      if (parsed.id && !isModulaAccount(parsed)) {
-        fetch(`/api/users/${encodeURIComponent(parsed.id)}`)
-          .then((res) => (res.ok ? res.json() : null))
-          .then((data) => {
-            if (data?.success && data?.user) {
-              const centralUser = data.user;
-              setUserProfile((cur) => {
-                if (!cur || cur.id !== centralUser.id) return cur;
-                const nextUser = {
-                  ...cur,
-                  ...centralUser,
-                  nickname: centralUser.nickname || cur.nickname,
-                  matricNumber: isModulaAccount(cur) ? '' : (centralUser.matricNumber || cur.matricNumber || ''),
-                };
-                localStorage.setItem('fuhsi_active_user', JSON.stringify(nextUser));
-                return nextUser;
-              });
-            }
-          })
-          .catch(() => {});
-      }
-    } catch (e) {
-      console.error(e);
-      try { localStorage.removeItem('fuhsi_active_user'); } catch {}
-      setIsLoggedIn(false);
-      setUserProfile(EMPTY_USER_PROFILE);
-      setShowAuthModal(true);
+    if (MAINTENANCE_MODE) {
+      setIsCheckingSession(false);
+      return;
     }
+
+    const isAdminUrlRequested = (): boolean => {
+      try {
+        const p = window.location.pathname.toLowerCase();
+        const h = window.location.hash.toLowerCase();
+        const s = window.location.search.toLowerCase();
+        return (
+          p.includes('/admin') ||
+          h.includes('admin') ||
+          s.includes('admin') ||
+          s.includes('tab=moderation') ||
+          s.includes('nav=6')
+        );
+      } catch {
+        return false;
+      }
+    };
+
+    const stripAdminUrlIfPresent = () => {
+      try {
+        if (isAdminUrlRequested()) {
+          window.history.replaceState({}, '', '/');
+        }
+      } catch {}
+    };
+
+    let active = true;
+    const verifyServerSession = async () => {
+      try {
+        const res = await authFetch('/api/auth/session');
+        const data = await res.json().catch(() => null);
+        if (!active) return;
+
+        if (res.ok && data?.success && data?.authenticated && data?.user) {
+          const verifiedUser = stripSensitiveUserFields(
+            data.user.isAdmin && data.user.id === 'usr_admin_modula'
+              ? sanitizeModulaProfile(data.user)
+              : sanitizeUserProfile(data.user)
+          ) as UserProfile;
+
+          localStorage.setItem('fuhsi_active_user', JSON.stringify(verifiedUser));
+          setUserProfile(verifiedUser);
+          setIsLoggedIn(true);
+          setShowAuthModal(false);
+
+          if (!verifiedUser.isAdmin) {
+            stripAdminUrlIfPresent();
+            setNavIndex((prev) => (prev === 6 ? 0 : prev));
+          } else if (isAdminUrlRequested()) {
+            setNavIndex(6);
+          }
+        } else {
+          clearAllClientAuthCaches();
+          stripAdminUrlIfPresent();
+          setIsLoggedIn(false);
+          setUserProfile(EMPTY_USER_PROFILE);
+          setShowAuthModal(true);
+          setNavIndex(0);
+        }
+      } catch {
+        if (!active) return;
+        clearAllClientAuthCaches();
+        stripAdminUrlIfPresent();
+        setIsLoggedIn(false);
+        setUserProfile(EMPTY_USER_PROFILE);
+        setShowAuthModal(true);
+        setNavIndex(0);
+      } finally {
+        if (active) setIsCheckingSession(false);
+      }
+    };
+
+    verifyServerSession();
+
+    const handleSessionExpired = () => {
+      clearAllClientAuthCaches();
+      stripAdminUrlIfPresent();
+      setUserProfile(EMPTY_USER_PROFILE);
+      setIsLoggedIn(false);
+      setShowProfileModal(false);
+      setShowAuthModal(true);
+      setModalStack([]);
+      setNavIndex(0);
+    };
+
+    const handleUrlCheck = () => {
+      setUserProfile((curr) => {
+        if (!curr?.isAdmin) {
+          stripAdminUrlIfPresent();
+          setNavIndex((prev) => (prev === 6 ? 0 : prev));
+        }
+        return curr;
+      });
+    };
+
+    window.addEventListener('fuhsi_session_expired', handleSessionExpired);
+    window.addEventListener('popstate', handleUrlCheck);
+    window.addEventListener('hashchange', handleUrlCheck);
+
+    return () => {
+      active = false;
+      window.removeEventListener('fuhsi_session_expired', handleSessionExpired);
+      window.removeEventListener('popstate', handleUrlCheck);
+      window.removeEventListener('hashchange', handleUrlCheck);
+    };
   }, []);
 
   // Filter & Selected Item Modals
@@ -2109,8 +1991,12 @@ const FullApp: React.FC = () => {
   const modalStackRef = useRef<ModalStackItem[]>(modalStack);
   modalStackRef.current = modalStack;
 
-  // Tab Navigation with History Tracking
+  // Tab Navigation with History Tracking & Strict Admin/Guest Guards
   const handleNavChange = useCallback((newIndex: number) => {
+    // Only verified Admin (@modula) can navigate to Moderation Console (6)
+    if (newIndex === 6 && (!userProfile?.isAdmin || userProfile?.id !== 'usr_admin_modula')) {
+      return;
+    }
     // Guest accounts do not have access to Campus Hub (Marketplace, 2) or Chats (4)
     if (isGuestAccount(userProfile) && (newIndex === 2 || newIndex === 4)) {
       return;
@@ -2128,8 +2014,11 @@ const FullApp: React.FC = () => {
     } catch (e) { console.warn('History pushState notice:', e); }
   }, [userProfile]);
 
-  // Safety fallback: Ensure guests are never left on Hub&Fund or Chats
+  // Safety fallback: Ensure non-admins cannot access Admin Console (6) and guests cannot access Hub/Chats
   useEffect(() => {
+    if (navIndex === 6 && (!userProfile?.isAdmin || userProfile?.id !== 'usr_admin_modula')) {
+      setNavIndex(0);
+    }
     if (isGuestAccount(userProfile) && (navIndex === 2 || navIndex === 4)) {
       setNavIndex(0);
     }
@@ -2875,10 +2764,6 @@ const FullApp: React.FC = () => {
     }
     pushServerDbSync({
       deletedPostIds: [postId],
-      posts: updatedPosts,
-      replacePosts: true,
-      comments: updatedComments,
-      replaceComments: true,
     }).catch((err) =>
       console.warn('Server delete post sync notice:', err)
     );
@@ -2895,6 +2780,7 @@ const FullApp: React.FC = () => {
     const cleanContent = newContent.trim();
     if (!cleanContent) return;
     const nowIso = new Date().toISOString();
+    let editedPostObj: Post | null = null;
 
     const updatedPosts = posts.map((p) => {
       if (p.id === postId) {
@@ -2905,6 +2791,7 @@ const FullApp: React.FC = () => {
           updatedAt: nowIso,
           isEdited: true,
         };
+        editedPostObj = updated;
         savePostToFirestore(updated).catch((err) => console.warn('Firestore edit post sync notice:', err));
         return updated;
       }
@@ -2918,9 +2805,11 @@ const FullApp: React.FC = () => {
       console.warn('Local storage edit post notice:', e);
     }
 
-    pushServerDbSync({ posts: updatedPosts, replacePosts: true }).catch((err) => {
-      console.warn('Server edit post sync notice:', err);
-    });
+    if (editedPostObj) {
+      pushServerDbSync({ posts: [editedPostObj] }).catch((err) => {
+        console.warn('Server edit post sync notice:', err);
+      });
+    }
 
     setModalStack((prevStack) =>
       prevStack.map((item) => {
@@ -3024,13 +2913,9 @@ const FullApp: React.FC = () => {
       console.warn('Local storage delete comment notice:', e);
     }
 
-    // 6. Push sync to server database with replace flags so deleted comments do not resurrect
+    // 6. Push incremental deletedCommentIds to server database
     pushServerDbSync({
-      comments: updatedComments,
-      replaceComments: true,
       deletedCommentIds: [commentId, ...childReplies.map((r) => r.id)],
-      posts: updatedPosts,
-      replacePosts: true,
     }).catch((err) =>
       console.warn('Server delete comment sync notice:', err)
     );
@@ -3468,12 +3353,19 @@ const FullApp: React.FC = () => {
       });
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     try {
-      localStorage.removeItem('fuhsi_active_user');
-    } catch (e) {
-      console.error(e);
-    }
+      await authFetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+    clearAllClientAuthCaches();
+    clearSessionToken();
+    try {
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+        window.history.replaceState({}, '', '/');
+      } else if (typeof window !== 'undefined' && (window.location.hash || window.location.search)) {
+        window.history.replaceState({}, '', '/');
+      }
+    } catch {}
     setUserProfile(EMPTY_USER_PROFILE);
     setIsLoggedIn(false);
     setShowProfileModal(false);
@@ -4533,8 +4425,14 @@ const FullApp: React.FC = () => {
 
     const rawNick = nickname.trim();
     const lowerNick = rawNick.toLowerCase();
-    if (lowerNick.includes('anonymous') || lowerNick.includes('anon')) {
-      return 'Error: Nicknames containing "Anonymous" or "Anon" are forbidden. Please choose a unique student handle.';
+    const cleanCheck = lowerNick.replace(/^@+/, '');
+    if (
+      lowerNick.includes('anonymous') ||
+      lowerNick.includes('anon') ||
+      (!isModulaAccount(userProfile) &&
+        ['modula', 'admin', 'administrator', 'superadmin', 'usr_admin_modula'].includes(cleanCheck))
+    ) {
+      return 'Error: That username is reserved or not permitted. Please choose a unique student handle.';
     }
 
     const formattedNick = rawNick.startsWith('@') ? rawNick : `@${rawNick}`;
@@ -4652,7 +4550,7 @@ const FullApp: React.FC = () => {
       upsertUser(updated);
 
       if (isUsernameChanged && userProfile.id && !isModulaAccount(userProfile)) {
-        fetch('/api/users/change-username', {
+        authFetch('/api/users/change-username', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -4904,9 +4802,13 @@ const FullApp: React.FC = () => {
 
     setTimeout(() => {
       syncedProfilePosts.forEach((p) => savePostToFirestore(p).catch((err) => console.warn('Firestore profile post sync notice:', err)));
-      pushServerDbSync({ posts: updatedPostsList, replacePosts: true } as any).catch((err) => console.warn('Server posts sync notice:', err));
+      if (syncedProfilePosts.length > 0) {
+        pushServerDbSync({ posts: syncedProfilePosts } as any).catch((err) => console.warn('Server posts sync notice:', err));
+      }
       syncedProfileComments.forEach((c) => saveCommentToFirestore(c).catch((err) => console.warn('Firestore profile comment sync notice:', err)));
-      pushServerDbSync({ comments: updatedCommentsList, replaceComments: true } as any).catch((err) => console.warn('Server comments sync notice:', err));
+      if (syncedProfileComments.length > 0) {
+        pushServerDbSync({ comments: syncedProfileComments } as any).catch((err) => console.warn('Server comments sync notice:', err));
+      }
     }, 0);
 
     // 5. Broadcast profile updated event
@@ -5019,7 +4921,9 @@ const FullApp: React.FC = () => {
   }, [userProfile?.nickname, allFollows]);
 
   const handleLoginSuccess = useCallback((user: UserProfile) => {
-    const cleanUser = isModulaAccount(user) ? sanitizeModulaProfile(user) : sanitizeUserProfile(user);
+    const cleanUser = stripSensitiveUserFields(
+      isModulaAccount(user) ? sanitizeModulaProfile(user) : sanitizeUserProfile(user)
+    ) as UserProfile;
     try {
       localStorage.setItem('fuhsi_active_user', JSON.stringify(cleanUser));
     } catch (e) {
@@ -5027,6 +4931,7 @@ const FullApp: React.FC = () => {
     }
     setUserProfile(cleanUser);
     setIsLoggedIn(true);
+    setIsCheckingSession(false);
     setShowAuthModal(false);
     setShowProfileModal(false);
     setModalStack([]);
@@ -5036,12 +4941,31 @@ const FullApp: React.FC = () => {
     setShowFollowersDirectoryModal(false);
     setShowCreatePostModal(false);
     setShowPwaModal(false);
+    if (!cleanUser.isAdmin) {
+      setNavIndex(0);
+      try {
+        if (window.location.pathname !== '/' || window.location.hash || window.location.search) {
+          window.history.replaceState({}, '', '/');
+        }
+      } catch {}
+    }
 
     // Update app total members count and trigger allUsers recomputation
     const updatedUsers = getStoredUsers();
     setAppTotalMembers(updatedUsers.filter((u) => u.isApproved === true && !u.isDeclined && !isModulaAccount(u) && !u.isAdmin).length);
     setNotifTrigger((prev) => prev + 1);
   }, []);
+
+  if (isCheckingSession) {
+    return (
+      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3 text-slate-600 dark:text-slate-300">
+          <div className="w-8 h-8 border-4 border-teal-600 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-bold">Verifying active session...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!isLoggedIn) {
     return (

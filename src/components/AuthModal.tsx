@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import fuhsiLogo from '../assets/images/fuhsi_logo_1785485694958.jpg';
 import { UserProfile } from '../types';
-import { getStoredUsers, upsertUser, updateUserPassword, unmarkUserPermanentlyDeleted, isUserPermanentlyDeleted, isModulaAccount, sanitizeModulaProfile } from '../utils/userDbUtils';
-import { fetchServerDb, mergeUsers, pushServerDbSync } from '../utils/apiSync';
-import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
-import { validateMatricCredentials, checkMatricUniqueness, normalizeMatricNumber, LEVEL_TO_MATRIC_YEAR_MAP, FUHSI_DEPARTMENT_MAPPINGS } from '../utils/matricValidation';
-import { saveUserToFirestore, fetchUsersFromFirestore } from '../lib/firestoreSync';
+import { getStoredUsers, upsertUser, unmarkUserPermanentlyDeleted, isUserPermanentlyDeleted } from '../utils/userDbUtils';
+import { fetchServerDb, mergeUsers } from '../utils/apiSync';
+import { validateMatricCredentials, checkMatricUniqueness, normalizeMatricNumber } from '../utils/matricValidation';
+import { authFetch, setSessionToken, clearAllClientAuthCaches, stripSensitiveUserFields } from '../utils/authSession';
 import { AvatarIcon } from './AvatarIcon';
 import { 
   ShieldCheck, 
@@ -125,13 +124,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
-  const [isAdminPortal, setIsAdminPortal] = useState(false);
   const [loginAuthStage, setLoginAuthStage] = useState<'idle' | 'authenticating' | 'confirmed'>('idle');
 
   // Forgot Password Recovery Flow State (No OTP)
   const [forgotStep, setForgotStep] = useState<'IDENTIFY' | 'VERIFY_SECURITY' | 'NEW_PASSWORD'>('IDENTIFY');
   const [forgotIdentifierInput, setForgotIdentifierInput] = useState('');
-  const [forgotMatchedUser, setForgotMatchedUser] = useState<UserProfile | null>(null);
+  const [forgotMatchedUser, setForgotMatchedUser] = useState<Partial<UserProfile> | null>(null);
   const [forgotPhoneInput, setForgotPhoneInput] = useState('');
   const [forgotMatricOrNameInput, setForgotMatricOrNameInput] = useState('');
   const [forgotResetToken, setForgotResetToken] = useState('');
@@ -139,22 +137,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
   const [forgotShowPassword, setForgotShowPassword] = useState(false);
   const [resetSuccessMessage, setResetSuccessMessage] = useState('');
-
-  // Secret Admin Portal Unlock State
-  const [secretClickCount, setSecretClickCount] = useState(0);
-  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
-
-  const handleSecretHeaderClick = () => {
-    const nextCount = secretClickCount + 1;
-    setSecretClickCount(nextCount);
-
-    if (nextCount >= 3) {
-      setIsAdminUnlocked(true);
-      setIsAdminPortal(true);
-      setErrorMessage('');
-      setSecretClickCount(0);
-    }
-  };
 
   if (!isOpen) return null;
 
@@ -166,49 +148,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setErrorMessage('Student Nickname/Handle is required.');
       return;
     }
-    if (!realName.trim()) {
-      setErrorMessage('Full Real Name is required.');
+    const cleanHandleCheck = nickname.trim().toLowerCase().replace(/^@+/, '');
+    if (
+      cleanHandleCheck === 'modula' ||
+      cleanHandleCheck === 'admin' ||
+      cleanHandleCheck === 'administrator' ||
+      cleanHandleCheck === 'usr_admin_modula' ||
+      cleanHandleCheck.includes('anonymous') ||
+      cleanHandleCheck.includes('anon')
+    ) {
+      setErrorMessage('This username is reserved or not permitted.');
       return;
     }
-
-    // Check if registering as an Admin in Unlocked Admin Mode
-    if (isAdminPortal || isAdminUnlocked) {
-      if (!password || password.length < 4) {
-        setErrorMessage('Admin Password is required (minimum 4 characters).');
-        return;
-      }
-
-      const cleanAdminNickname = nickname.trim().startsWith('@') ? nickname.trim() : `@${nickname.trim()}`;
-      const newAdminProfile: UserProfile = {
-        id: `usr_admin_${Date.now()}`,
-        nickname: cleanAdminNickname,
-        realName: realName.trim(),
-        matricNumber: matricNumber.trim() ? matricNumber.trim().toUpperCase() : 'FUHSI/ADMIN/COUNCIL',
-        emergencyHomePhone: phone.trim() || '08000000000',
-        studentEmail: studentEmail.trim() || 'admin@fuhsi.edu.ng',
-        department: department || 'FUHSI Council Administration',
-        level: 'Council',
-        bio: `Official Admin Council Officer (${cleanAdminNickname}) at FUHSI Ila-Orangun.`,
-        avatarKey: avatarKey || '1',
-        badgeType: 'GOLD',
-        badgeTitle: 'Official Admin',
-        reputationScore: 9999,
-        isVerified: false,
-        isApproved: true,
-        isAdmin: true,
-        strikes: 0,
-        isBanned: false,
-      };
-
-      try {
-        upsertUser(newAdminProfile);
-      } catch (err) {
-        console.error('Error saving admin:', err);
-      }
-
-      localStorage.setItem('fuhsi_active_user', JSON.stringify(newAdminProfile));
-      onLoginSuccess(newAdminProfile);
-      onClose();
+    if (!realName.trim()) {
+      setErrorMessage('Full Real Name is required.');
       return;
     }
 
@@ -313,7 +266,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setShowRegisterConfirm(true);
   };
 
-  // Step 2 of Registration: User reviews and confirms details -> Create account directly (No OTP)
+  // Step 2 of Registration: Submit directly to authoritative backend /api/auth/register
   const handleConfirmAndCreateAccount = async () => {
     if (!validatedRegPayload) return;
     setIsSubmitting(true);
@@ -332,66 +285,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         password: regPassword,
       } = validatedRegPayload;
 
-      // Create new user profile with selected account type
-      const newUserProfile: UserProfile = {
-        id: `usr_${Date.now()}`,
-        nickname: cleanNickname,
-        accountType: regAccountType,
-        realName: cleanRealName,
-        studentEmail: cleanEmail || undefined,
-        matricNumber: regAccountType === 'Student' ? matricTrimmed : undefined,
-        emergencyHomePhone: cleanPhone,
-        department: regAccountType === 'Student' ? regDept : '',
-        level: regAccountType === 'Student' ? regLevel : '',
-        bio: '',
-        avatarKey,
-        badgeType: 'GREEN',
-        badgeTitle: regAccountType === 'Student' ? 'FUHSI Student' : 'Guest',
-        reputationScore: 20,
-        isVerified: false,
-        isApproved: true,
-        isDeclined: false,
-        isAdmin: false,
-        strikes: 0,
-        isBanned: false,
-        savedPassword: regPassword,
-        password: regPassword,
-        joinedDate: new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date()),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+      const res = await authFetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nickname: cleanNickname,
+          realName: cleanRealName,
+          studentEmail: cleanEmail,
+          emergencyHomePhone: cleanPhone,
+          matricNumber: regAccountType === 'Student' ? matricTrimmed : '',
+          department: regAccountType === 'Student' ? regDept : '',
+          level: regAccountType === 'Student' ? regLevel : '',
+          accountType: regAccountType,
+          password: regPassword,
+          avatarKey,
+        }),
+      });
 
-      // Clear any tombstone if user is registering afresh
-      try {
-        unmarkUserPermanentlyDeleted({ id: newUserProfile.id, nickname: cleanNickname, studentEmail: cleanEmail, matricNumber: matricTrimmed });
-      } catch (err) {
-        console.error(err);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success || !data?.user || !data?.sessionToken) {
+        setErrorMessage(data?.error || 'Failed to create account. Please verify your details and try again.');
+        setIsSubmitting(false);
+        return;
       }
 
-      // Store user permanently in local and cloud DB
-      upsertUser(newUserProfile);
-      localStorage.setItem('fuhsi_active_user', JSON.stringify(newUserProfile));
+      clearAllClientAuthCaches();
+      const createdUser = stripSensitiveUserFields(data.user) as UserProfile;
+      setSessionToken(data.sessionToken, false);
 
       try {
-        await Promise.all([
-          saveUserToFirestore(newUserProfile).catch((err) => console.warn('Registration Firestore sync notice:', err)),
-          pushServerDbSync({ users: [newUserProfile], unDeleteUserNicknames: [cleanNickname], unDeleteUserIds: [newUserProfile.id] } as any).catch((err) => console.warn('Registration server sync notice:', err)),
-        ]);
-      } catch (syncErr) {
-        console.warn('Registration background sync notice:', syncErr);
-      }
+        unmarkUserPermanentlyDeleted({
+          id: createdUser.id,
+          nickname: createdUser.nickname,
+          studentEmail: createdUser.studentEmail,
+          matricNumber: createdUser.matricNumber,
+        });
+      } catch {}
+
+      localStorage.setItem('fuhsi_active_user', JSON.stringify(createdUser));
 
       try {
-        window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: newUserProfile }));
-        window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: newUserProfile }));
-      } catch (e) {}
+        window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: createdUser }));
+        window.dispatchEvent(new CustomEvent('fuhsi_profile_updated', { detail: createdUser }));
+      } catch {}
 
       setShowRegisterConfirm(false);
-      onLoginSuccess(newUserProfile);
+      onLoginSuccess(createdUser);
       setErrorMessage('');
       onClose();
     } catch (err: any) {
-      console.error('Error storing user profile:', err);
+      console.error('Error creating account:', err);
       setErrorMessage(err?.message || 'Failed to create account. Please try again.');
     } finally {
       setIsSubmitting(false);
@@ -421,321 +364,61 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const authStartTime = Date.now();
 
     try {
-      const searchKey = trimmedIdentifier.toLowerCase();
+      const res = await authFetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: trimmedIdentifier,
+          password: trimmedPassword,
+        }),
+      });
 
-      // 1. Executive Admin account handle (@modula) with password (ibraheem)
-      if (
-        (searchKey === '@modula' || searchKey === 'modula') &&
-        trimmedPassword === 'ibraheem'
-      ) {
-        let modulaAdmin: UserProfile = {
-          id: 'usr_admin_modula',
-          nickname: '@modula',
-          accountType: 'Admin',
-          realName: 'Administrator',
-          matricNumber: '',
-          department: '',
-          level: '',
-          bio: 'Platform Administrator (@modula).',
-          avatarKey: '1',
-          badgeType: 'GOLD',
-          badgeTitle: 'Official Admin',
-          reputationScore: 9999,
-          isVerified: true,
-          isApproved: true,
-          isAdmin: true,
-        };
+      const data = await res.json().catch(() => null);
 
-        try {
-          const stored = localStorage.getItem('fuhsi_users_db');
-          const localUsers = stored ? JSON.parse(stored) : [];
-          const found = localUsers.find((u: any) => u.nickname?.toLowerCase() === '@modula' || u.id === 'usr_admin_modula');
-          if (found) {
-            modulaAdmin = sanitizeModulaProfile({ ...modulaAdmin, ...found });
-          }
-        } catch (err) {
-          console.error(err);
-        }
-
-        modulaAdmin = sanitizeModulaProfile(modulaAdmin);
-
-        // Keep authenticating animation visible for consistent period (~2.8s)
+      if (!res.ok || !data?.success || !data?.user || !data?.sessionToken) {
         const elapsed = Date.now() - authStartTime;
-        const targetAuthTime = 2800;
-        if (elapsed < targetAuthTime) {
-          await new Promise((resolve) => setTimeout(resolve, targetAuthTime - elapsed));
-        }
-
-        // Show genuine success confirmation briefly
-        setLoginAuthStage('confirmed');
-        await new Promise((resolve) => setTimeout(resolve, 850));
-
-        localStorage.setItem('fuhsi_active_user', JSON.stringify(modulaAdmin));
-        setIsSubmitting(false);
-        setLoginAuthStage('idle');
-        onLoginSuccess(modulaAdmin);
-        onClose();
-        return;
-      }
-
-      if (searchKey === '@modula' || searchKey === 'modula') {
-        const elapsed = Date.now() - authStartTime;
-        if (elapsed < 1800) {
-          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
+        if (elapsed < 1500) {
+          await new Promise((resolve) => setTimeout(resolve, 1500 - elapsed));
         }
         setIsSubmitting(false);
         setLoginAuthStage('idle');
-        setErrorMessage('Incorrect password. Please try again.');
-        return;
-      }
-
-      // 2. Perform backend authentication: query authoritative central backend first
-      let matchedUser: any = null;
-
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: trimmedIdentifier,
-            password: trimmedPassword,
-          }),
-        });
-
-        const data = await res.json().catch(() => null);
-
-        if (res.ok && data?.success && data?.user) {
-          matchedUser = data.user;
-        } else if (res.status === 401) {
-          const elapsed = Date.now() - authStartTime;
-          if (elapsed < 1800) {
-            await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-          }
-          setIsSubmitting(false);
-          setLoginAuthStage('idle');
-          setErrorMessage(data?.error || 'Incorrect password. Please try again.');
-          return;
-        } else if (res.status === 403 && data?.isPending) {
-          const elapsed = Date.now() - authStartTime;
-          if (elapsed < 1800) {
-            await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-          }
-          setIsSubmitting(false);
-          setLoginAuthStage('idle');
+        if (res.status === 403 && data?.isPending) {
           setAccountNoticeType('PENDING');
-          setErrorMessage(data?.error || 'Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.');
-          return;
         }
-      } catch (err) {
-        console.warn('Central server auth error:', err);
-      }
-
-      const matchUserFromList = (list: any[]) => {
-        const lowerInput = trimmedIdentifier.toLowerCase();
-        const cleanNick = lowerInput.replace(/^@+/, '').trim();
-
-        let found = (list || []).find((u: any) => {
-          if (!u || isUserPermanentlyDeleted(u) || !u.nickname) return false;
-          const uNick = String(u.nickname).toLowerCase().replace(/^@+/, '').trim();
-          return uNick === cleanNick;
-        });
-
-        if (!found) {
-          try {
-            const rawSup = localStorage.getItem('fuhsi_superseded_usernames');
-            if (rawSup) {
-              const supObj = JSON.parse(rawSup);
-              if (supObj[cleanNick] && supObj[cleanNick].userId) {
-                found = (list || []).find((u: any) => u.id === supObj[cleanNick].userId && !isUserPermanentlyDeleted(u));
-              }
-            }
-          } catch {}
-        }
-        return found;
-      };
-
-      // If not resolved from server, check Firestore directly (guarantees consistency across devices)
-      if (!matchedUser) {
-        try {
-          const fsUsers = await fetchUsersFromFirestore();
-          const fsMatched = matchUserFromList(fsUsers || []);
-
-          if (fsMatched) {
-            const expectedPassword = fsMatched.savedPassword || fsMatched.password || 'password123';
-            if (trimmedPassword !== expectedPassword) {
-              const elapsed = Date.now() - authStartTime;
-              if (elapsed < 1800) {
-                await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-              }
-              setIsSubmitting(false);
-              setLoginAuthStage('idle');
-              setErrorMessage('Incorrect password. Please try again.');
-              return;
-            }
-            matchedUser = fsMatched;
-            // Sync to server so server DB is refreshed
-            pushServerDbSync({ users: [matchedUser] }).catch(() => {});
-          }
-        } catch (err) {
-          console.warn('Firestore fallback auth error:', err);
-        }
-      }
-
-      // If still not resolved, check local storage database
-      if (!matchedUser) {
-        try {
-          const stored = localStorage.getItem('fuhsi_users_db');
-          if (stored) {
-            const localUsers = JSON.parse(stored);
-            const localMatched = matchUserFromList(localUsers || []);
-
-            if (localMatched) {
-              const expectedPassword = localMatched.savedPassword || localMatched.password || 'password123';
-              if (trimmedPassword !== expectedPassword) {
-                const elapsed = Date.now() - authStartTime;
-                if (elapsed < 1800) {
-                  await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-                }
-                setIsSubmitting(false);
-                setLoginAuthStage('idle');
-                setErrorMessage('Incorrect password. Please try again.');
-                return;
-              }
-              matchedUser = localMatched;
-              pushServerDbSync({ users: [matchedUser] }).catch(() => {});
-            }
-          }
-        } catch (err) {
-          console.warn('Local storage fallback auth error:', err);
-        }
-      }
-
-      // 3. User account not found centrally
-      if (!matchedUser) {
-        // If device has stale local storage containing an old username, refresh local storage with server DB
-        fetchServerDb().then((sDb) => {
-          if (sDb && Array.isArray(sDb.users)) {
-            localStorage.setItem('fuhsi_users_db', JSON.stringify(sDb.users));
-          }
-        }).catch(() => {});
-
-        const elapsed = Date.now() - authStartTime;
-        if (elapsed < 1800) {
-          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-        }
-        setIsSubmitting(false);
-        setLoginAuthStage('idle');
-        setErrorMessage('Account not found. Please check your login details.');
+        setErrorMessage(data?.error || 'Incorrect username or password. Please try again.');
         return;
       }
 
-      // 4. Double check approval status
-      if (matchedUser.isApproved === false && !matchedUser.isAdmin) {
-        const elapsed = Date.now() - authStartTime;
-        if (elapsed < 1800) {
-          await new Promise((resolve) => setTimeout(resolve, 1800 - elapsed));
-        }
-        setIsSubmitting(false);
-        setLoginAuthStage('idle');
-        setAccountNoticeType('PENDING');
-        setErrorMessage('Registration Status: Your account approval is currently pending. Please check back shortly, or reach out to the Help Desk below for assistance.');
-        return;
-      }
+      const cleanServerUser = stripSensitiveUserFields(data.user) as UserProfile;
 
-      let userToLogin: UserProfile = {
-        id: matchedUser.id,
-        nickname: matchedUser.nickname,
-        realName: matchedUser.realName,
-        studentEmail: matchedUser.studentEmail,
-        matricNumber: matchedUser.matricNumber,
-        emergencyHomePhone: matchedUser.emergencyHomePhone,
-        department: matchedUser.department,
-        level: matchedUser.level,
-        bio: matchedUser.bio,
-        avatarKey: matchedUser.avatarKey,
-        avatarUrl: matchedUser.avatarUrl,
-        badgeType: matchedUser.badgeType || 'NONE',
-        badgeTitle: (matchedUser.badgeTitle || '').trim(),
-        reputationScore: matchedUser.reputationScore !== undefined ? matchedUser.reputationScore : 20,
-        isVerified: Boolean(matchedUser.isVerified || matchedUser.verificationStatus === 'approved'),
-        verificationStatus: matchedUser.verificationStatus || (matchedUser.isVerified ? 'approved' : 'unverified'),
-        isApproved: matchedUser.isApproved !== false,
-        isAdmin: Boolean(matchedUser.isAdmin),
-        isPrivate: matchedUser.isPrivate,
-        defaultPostAudience: matchedUser.defaultPostAudience,
-      };
+      // Clear any previous user caches on this browser before storing the newly authenticated session
+      clearAllClientAuthCaches();
+      setSessionToken(data.sessionToken, Boolean(cleanServerUser.isAdmin));
 
-      if (isModulaAccount(userToLogin)) {
-        userToLogin = sanitizeModulaProfile(userToLogin);
-      }
-
-      try {
-        const verifStr = localStorage.getItem('fuhsi_verifications_db');
-        if (verifStr) {
-          const verifs: any[] = JSON.parse(verifStr);
-          const cleanNick = userToLogin.nickname?.toLowerCase().replace(/^@/, '');
-          const userVerifs = verifs.filter(
-            (v) =>
-              (v.applicantNickname?.toLowerCase().replace(/^@/, '') === cleanNick ||
-                v.applicantNickname?.toLowerCase() === userToLogin.nickname?.toLowerCase()) &&
-              v.requestType !== 'STUDENT_CONVERSION'
-          ).sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-          const latestReq = userVerifs[0];
-          if (latestReq && latestReq.status === 'APPROVED') {
-            userToLogin = {
-              ...userToLogin,
-              isVerified: true,
-              verificationStatus: 'approved' as const,
-              badgeType: latestReq.assignedBadgeType || userToLogin.badgeType || 'BLUE',
-              badgeTitle: (latestReq.assignedBadgeTitle !== undefined ? latestReq.assignedBadgeTitle : userToLogin.badgeTitle || '').trim(),
-            };
-          } else if (latestReq && latestReq.status === 'REVOKED') {
-            userToLogin = {
-              ...userToLogin,
-              isVerified: false,
-              verificationStatus: 'unverified' as const,
-              badgeType: 'NONE' as const,
-              badgeTitle: '',
-            };
-          }
-        }
-      } catch (e) {
-        console.error(e);
-      }
-
-      // 5. Keep authenticating animation visible for consistent period (~2.8s)
       const elapsed = Date.now() - authStartTime;
-      const targetAuthTime = 2800;
+      const targetAuthTime = 1800;
       if (elapsed < targetAuthTime) {
         await new Promise((resolve) => setTimeout(resolve, targetAuthTime - elapsed));
       }
 
-      // 6. Brief confirmation for genuine success: "Account details confirmed"
       setLoginAuthStage('confirmed');
-      await new Promise((resolve) => setTimeout(resolve, 850));
+      await new Promise((resolve) => setTimeout(resolve, 600));
 
-      upsertUser(userToLogin);
-      localStorage.setItem('fuhsi_active_user', JSON.stringify(userToLogin));
+      localStorage.setItem('fuhsi_active_user', JSON.stringify(cleanServerUser));
       setIsSubmitting(false);
       setLoginAuthStage('idle');
-      onLoginSuccess(userToLogin);
+      onLoginSuccess(cleanServerUser);
       onClose();
 
-      // Refresh authoritative central database in background without blocking login
-      Promise.all([
-        fetchServerDb().catch(() => null),
-        fetchUsersFromFirestore().catch(() => []),
-      ]).then(([serverDb, firestoreUsers]) => {
-        const incoming = [
-          ...(serverDb && Array.isArray(serverDb.users) ? serverDb.users : []),
-          ...(Array.isArray(firestoreUsers) ? firestoreUsers : []),
-        ];
-        if (incoming.length > 0) {
-          const stored = localStorage.getItem('fuhsi_users_db');
-          const local = stored ? JSON.parse(stored) : [];
-          localStorage.setItem('fuhsi_users_db', JSON.stringify(mergeUsers(local, incoming)));
-        }
-      }).catch(() => {});
+      // Hydrate authorized server DB snapshot in background
+      fetchServerDb()
+        .then((serverDb) => {
+          if (serverDb && Array.isArray(serverDb.users)) {
+            const cleanedList = serverDb.users.map((u) => stripSensitiveUserFields(u));
+            localStorage.setItem('fuhsi_users_db', JSON.stringify(mergeUsers([], cleanedList)));
+          }
+        })
+        .catch(() => {});
     } catch (err) {
       console.error('Login error:', err);
       setIsSubmitting(false);
@@ -744,7 +427,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Step 1: Identify Account by Email Address
+  // Step 1: Identify Account via Authoritative Backend Endpoint (never trusts or exposes local DB/PII)
   const handleForgotIdentifySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -757,67 +440,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      let foundUser: UserProfile | null = null;
-      const cleanInput = input.toLowerCase();
+      const res = await authFetch('/api/auth/forgot-identify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: input }),
+      });
+      const data = await res.json().catch(() => null);
 
-      let allUsers: UserProfile[] = existingUsers;
-      try {
-        const stored = localStorage.getItem('fuhsi_users_db');
-        if (stored) allUsers = JSON.parse(stored);
-      } catch {}
-
-      foundUser = allUsers.find((u) => {
-        if (!u || isUserPermanentlyDeleted(u)) return false;
-        const uEmail = String(u.studentEmail || '').toLowerCase();
-        return uEmail === cleanInput || String(u.nickname || '').toLowerCase().replace(/^@+/, '') === cleanInput.replace(/^@+/, '');
-      }) || null;
-
-      if (!foundUser) {
-        try {
-          const sDb = await fetchServerDb();
-          if (sDb && Array.isArray(sDb.users)) {
-            foundUser = sDb.users.find((u: any) => {
-              if (!u || isUserPermanentlyDeleted(u)) return false;
-              const uEmail = String(u.studentEmail || '').toLowerCase();
-              return uEmail === cleanInput || String(u.nickname || '').toLowerCase().replace(/^@+/, '') === cleanInput.replace(/^@+/, '');
-            }) || null;
-          }
-        } catch {}
-      }
-
-      if (!foundUser) {
-        try {
-          const fsUsers = await fetchUsersFromFirestore();
-          if (Array.isArray(fsUsers)) {
-            foundUser = fsUsers.find((u: any) => {
-              if (!u || isUserPermanentlyDeleted(u)) return false;
-              const uEmail = String(u.studentEmail || '').toLowerCase();
-              return uEmail === cleanInput || String(u.nickname || '').toLowerCase().replace(/^@+/, '') === cleanInput.replace(/^@+/, '');
-            }) || null;
-          }
-        } catch {}
-      }
-
-      if (!foundUser) {
-        setErrorMessage('No registered account was found with that Email Address.');
+      if (!res.ok || !data?.success || !data?.user) {
+        setErrorMessage(data?.error || 'No registered account was found with that Email Address.');
         setIsSubmitting(false);
         return;
       }
 
-      setForgotMatchedUser(foundUser);
+      setForgotMatchedUser(data.user);
       setForgotStep('VERIFY_SECURITY');
       setForgotPhoneInput('');
       setForgotMatricOrNameInput('');
       setErrorMessage('');
     } catch (err: any) {
       console.error('Account lookup error:', err);
-      setErrorMessage('Error finding account. Please try again.');
+      setErrorMessage('Error verifying account. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Step 2: Verify Security Identity (Phone + Matric No.)
+  // Step 2: Verify Security Identity Strictly on Backend
   const handleForgotVerifySecuritySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -830,14 +479,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
     if (!matricClean) {
-      setErrorMessage('Please enter your Matric No.');
+      setErrorMessage('Please enter your Matric No. or registered full name.');
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      const res = await fetch('/api/auth/verify-reset-identity', {
+      const res = await authFetch('/api/auth/verify-reset-identity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -858,51 +507,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      // Client-side fallback verification against matched user
-      if (forgotMatchedUser) {
-        const userPhone = String(forgotMatchedUser.emergencyHomePhone || '').replace(/\D/g, '');
-        const enteredPhone = phoneClean.replace(/\D/g, '');
-        const phoneMatch = userPhone && (userPhone === enteredPhone || userPhone.endsWith(enteredPhone) || enteredPhone.endsWith(userPhone));
-
-        const userMatric = normalizeMatricNumber(forgotMatchedUser.matricNumber || '');
-        const enteredMatric = normalizeMatricNumber(matricClean);
-        const matricMatch = !userMatric || userMatric === enteredMatric || userMatric.replace(/\//g, '') === enteredMatric.replace(/\//g, '');
-
-        if (phoneMatch && matricMatch) {
-          const clientToken = `reset_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-          setForgotResetToken(clientToken);
-          setForgotStep('NEW_PASSWORD');
-          setErrorMessage('');
-          setIsSubmitting(false);
-          return;
-        }
-      }
-
       setErrorMessage(data?.error || 'Verification failed. The details provided do not match our records for this account.');
     } catch (err: any) {
       console.error('Security verification error:', err);
-      if (forgotMatchedUser) {
-        const userPhone = String(forgotMatchedUser.emergencyHomePhone || '').replace(/\D/g, '');
-        const enteredPhone = phoneClean.replace(/\D/g, '');
-        if (userPhone && enteredPhone && (userPhone === enteredPhone || userPhone.endsWith(enteredPhone))) {
-          const clientToken = `reset_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-          setForgotResetToken(clientToken);
-          setForgotStep('NEW_PASSWORD');
-          setErrorMessage('');
-          setIsSubmitting(false);
-          return;
-        }
-      }
       setErrorMessage('Connection error during verification. Please check your details and try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Step 3: Save New Password permanently in Database
+  // Step 3: Save New Password Strictly on Backend
   const handleForgotNewPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+
+    if (!forgotResetToken) {
+      setErrorMessage('Password reset session expired or missing. Please verify your details again.');
+      setForgotStep('VERIFY_SECURITY');
+      return;
+    }
 
     if (!forgotNewPassword || forgotNewPassword.length < 4) {
       setErrorMessage('New password must be at least 4 characters long.');
@@ -917,33 +540,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      await fetch('/api/auth/reset-password', {
+      const res = await authFetch('/api/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           identifier: forgotIdentifierInput.trim(),
+          resetToken: forgotResetToken,
           token: forgotResetToken,
           newPassword: forgotNewPassword.trim(),
         }),
-      }).catch(console.warn);
+      });
+      const data = await res.json().catch(() => null);
 
-      const idKey = forgotMatchedUser?.studentEmail || forgotMatchedUser?.nickname || forgotIdentifierInput.trim();
-      try {
-        updateUserPassword(idKey, forgotNewPassword.trim());
-      } catch (err) {
-        console.error('Local db update error:', err);
-      }
-
-      if (forgotMatchedUser) {
-        const updatedUser: UserProfile = {
-          ...forgotMatchedUser,
-          savedPassword: forgotNewPassword.trim(),
-          password: forgotNewPassword.trim(),
-          updatedAt: new Date().toISOString(),
-        };
-        upsertUser(updatedUser);
-        saveUserToFirestore(updatedUser).catch((err) => console.warn('Password reset Firestore sync notice:', err));
-        pushServerDbSync({ users: [updatedUser] }).catch((err) => console.warn('Password reset server sync notice:', err));
+      if (!res.ok || !data?.success) {
+        setErrorMessage(data?.error || 'Failed to reset password. Please verify your details again.');
+        setIsSubmitting(false);
+        return;
       }
 
       setResetSuccessMessage('✓ Password reset successfully! Your new password is now active. Please sign in below.');
@@ -970,14 +582,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="bg-gradient-to-r from-teal-800 via-teal-700 to-emerald-800 p-5 text-white shrink-0 relative">
           <div className="flex items-center justify-between">
             <div
-              onDoubleClick={handleSecretHeaderClick}
-              className="flex items-center gap-2.5 cursor-pointer select-none group"
+              className="flex items-center gap-2.5 select-none"
               title="FUHSI-Connect"
             >
               <img
                 src={fuhsiLogo}
                 alt="FUHSI Connect"
-                className="w-10 h-10 rounded-full object-cover shrink-0 border border-white/30 group-active:scale-95 transition-transform shadow-xs"
+                className="w-10 h-10 rounded-full object-cover shrink-0 border border-white/30 shadow-xs"
               />
               <div>
                 <h2 className="text-xl font-black tracking-tight text-white flex items-center gap-2">
@@ -1471,26 +1082,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               )}
 
-              {isAdminPortal ? (
-                <div className="p-3 bg-amber-50 border border-amber-200/90 rounded-xl text-xs text-amber-900 space-y-2 animate-in fade-in">
-                  <div className="font-extrabold flex items-center justify-between text-amber-800">
-                    <span className="flex items-center gap-1.5">
-                      <ShieldCheck size={16} />
-                      <span>FUHSI Council Admin Portal (Secret Mode)</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setIsAdminPortal(false)}
-                      className="text-[10px] font-bold text-amber-700 hover:underline cursor-pointer"
-                    >
-                      Exit Admin
-                    </button>
-                  </div>
-                  <p className="text-[11px] leading-relaxed">
-                    Accessing executive moderation console. Enter your admin credentials to proceed.
-                  </p>
+              {resetSuccessMessage && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+                  {resetSuccessMessage}
                 </div>
-              ) : null}
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-1">
@@ -1538,21 +1134,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     {showLoginPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
-                {!isAdminPortal && (
-                  <div className="flex justify-end mt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setErrorMessage('');
-                        setResetSuccessMessage('');
-                        setMode('FORGOT_PASSWORD');
-                      }}
-                      className="text-[11px] font-bold text-teal-700 hover:text-teal-900 hover:underline cursor-pointer"
-                    >
-                      Forgot Password?
-                    </button>
-                  </div>
-                )}
+                <div className="flex justify-end mt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMessage('');
+                      setResetSuccessMessage('');
+                      setMode('FORGOT_PASSWORD');
+                    }}
+                    className="text-[11px] font-bold text-teal-700 hover:text-teal-900 hover:underline cursor-pointer"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
               </div>
 
               <button
@@ -1563,8 +1157,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 } ${
                   loginAuthStage === 'confirmed'
                     ? 'bg-emerald-600 hover:bg-emerald-700'
-                    : isAdminPortal
-                    ? 'bg-amber-600 hover:bg-amber-700'
                     : 'bg-teal-600 hover:bg-teal-700'
                 }`}
               >

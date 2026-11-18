@@ -16,3 +16,6 @@
 local.properties
 .env
 debug.keystore
+data/
+dist/
+node_modules/

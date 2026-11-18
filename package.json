@@ -28,10 +28,12 @@
     "vite": "^6.1.0"
   },
   "devDependencies": {
+    "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@types/express": "^5.0.6",
     "@types/jsdom": "^30.0.0",
     "@types/nodemailer": "^8.0.1",
     "esbuild": "^0.28.1",
+    "eslint": "^10.15.0",
     "jsdom": "^30.1.0",
     "tsx": "^4.23.5"
   }

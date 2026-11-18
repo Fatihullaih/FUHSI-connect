@@ -10,6 +10,7 @@ import {
   isDemoDirectMessage,
   isDemoNickname,
 } from './postGenerator';
+import { authFetch } from './authSession';
 
 export interface ServerDbState {
   users: UserProfile[];
@@ -206,7 +207,7 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
       }
 
       const targetNick = (primary.nickname || secondary.nickname || '').toLowerCase().replace(/^@/, '');
-      const isMod = targetNick === 'modula';
+      const isMod = targetNick === 'modula' && Boolean(primary.isAdmin || secondary.isAdmin);
 
       const merged: UserProfile = {
         ...secondary,
@@ -249,7 +250,7 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
           if (secondary.verificationStatus === 'approved' || secondary.isVerified) return 'approved';
           return primary.verificationStatus || secondary.verificationStatus || 'unverified';
         })(),
-        isAdmin: Boolean(primary.isAdmin || secondary.isAdmin),
+        isAdmin: Boolean(primary.isAdmin !== undefined ? primary.isAdmin : secondary.isAdmin),
         reputationScore: Math.max(primary.reputationScore || 0, secondary.reputationScore || 0),
         lastActiveAt: (() => {
           const pActive = primary.lastActiveAt ? Date.parse(primary.lastActiveAt) || 0 : 0;
@@ -301,8 +302,9 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
           if (secondaryTitle && !isSBad && secondary.isVerified !== false && (secondary.badgeType as any) !== 'NONE') return secondaryTitle;
           return '';
         })(),
-        savedPassword: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,
-        password: (primary as any).savedPassword || (primary as any).password || (secondary as any).savedPassword || (secondary as any).password,
+        ...(((primary as any).passwordHash || (secondary as any).passwordHash)
+          ? { passwordHash: (primary as any).passwordHash || (secondary as any).passwordHash }
+          : {}),
         previousNicknames: (() => {
           const authClean = (authoritativeNick || '').trim().toLowerCase().replace(/^@+/, '');
           const set = new Set<string>();
@@ -318,6 +320,8 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
         })(),
         updatedAt: primary.updatedAt || secondary.updatedAt || new Date().toISOString(),
       };
+      delete (merged as any).savedPassword;
+      delete (merged as any).password;
       mergedList[existingIndex] = merged;
     }
   };
@@ -779,7 +783,7 @@ export function mergeFollows(a: FollowRecord[] = [], b: FollowRecord[] = []): Fo
  */
 export async function fetchServerDb(): Promise<ServerDbState | null> {
   try {
-    const res = await fetch('/api/db');
+    const res = await authFetch('/api/db');
     if (!res.ok) return null;
     const contentType = res.headers.get('content-type');
     if (!contentType || !contentType.includes('application/json')) {
@@ -800,7 +804,7 @@ export async function fetchServerDb(): Promise<ServerDbState | null> {
  */
 export async function pushServerDbSync(partialDb: Partial<ServerDbState>): Promise<ServerDbState | null> {
   try {
-    const res = await fetch('/api/db/sync', {
+    const res = await authFetch('/api/db/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(partialDb),
@@ -829,7 +833,7 @@ export async function uploadAvatarToServer(
   avatarDataUrl: string
 ): Promise<{ success: boolean; avatarUrl?: string; fileUrl?: string }> {
   try {
-    const res = await fetch('/api/avatar/upload', {
+    const res = await authFetch('/api/avatar/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, nickname, avatarDataUrl }),
@@ -856,7 +860,7 @@ export async function uploadAvatarToServer(
  */
 export async function deleteAvatarFromServer(userId: string): Promise<boolean> {
   try {
-    const res = await fetch(`/api/avatar/${encodeURIComponent(userId)}`, {
+    const res = await authFetch(`/api/avatar/${encodeURIComponent(userId)}`, {
       method: 'DELETE',
     });
     return res.ok;

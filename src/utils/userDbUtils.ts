@@ -1,9 +1,9 @@
 import { UserProfile, BadgeType, VerificationRequest } from '../types';
-import { INITIAL_USER_PROFILE } from '../data/initialData';
 import { pushServerDbSync, mergeUsers } from './apiSync';
 import { saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore, savePostToFirestore, saveCommentToFirestore, deleteUserFromFirestore, saveNotificationToFirestore } from '../lib/firestoreSync';
 import { isDemoUser } from './postGenerator';
 import { getUserBadgeInfo, normalizeBadgeColor } from './verificationUtils';
+import { authFetch, stripSensitiveUserFields } from './authSession';
 
 export { getUserBadgeInfo };
 
@@ -541,7 +541,7 @@ export function purgeAccountPermanently(options: PurgeAccountOptions): PurgedDat
   } as any).catch((err) => console.error('Error syncing deletion to server:', err));
 
   try {
-    fetch('/api/user/delete', {
+    authFetch('/api/user/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -607,7 +607,7 @@ export async function purgeAccountPermanentlyAsync(options: PurgeAccountOptions)
 
   // 3. Await central server deletion endpoint
   try {
-    await fetch('/api/user/delete', {
+    await authFetch('/api/user/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -704,37 +704,36 @@ export function isModulaAccount(userOrNickname?: Partial<UserProfile> | string |
  */
 export function sanitizeUserProfile<T extends Partial<UserProfile>>(user: T): T {
   if (!user) return user;
-  if (isModulaAccount(user)) {
+  const cleaned = stripSensitiveUserFields(user as Record<string, any>) as T;
+  if (isModulaAccount(cleaned)) {
     return {
-      ...user,
+      ...cleaned,
       department: '',
       level: '',
-      accountType: 'Admin',
       matricNumber: '',
-      isAdmin: true,
       reputationScore: 0,
       searchDiscoverable: false,
       allowDirectMessagesFrom: 'followers',
       isPrivate: true,
     };
   }
-  const cleanNick = (user.nickname || '').trim().toLowerCase().replace(/^@/, '');
+  const cleanNick = (cleaned.nickname || '').trim().toLowerCase().replace(/^@/, '');
   const isGuest =
-    user.accountType === 'Guest' ||
-    user.badgeTitle === 'Guest' ||
-    (cleanNick.startsWith('guest_') && user.accountType !== 'Student' && !user.isAdmin);
+    cleaned.accountType === 'Guest' ||
+    cleaned.badgeTitle === 'Guest' ||
+    (cleanNick.startsWith('guest_') && cleaned.accountType !== 'Student' && !cleaned.isAdmin);
 
   if (isGuest) {
     return {
-      ...user,
+      ...cleaned,
       accountType: 'Guest',
       matricNumber: '',
       department: '',
       level: '',
-      badgeTitle: user.badgeTitle === 'FUHSI Student' ? 'Guest' : (user.badgeTitle || 'Guest'),
+      badgeTitle: cleaned.badgeTitle === 'FUHSI Student' ? 'Guest' : (cleaned.badgeTitle || 'Guest'),
     };
   }
-  return user;
+  return cleaned;
 }
 
 export function sanitizeModulaProfile<T extends Partial<UserProfile>>(user: T): T {
@@ -810,38 +809,10 @@ export function formatJoinDate(user?: Partial<UserProfile> | null): string {
   return fallbackDate;
 }
 
-export const DEFAULT_USERS_LIST: UserProfile[] = [
-  {
-    id: 'usr_admin_modula',
-    nickname: '@modula',
-    accountType: 'Admin',
-    realName: 'Administrator',
-    matricNumber: '',
-    studentEmail: 'fuhsiconnectsupport@gmail.com',
-    emergencyHomePhone: '08000000000',
-    department: '',
-    level: '',
-    bio: 'Internal Platform Control Account (@modula).',
-    avatarKey: '1',
-    badgeType: 'GOLD',
-    badgeTitle: 'Official Admin',
-    reputationScore: 0,
-    isVerified: true,
-    isApproved: true,
-    isDeclined: false,
-    isAdmin: true,
-    searchDiscoverable: false,
-    allowDirectMessagesFrom: 'followers',
-    isPrivate: true,
-    savedPassword: 'ibraheem',
-    password: 'ibraheem',
-    joinedDate: 'Sep 2024',
-    createdAt: '2024-09-01T00:00:00.000Z',
-  },
-];
+export const DEFAULT_USERS_LIST: UserProfile[] = [];
 
 /**
- * Get all users stored in the database. If none exists, initializes default list.
+ * Get all users cached in local browser storage. Never seeds hardcoded credentials.
  */
 export function getStoredUsers(): UserProfile[] {
   try {
@@ -850,15 +821,12 @@ export function getStoredUsers(): UserProfile[] {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Automatically filter out any demo/mock accounts and permanently deleted users, and sanitize @modula
           const realUsers = parsed
             .filter((u) => !isDemoUser(u) && !isUserPermanentlyDeleted(u))
             .map((u) => sanitizeModulaProfile(u));
-          const filteredDefaults = DEFAULT_USERS_LIST
-            .filter((u) => !isUserPermanentlyDeleted(u))
-            .map((u) => sanitizeModulaProfile(u));
-          const withDefaults = mergeUsers(filteredDefaults, realUsers).map((u) => sanitizeModulaProfile(u));
-          return withDefaults.filter((u) => !isUserPermanentlyDeleted(u));
+          return mergeUsers([], realUsers)
+            .map((u) => sanitizeModulaProfile(u))
+            .filter((u) => !isUserPermanentlyDeleted(u));
         }
       }
     }
@@ -866,31 +834,17 @@ export function getStoredUsers(): UserProfile[] {
     console.error('Error reading user database:', err);
   }
 
-  // Fallback / First-time initialization
-  const initialDefaults = DEFAULT_USERS_LIST
-    .filter((u) => !isUserPermanentlyDeleted(u))
-    .map((u) => sanitizeModulaProfile(u));
-  try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(USER_DB_KEY, JSON.stringify(initialDefaults));
-    }
-  } catch (e) {
-    console.error('Error initializing user database:', e);
-  }
-  return initialDefaults;
+  return [];
 }
 
 /**
- * Save user list to database and sync across devices via Firestore and server API
+ * Save user list to local cache and sync sanitized profiles via server API
  */
-export function saveStoredUsers(users: UserProfile[]): void {
+export function saveStoredUsers(users: UserProfile[], skipServerSync: boolean = false): void {
   const realOnly = users
     .map((u) => sanitizeModulaProfile(u))
     .filter((u) => !isDemoUser(u) && !isUserPermanentlyDeleted(u));
-  const filteredDefaults = DEFAULT_USERS_LIST
-    .filter((u) => !isUserPermanentlyDeleted(u))
-    .map((u) => sanitizeModulaProfile(u));
-  const cleaned = mergeUsers(realOnly.length > 0 ? realOnly : filteredDefaults, [])
+  const cleaned = mergeUsers(realOnly, [])
     .map((u) => sanitizeModulaProfile(u))
     .filter((u) => !isUserPermanentlyDeleted(u));
   try {
@@ -900,14 +854,32 @@ export function saveStoredUsers(users: UserProfile[]): void {
   } catch (e) {
     console.error('Error saving user database:', e);
   }
-  // Sync to Firestore cloud database
-  saveUsersBatchToFirestore(cleaned).catch((err) => {
-    console.warn('Firestore batch users sync notice:', err);
-  });
-  // Sync to central server database asynchronously
-  pushServerDbSync({ users: cleaned } as any).catch((err) => {
-    console.warn('Server users sync notice:', err);
-  });
+  if (skipServerSync) return;
+  let activeIsAdmin = false;
+  let activeId = '';
+  try {
+    const activeRaw = typeof localStorage !== 'undefined' ? localStorage.getItem('fuhsi_active_user') : null;
+    if (activeRaw) {
+      const active = JSON.parse(activeRaw);
+      activeIsAdmin = Boolean(active?.isAdmin && active?.id === 'usr_admin_modula');
+      activeId = String(active?.id || '');
+    }
+  } catch {}
+  if (activeIsAdmin) {
+    saveUsersBatchToFirestore(cleaned).catch((err) => {
+      console.warn('Firestore batch users sync notice:', err);
+    });
+    pushServerDbSync({ users: cleaned } as any).catch((err) => {
+      console.warn('Server users sync notice:', err);
+    });
+  } else if (activeId) {
+    const selfRecord = cleaned.find((u) => String(u.id) === activeId);
+    if (selfRecord) {
+      pushServerDbSync({ users: [selfRecord] } as any).catch((err) => {
+        console.warn('Server self-user sync notice:', err);
+      });
+    }
+  }
 }
 
 
@@ -1121,7 +1093,7 @@ export function isGuestAccount(userOrNickname?: Partial<UserProfile> | string | 
  * Get account category: 'Admin' | 'Student' | 'Guest'
  */
 export function getUserAccountType(userOrNickname?: Partial<UserProfile> | string | null | any): 'Admin' | 'Student' | 'Guest' {
-  if (isModulaAccount(userOrNickname)) return 'Admin';
+  if (typeof userOrNickname === 'object' && userOrNickname?.isAdmin) return 'Admin';
   return isGuestAccount(userOrNickname) ? 'Guest' : 'Student';
 }
 
@@ -1181,7 +1153,7 @@ export function getApprovedMembersCount(): number {
 }
 
 /**
- * Add or update a user in the database
+ * Add or update a user in the database (never stores plaintext passwords in client storage)
  */
 export function upsertUser(user: UserProfile): UserProfile[] {
   const users = getStoredUsers();
@@ -1197,14 +1169,11 @@ export function upsertUser(user: UserProfile): UserProfile[] {
 
   const nowIso = new Date().toISOString();
   let updatedUser: UserProfile = sanitizeModulaProfile({
-    ...user,
+    ...stripSensitiveUserFields(user as any),
     updatedAt: user.updatedAt || nowIso,
   });
   if (index >= 0) {
     const existing = users[index];
-    const existingPassword = (existing as any).savedPassword || (existing as any).password;
-    const incomingPassword = (user as any).savedPassword || (user as any).password;
-    const finalPassword = incomingPassword || existingPassword;
     const mergedPrevNicknames = Array.from(
       new Set([
         ...((existing.previousNicknames || []).map(normalizeNicknameHandle)),
@@ -1214,12 +1183,10 @@ export function upsertUser(user: UserProfile): UserProfile[] {
           : []),
       ])
     ).filter((h) => h && h !== normNick);
-    users[index] = sanitizeModulaProfile({ 
-      ...existing, 
-      ...user,
+    users[index] = sanitizeModulaProfile({
+      ...stripSensitiveUserFields(existing as any),
+      ...stripSensitiveUserFields(user as any),
       previousNicknames: mergedPrevNicknames,
-      savedPassword: finalPassword,
-      password: finalPassword,
       updatedAt: user.updatedAt || nowIso,
     });
     updatedUser = users[index];
@@ -1227,7 +1194,6 @@ export function upsertUser(user: UserProfile): UserProfile[] {
     users.push(updatedUser);
   }
 
-  // Save single user to Firestore & server immediately
   saveUserToFirestore(updatedUser).catch((err) => {
     console.warn('Firestore user sync notice:', err);
   });
@@ -1235,7 +1201,7 @@ export function upsertUser(user: UserProfile): UserProfile[] {
     console.warn('Server user sync notice:', err);
   });
 
-  saveStoredUsers(users);
+  saveStoredUsers(users, true);
   try {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fuhsi_users_updated', { detail: updatedUser }));
@@ -1246,52 +1212,9 @@ export function upsertUser(user: UserProfile): UserProfile[] {
 }
 
 /**
- * Permanently update password for a specific user and sync to Firestore, server DB, and localStorage
+ * Deprecated client password storage stub: passwords are managed and hashed strictly on the backend.
  */
-export function updateUserPassword(identifierOrEmail: string, newPassword: string): boolean {
-  if (!identifierOrEmail || !newPassword) return false;
-  const cleanId = identifierOrEmail.trim().toLowerCase().replace(/^@/, '');
-  const users = getStoredUsers();
-
-  const index = users.findIndex((u) => {
-    if (u.id && u.id.toLowerCase() === cleanId) return true;
-    if (u.nickname && u.nickname.trim().toLowerCase().replace(/^@/, '') === cleanId) return true;
-    if (u.studentEmail && u.studentEmail.trim().toLowerCase() === cleanId) return true;
-    return false;
-  });
-
-  if (index >= 0) {
-    users[index] = {
-      ...users[index],
-      savedPassword: newPassword.trim(),
-      password: newPassword.trim(),
-    };
-
-    saveUserToFirestore(users[index]).catch((err) => console.warn('Firestore password sync notice:', err));
-    saveStoredUsers(users);
-
-    // Update active user profile in localStorage if matching
-    try {
-      const activeUserJson = localStorage.getItem('fuhsi_active_user');
-      if (activeUserJson) {
-        const active = JSON.parse(activeUserJson);
-        const matchActive = (active.id === users[index].id) ||
-          (active.nickname && active.nickname.toLowerCase().replace(/^@/, '') === cleanId) ||
-          (active.studentEmail && active.studentEmail.toLowerCase() === cleanId);
-        if (matchActive) {
-          localStorage.setItem('fuhsi_active_user', JSON.stringify({
-            ...active,
-            savedPassword: newPassword.trim(),
-            password: newPassword.trim(),
-          }));
-        }
-      }
-    } catch (e) {
-      console.error('Error updating active user password:', e);
-    }
-
-    return true;
-  }
+export function updateUserPassword(_identifierOrEmail: string, _newPassword: string): boolean {
   return false;
 }
 

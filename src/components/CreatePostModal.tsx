@@ -3,7 +3,7 @@ import { PostCategory, UserProfile } from '../types';
 import { compressImageFile } from '../utils/imageUtils';
 import { isGuestAccount } from '../utils/userDbUtils';
 import { VerificationModal } from './VerificationModal';
-import { INITIAL_USER_PROFILE } from '../data/initialData';
+import { EMPTY_USER_PROFILE } from '../data/initialData';
 import { LinkifiedText, tokenizeTextForLinks } from './LinkifiedText';
 import { 
   X, 
@@ -55,7 +55,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   onCreatePost,
   onOpenVerification,
 }) => {
-  const currentUser = userProfile || user || INITIAL_USER_PROFILE;
+  const currentUser = userProfile || user || EMPTY_USER_PROFILE;
 
   const isVerifiedUser = useMemo(() => {
     if (currentUser?.isVerified || currentUser?.verificationStatus === 'approved') return true;

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { UserProfile, Post, Comment, Report } from '../types';
-import { INITIAL_USER_PROFILE } from '../data/initialData';
+import { EMPTY_USER_PROFILE } from '../data/initialData';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { AvatarIcon } from '../components/AvatarIcon';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';
@@ -52,7 +52,7 @@ export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({
   // Sub-tabs under Weekly Campus Ranking: Top 10 Most Engaging & Top 5 Trending Posts
   const [weeklySubTab, setWeeklySubTab] = useState<'engaging' | 'trending'>('engaging');
 
-  const currentUser = userProfile || user || INITIAL_USER_PROFILE;
+  const currentUser = userProfile || user || EMPTY_USER_PROFILE;
 
   // Retrieve Sunday → Saturday weekly window
   const weeklyWindow = useMemo(() => getWeeklyRankingWindow(), []);

@@ -2,6 +2,7 @@ import { UserProfile, FollowRecord } from '../types';
 import { saveUserToFirestore } from '../lib/firestoreSync';
 import { normalizeNickname } from './messagingUtils';
 import { isUserFollowing, normalizeHandle, getStoredFollows } from './followUtils';
+import { authFetch } from './authSession';
 
 export const PRESENCE_ACTIVE_THRESHOLD_MS = 90 * 1000; // 90 seconds threshold for active presence
 
@@ -137,7 +138,7 @@ export function updateActiveUserPresence(user: UserProfile | null | undefined, i
 
   // 3. Sync lightweight presence to central server DB (works across devices even when Firestore quota is exhausted)
   if (typeof fetch !== 'undefined') {
-    fetch('/api/presence', {
+    authFetch('/api/presence', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       keepalive: true,

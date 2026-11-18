@@ -2,100 +2,547 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Helpers
     function incoming() {
       return request.resource.data;
     }
 
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // Users Collection
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'adepojufatih33@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwnerUid(ownerUid) {
+      return isSignedIn() && ownerUid is string && ownerUid == request.auth.uid;
+    }
+
+    // Validation Blueprints
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'nickname']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'nickname', 'realName', 'studentEmail', 'matricNumber',
+          'department', 'level', 'gender', 'phoneNumber', 'emergencyHomePhone',
+          'emergencyContactName', 'bio', 'avatarKey', 'avatarUrl', 'isApproved',
+          'isVerified', 'isDeclined', 'isAdmin', 'reputationScore', 'badgeType',
+          'badgeTitle', 'isPrivate', 'showActiveStatus', 'searchDiscoverable',
+          'defaultPostAudience', 'allowDirectMessagesFrom', 'lastActiveAt',
+          'isOnline', 'createdAt', 'updatedAt', 'accountType', 'verificationStatus',
+          'previousNicknames'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.nickname is string && data.nickname.size() > 0 && data.nickname.size() <= 64 &&
+        (!('ownerUid' in data) || (data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128)) &&
+        (!('realName' in data) || (data.realName is string && data.realName.size() <= 120)) &&
+        (!('studentEmail' in data) || (data.studentEmail is string && data.studentEmail.size() <= 160)) &&
+        (!('matricNumber' in data) || (data.matricNumber is string && data.matricNumber.size() <= 64)) &&
+        (!('bio' in data) || (data.bio is string && data.bio.size() <= 1000)) &&
+        (!('isAdmin' in data) || data.isAdmin is bool) &&
+        (!('isApproved' in data) || data.isApproved is bool) &&
+        (!('isVerified' in data) || data.isVerified is bool) &&
+        (!('isDeclined' in data) || data.isDeclined is bool) &&
+        (!('previousNicknames' in data) || (data.previousNicknames is list && data.previousNicknames.size() <= 50 && (data.previousNicknames.size() == 0 || data.previousNicknames[0] is string)));
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll(['id', 'authorNickname', 'content']) &&
+        data.keys().hasOnly([
+          'id', 'authorId', 'ownerUid', 'authorName', 'authorNickname', 'authorAvatarKey',
+          'authorAvatarUrl', 'authorIsVerified', 'authorBadgeType', 'authorBadgeTitle',
+          'authorDepartment', 'authorLevel', 'content', 'category', 'likes', 'likesCount',
+          'likedBy', 'commentsCount', 'commentCount', 'repostsCount', 'repostedBy',
+          'repostedPostId', 'createdAt', 'timestamp', 'updatedAt', 'imageUrl', 'poll',
+          'isAnonymous', 'isFlagged', 'status'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.authorNickname is string && data.authorNickname.size() > 0 && data.authorNickname.size() <= 64 &&
+        data.content is string && data.content.size() <= 10000 &&
+        (!('ownerUid' in data) || (data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128)) &&
+        (!('likedBy' in data) || (data.likedBy is list && data.likedBy.size() <= 5000 && (data.likedBy.size() == 0 || data.likedBy[0] is string))) &&
+        (!('repostedBy' in data) || (data.repostedBy is list && data.repostedBy.size() <= 5000 && (data.repostedBy.size() == 0 || data.repostedBy[0] is string)));
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['id', 'postId', 'authorNickname', 'content']) &&
+        data.keys().hasOnly([
+          'id', 'postId', 'parentId', 'authorId', 'ownerUid', 'authorNickname',
+          'authorAvatarKey', 'authorAvatarUrl', 'authorIsVerified', 'authorBadgeType',
+          'authorBadgeTitle', 'content', 'likedBy', 'likes', 'likesCount',
+          'timestamp', 'createdAt', 'updatedAt', 'replyToNickname', 'isAnonymous'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.postId is string && data.postId.size() > 0 && data.postId.size() <= 128 &&
+        data.authorNickname is string && data.authorNickname.size() > 0 && data.authorNickname.size() <= 64 &&
+        data.content is string && data.content.size() > 0 && data.content.size() <= 4000 &&
+        (!('ownerUid' in data) || (data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128)) &&
+        (!('likedBy' in data) || (data.likedBy is list && data.likedBy.size() <= 5000 && (data.likedBy.size() == 0 || data.likedBy[0] is string)));
+    }
+
+    function isValidMarketplaceItem(data) {
+      return data.keys().hasAll(['id', 'title', 'sellerNickname']) &&
+        data.keys().hasOnly([
+          'id', 'sellerId', 'ownerUid', 'title', 'description', 'askingPrice', 'approvedPrice',
+          'price', 'sellerName', 'sellerNickname', 'sellerPhone', 'category', 'condition',
+          'status', 'imageUrl', 'images', 'views', 'createdAt', 'updatedAt', 'adminNote'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+        data.sellerNickname is string && data.sellerNickname.size() > 0 && data.sellerNickname.size() <= 64 &&
+        (!('ownerUid' in data) || (data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128)) &&
+        (!('images' in data) || (data.images is list && data.images.size() <= 10 && (data.images.size() == 0 || data.images[0] is string)));
+    }
+
+    function isValidVerificationRequest(data) {
+      return data.keys().hasAll(['id', 'applicantNickname', 'status']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'ownerUid', 'applicantNickname', 'realName', 'matricNumber',
+          'department', 'level', 'accountType', 'positionTitle', 'paymentRef', 'amountPaid',
+          'assignedBadgeType', 'assignedBadgeTitle', 'status', 'timestamp', 'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.applicantNickname is string && data.applicantNickname.size() > 0 && data.applicantNickname.size() <= 64 &&
+        data.status in ['PENDING', 'APPROVED', 'DECLINED', 'REJECTED', 'REVOKED'] &&
+        (!('ownerUid' in data) || (data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128));
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['id', 'targetId', 'reason']) &&
+        data.keys().hasOnly([
+          'id', 'targetType', 'targetId', 'reason', 'details', 'reporterUid',
+          'reporterNickname', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.targetId is string && data.targetId.size() > 0 && data.targetId.size() <= 128 &&
+        data.reason is string && data.reason.size() > 0 && data.reason.size() <= 500;
+    }
+
+    function isValidMarketplaceReport(data) {
+      return data.keys().hasAll(['id', 'itemId', 'reason']) &&
+        data.keys().hasOnly(['id', 'itemId', 'reporterUid', 'reporterNickname', 'reason', 'status', 'createdAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.itemId is string && data.itemId.size() > 0 && data.itemId.size() <= 128 &&
+        data.reason is string && data.reason.size() > 0 && data.reason.size() <= 500;
+    }
+
+    function isValidHelpDeskInquiry(data) {
+      return data.keys().hasAll(['id', 'userNickname', 'message', 'status']) &&
+        data.keys().hasOnly(['id', 'ownerUid', 'userNickname', 'subject', 'message', 'status', 'adminNotes', 'createdAt', 'resolvedAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.userNickname is string && data.userNickname.size() > 0 && data.userNickname.size() <= 64 &&
+        data.message is string && data.message.size() > 0 && data.message.size() <= 4000 &&
+        data.status in ['PENDING', 'RESOLVED', 'UNDER_REVIEW'];
+    }
+
+    function isValidDirectMessage(data) {
+      return data.keys().hasAll(['id', 'conversationId', 'senderNickname', 'receiverNickname', 'text']) &&
+        data.keys().hasOnly([
+          'id', 'conversationId', 'senderId', 'receiverId', 'senderUid', 'receiverUid',
+          'senderNickname', 'receiverNickname', 'senderAvatarKey', 'senderAvatarUrl',
+          'text', 'timestamp', 'itemId', 'itemTitle', 'itemPrice', 'meetupPoint',
+          'isSafetyWarning', 'violationNotice', 'isRead'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.conversationId is string && data.conversationId.size() > 0 && data.conversationId.size() <= 160 &&
+        data.senderNickname is string && data.senderNickname.size() > 0 && data.senderNickname.size() <= 64 &&
+        data.receiverNickname is string && data.receiverNickname.size() > 0 && data.receiverNickname.size() <= 64 &&
+        data.text is string && data.text.size() <= 4000;
+    }
+
+    function isValidChatConversation(data) {
+      return data.keys().hasAll(['id', 'participantNicknames']) &&
+        data.keys().hasOnly(['id', 'participantUids', 'participantNicknames', 'lastMessage', 'updatedAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 160 &&
+        data.participantNicknames is list && data.participantNicknames.size() > 0 && data.participantNicknames.size() <= 10 &&
+        data.participantNicknames[0] is string &&
+        (!('participantUids' in data) || (data.participantUids is list && data.participantUids.size() <= 10 && (data.participantUids.size() == 0 || data.participantUids[0] is string)));
+    }
+
+    function isValidChatReport(data) {
+      return data.keys().hasAll(['id', 'conversationId', 'reportedNickname', 'reporterNickname', 'reason']) &&
+        data.keys().hasOnly([
+          'id', 'conversationId', 'reporterUid', 'reportedNickname', 'reporterNickname',
+          'reason', 'notes', 'messageSnippet', 'timestamp', 'status'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.reason is string && data.reason.size() > 0 && data.reason.size() <= 500;
+    }
+
+    function isValidChatRestriction(data) {
+      return data.keys().hasAll(['userNickname', 'isRestricted']) &&
+        data.keys().hasOnly(['userNickname', 'isRestricted', 'reason', 'restrictedAt', 'restrictedUntil', 'durationDays']) &&
+        data.userNickname is string && data.userNickname.size() > 0 && data.userNickname.size() <= 64 &&
+        data.isRestricted is bool;
+    }
+
+    function isValidChatGroup(data) {
+      return data.keys().hasAll(['id', 'name', 'createdBy', 'adminNicknames', 'memberNicknames']) &&
+        data.keys().hasOnly([
+          'id', 'name', 'description', 'avatarUrl', 'avatarKey', 'createdBy', 'ownerUid',
+          'createdAt', 'adminNicknames', 'memberNicknames', 'memberUids', 'lastMessage',
+          'lastMessageSender', 'lastTimestamp', 'unreadCount', 'isDeleted', 'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 120 &&
+        data.createdBy is string && data.createdBy.size() > 0 && data.createdBy.size() <= 64 &&
+        data.adminNicknames is list && data.adminNicknames.size() > 0 && data.adminNicknames.size() <= 20 && data.adminNicknames[0] is string &&
+        data.memberNicknames is list && data.memberNicknames.size() > 0 && data.memberNicknames.size() <= 200 && data.memberNicknames[0] is string;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'targetNickname', 'type', 'title', 'message']) &&
+        data.keys().hasOnly([
+          'id', 'targetUid', 'targetNickname', 'type', 'title', 'message',
+          'timestamp', 'createdAt', 'updatedAt', 'isRead', 'readByUsers',
+          'postId', 'senderNickname', 'actionType', 'itemId'
+        ]) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.targetNickname is string && data.targetNickname.size() > 0 && data.targetNickname.size() <= 64 &&
+        data.title is string && data.title.size() <= 200 &&
+        data.message is string && data.message.size() <= 2000 &&
+        (!('readByUsers' in data) || (data.readByUsers is list && data.readByUsers.size() <= 5000 && (data.readByUsers.size() == 0 || data.readByUsers[0] is string)));
+    }
+
+    function isValidSetting(data) {
+      return data.keys().hasAll(['verificationFee']) &&
+        data.keys().hasOnly(['verificationFee', 'updatedAt']) &&
+        data.verificationFee is number && data.verificationFee >= 0 && data.verificationFee <= 1000000;
+    }
+
+    // Users Collection: Strict PII isolation & RBAC non-escalation
     match /users/{userId} {
-      allow read, write: if true;
-    }
+      allow get: if isValidId(userId) && (
+        isAdmin() ||
+        (isSignedIn() && (request.auth.uid == userId || existing().ownerUid == request.auth.uid))
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
 
-    // Posts Collection
-    match /posts/{postId} {
-      allow read, write: if true;
-    }
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) && (
+          isAdmin() || (
+            isOwnerUid(incoming().ownerUid) &&
+            (!('isAdmin' in incoming()) || incoming().isAdmin == false) &&
+            (!('isApproved' in incoming()) || incoming().isApproved == false) &&
+            (!('isVerified' in incoming()) || incoming().isVerified == false) &&
+            (!('badgeType' in incoming()) || incoming().badgeType == 'NONE')
+          )
+        );
 
-    // Comments Collection
-    match /comments/{commentId} {
-      allow read, write: if true;
-    }
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) && (
+          isAdmin() || (
+            (request.auth.uid == userId || existing().ownerUid == request.auth.uid) &&
+            incoming().ownerUid == existing().ownerUid &&
+            incoming().isAdmin == existing().isAdmin &&
+            incoming().isApproved == existing().isApproved &&
+            incoming().isVerified == existing().isVerified &&
+            incoming().badgeType == existing().badgeType &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'nickname', 'bio', 'avatarKey', 'avatarUrl', 'isPrivate',
+              'showActiveStatus', 'searchDiscoverable', 'defaultPostAudience',
+              'allowDirectMessagesFrom', 'lastActiveAt', 'isOnline', 'updatedAt',
+              'previousNicknames'
+            ])
+          )
+        );
 
-    // Marketplace Listings
-    match /marketplace_approved/{itemId} {
-      allow read, write: if true;
-    }
-
-    match /marketplace_pending/{itemId} {
-      allow read, write: if true;
-    }
-
-    match /marketplace_items/{itemId} {
-      allow read, write: if true;
-    }
-
-    // Verification Requests & Candidates
-    match /verification_requests/{requestId} {
-      allow read, write: if true;
-    }
-
-    match /verif_candidates/{candidateId} {
-      allow read, write: if true;
-    }
-
-    // Reports Collection
-    match /reports/{reportId} {
-      allow read, write: if true;
-    }
-
-    // Direct Messages & Admin Inquiries
-    match /direct_messages/{messageId} {
-      allow read, write: if true;
-    }
-
-    // Chat Reports
-    match /chat_reports/{reportId} {
-      allow read, write: if true;
-    }
-
-    // Chat Restrictions
-    match /chat_restrictions/{restrictionId} {
-      allow read, write: if true;
-    }
-
-    // Chat Conversations
-    match /chat_conversations/{convId} {
-      allow read, write: if true;
-    }
-
-    // Follows Collection
-    match /follows/{followId} {
-      allow read, write: if true;
+      allow delete: if isValidId(userId) && isAdmin();
     }
 
     // Admins Collection
     match /admins/{adminId} {
-      allow read, write: if true;
+      allow get: if isValidId(adminId) && isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if isValidId(adminId) && isAdmin();
+    }
+
+    // Posts Collection
+    match /posts/{postId} {
+      allow get: if isValidId(postId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isVerifiedUser() && isValidId(postId) && isValidPost(incoming()) && (
+        isAdmin() || isOwnerUid(incoming().ownerUid)
+      );
+      allow update: if isVerifiedUser() && isValidId(postId) && isValidPost(incoming()) && (
+        isAdmin() || (
+          isOwnerUid(existing().ownerUid) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['content', 'category', 'updatedAt', 'authorNickname', 'authorAvatarKey', 'authorAvatarUrl'])
+        ) || (
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['likedBy', 'likes', 'likesCount', 'commentCount', 'commentsCount', 'repostedBy', 'repostsCount', 'updatedAt'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(postId) && (isAdmin() || isOwnerUid(existing().ownerUid));
+    }
+
+    // Comments Collection
+    match /comments/{commentId} {
+      allow get: if isValidId(commentId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isVerifiedUser() && isValidId(commentId) && isValidComment(incoming()) && (
+        isAdmin() || isOwnerUid(incoming().ownerUid)
+      );
+      allow update: if isVerifiedUser() && isValidId(commentId) && isValidComment(incoming()) && (
+        isAdmin() || (
+          isOwnerUid(existing().ownerUid) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt', 'authorNickname', 'authorAvatarKey', 'authorAvatarUrl'])
+        ) || (
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['likedBy', 'likes', 'likesCount', 'updatedAt'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(commentId) && (isAdmin() || isOwnerUid(existing().ownerUid));
+    }
+
+    // Marketplace Approved Items
+    match /marketplace_approved/{itemId} {
+      allow get: if isValidId(itemId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isValidId(itemId) && isValidMarketplaceItem(incoming()) && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(itemId) && isValidMarketplaceItem(incoming()) && (
+        isAdmin() || (
+          isOwnerUid(existing().ownerUid) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+          incoming().status in ['SOLD', 'AVAILABLE']
+        ) || (
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['views'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(itemId) && (isAdmin() || isOwnerUid(existing().ownerUid));
+    }
+
+    // Marketplace Pending Items
+    match /marketplace_pending/{itemId} {
+      allow get: if isValidId(itemId) && (isAdmin() || isOwnerUid(existing().ownerUid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(itemId) && isValidMarketplaceItem(incoming()) && (
+        isAdmin() || (isOwnerUid(incoming().ownerUid) && incoming().status == 'PENDING')
+      );
+      allow update: if isVerifiedUser() && isValidId(itemId) && isValidMarketplaceItem(incoming()) && (
+        isAdmin() || (
+          isOwnerUid(existing().ownerUid) &&
+          existing().status == 'PENDING' &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().status == 'PENDING' &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'askingPrice', 'category', 'condition', 'updatedAt'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(itemId) && (isAdmin() || isOwnerUid(existing().ownerUid));
+    }
+
+    // Marketplace Items Mirror
+    match /marketplace_items/{itemId} {
+      allow get: if isValidId(itemId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isValidId(itemId) && isValidMarketplaceItem(incoming()) && isAdmin();
+      allow delete: if isValidId(itemId) && isAdmin();
+    }
+
+    // Marketplace Reports
+    match /marketplace_reports/{reportId} {
+      allow get: if isValidId(reportId) && (isAdmin() || isOwnerUid(existing().reporterUid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.reporterUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(reportId) && isValidMarketplaceReport(incoming()) && (
+        isAdmin() || isOwnerUid(incoming().reporterUid)
+      );
+      allow update: if isValidId(reportId) && isValidMarketplaceReport(incoming()) && isAdmin();
+      allow delete: if isValidId(reportId) && isAdmin();
+    }
+
+    // Verification Requests & Candidates
+    match /verification_requests/{requestId} {
+      allow get: if isValidId(requestId) && (isAdmin() || isOwnerUid(existing().ownerUid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(requestId) && isValidVerificationRequest(incoming()) && (
+        isAdmin() || (isOwnerUid(incoming().ownerUid) && incoming().status == 'PENDING')
+      );
+      allow update: if isVerifiedUser() && isValidId(requestId) && isValidVerificationRequest(incoming()) && (
+        isAdmin() || (
+          isOwnerUid(existing().ownerUid) &&
+          existing().status == 'PENDING' &&
+          incoming().status == 'PENDING' &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['positionTitle', 'paymentRef', 'timestamp'])
+        )
+      );
+      allow delete: if isValidId(requestId) && isAdmin();
+    }
+
+    match /verif_candidates/{candidateId} {
+      allow get: if isValidId(candidateId) && isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if isValidId(candidateId) && isAdmin();
+    }
+
+    // Community Reports
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId) && (isAdmin() || isOwnerUid(existing().reporterUid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.reporterUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(reportId) && isValidReport(incoming()) && (
+        isAdmin() || (isOwnerUid(incoming().reporterUid) && (!('status' in incoming()) || incoming().status == 'PENDING'))
+      );
+      allow update: if isValidId(reportId) && isValidReport(incoming()) && isAdmin();
+      allow delete: if isValidId(reportId) && isAdmin();
+    }
+
+    // Help Desk Inquiries
+    match /helpdesk_inquiries/{inquiryId} {
+      allow get: if isValidId(inquiryId) && (isAdmin() || isOwnerUid(existing().ownerUid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(inquiryId) && isValidHelpDeskInquiry(incoming()) && (
+        isAdmin() || (isOwnerUid(incoming().ownerUid) && incoming().status == 'PENDING')
+      );
+      allow update: if isValidId(inquiryId) && isValidHelpDeskInquiry(incoming()) && isAdmin();
+      allow delete: if isValidId(inquiryId) && isAdmin();
+    }
+
+    // Direct Messages: strictly participant-scoped
+    match /direct_messages/{messageId} {
+      allow get: if isValidId(messageId) && (
+        isAdmin() || (isSignedIn() && (existing().senderUid == request.auth.uid || existing().receiverUid == request.auth.uid))
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && (resource.data.senderUid == request.auth.uid || resource.data.receiverUid == request.auth.uid)
+      );
+      allow create: if isVerifiedUser() && isValidId(messageId) && isValidDirectMessage(incoming()) && (
+        isAdmin() || incoming().senderUid == request.auth.uid
+      );
+      allow update: if isVerifiedUser() && isValidId(messageId) && isValidDirectMessage(incoming()) && (
+        isAdmin() || (
+          existing().receiverUid == request.auth.uid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['isRead'])
+        )
+      );
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+
+    // Chat Conversations
+    match /chat_conversations/{convId} {
+      allow get: if isValidId(convId) && (
+        isAdmin() || (isSignedIn() && existing().participantUids is list && request.auth.uid in existing().participantUids)
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && resource.data.participantUids is list && request.auth.uid in resource.data.participantUids
+      );
+      allow create, update: if isVerifiedUser() && isValidId(convId) && isValidChatConversation(incoming()) && (
+        isAdmin() || (incoming().participantUids is list && request.auth.uid in incoming().participantUids)
+      );
+      allow delete: if isValidId(convId) && isAdmin();
+    }
+
+    // Chat Reports
+    match /chat_reports/{reportId} {
+      allow get: if isValidId(reportId) && (isAdmin() || isOwnerUid(existing().reporterUid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.reporterUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(reportId) && isValidChatReport(incoming()) && (
+        isAdmin() || isOwnerUid(incoming().reporterUid)
+      );
+      allow update: if isValidId(reportId) && isValidChatReport(incoming()) && isAdmin();
+      allow delete: if isValidId(reportId) && isAdmin();
+    }
+
+    // Chat Restrictions
+    match /chat_restrictions/{restrictionId} {
+      allow get: if isValidId(restrictionId) && isSignedIn();
+      allow list: if isAdmin();
+      allow create, update: if isValidId(restrictionId) && isValidChatRestriction(incoming()) && isAdmin();
+      allow delete: if isValidId(restrictionId) && isAdmin();
     }
 
     // Chat Groups Collection
     match /chat_groups/{groupId} {
-      allow read, write: if true;
+      allow get: if isValidId(groupId) && (
+        isAdmin() || (isSignedIn() && existing().memberUids is list && request.auth.uid in existing().memberUids)
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && resource.data.memberUids is list && request.auth.uid in resource.data.memberUids
+      );
+      allow create: if isVerifiedUser() && isValidId(groupId) && isValidChatGroup(incoming()) && (
+        isAdmin() || isOwnerUid(incoming().ownerUid)
+      );
+      allow update: if isVerifiedUser() && isValidId(groupId) && isValidChatGroup(incoming()) && (
+        isAdmin() || (
+          existing().memberUids is list &&
+          request.auth.uid in existing().memberUids &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'lastMessageSender', 'lastTimestamp', 'unreadCount', 'updatedAt'])
+        )
+      );
+      allow delete: if isValidId(groupId) && isAdmin();
     }
 
-    // Permanent Deleted Users Tombstones
+    // Follows Collection
+    match /follows/{followId} {
+      allow get: if isValidId(followId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isVerifiedUser() && isValidId(followId) && (isAdmin() || isOwnerUid(incoming().followerUid));
+      allow delete: if isVerifiedUser() && isValidId(followId) && (isAdmin() || isOwnerUid(existing().followerUid));
+    }
+
+    // Deleted User Tombstones (Admin-managed)
     match /deleted_users/{delId} {
-      allow read, write: if true;
+      allow get: if isValidId(delId) && isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if isValidId(delId) && isAdmin();
     }
 
-    // Global document fallback to prevent unhandled listener exceptions
-    match /{document=**} {
-      allow read, write: if true;
+    // Notifications Collection: recipient-scoped or campus broadcast
+    match /notifications/{notifId} {
+      allow get: if isValidId(notifId) && (
+        isAdmin() || (isSignedIn() && (existing().targetNickname == '__all__' || existing().targetUid == request.auth.uid))
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && (resource.data.targetNickname == '__all__' || resource.data.targetUid == request.auth.uid)
+      );
+      allow create: if isVerifiedUser() && isValidId(notifId) && isValidNotification(incoming()) && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(notifId) && isValidNotification(incoming()) && (
+        isAdmin() || (
+          (existing().targetNickname == '__all__' || existing().targetUid == request.auth.uid) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'readByUsers', 'updatedAt'])
+        )
+      );
+      allow delete: if isValidId(notifId) && isAdmin();
+    }
+
+    // Platform Settings
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && isSignedIn();
+      allow list: if isAdmin();
+      allow create, update: if isValidId(settingId) && isValidSetting(incoming()) && isAdmin();
+      allow delete: if isValidId(settingId) && isAdmin();
+    }
+
+    // Security Audit Logs (immutable via client; Admin read-only)
+    match /audit_logs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if false;
     }
   }
 }
-
