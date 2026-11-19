@@ -1714,6 +1714,199 @@ export async function markAllNotificationsReadInFirestore(
   }
 }
 
+export interface FirestoreCloudRecoveryResult {
+  adminEmail: string;
+  users: UserProfile[];
+  posts: Post[];
+  comments: Comment[];
+  follows: FollowRecord[];
+  verificationRequests: VerificationRequest[];
+  marketplaceItems: MarketplaceItem[];
+  pendingMarketplaceItems: MarketplaceItem[];
+  reports: Report[];
+  verifCandidates: any[];
+  helpDeskInquiries: HelpDeskInquiry[];
+  notifications: Record<string, CampusNotification[]>;
+}
+
+/**
+ * Authenticates the Firebase Admin (adepojufatih33@gmail.com) via Google Sign-In popup
+ * and recovers all non-demo records from Firestore into the central server database.
+ */
+export async function adminRecoverAllFromFirestore(): Promise<FirestoreCloudRecoveryResult> {
+  const { GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
+
+  let currentFbUser = auth.currentUser;
+  if (!currentFbUser || !currentFbUser.emailVerified) {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const cred = await signInWithPopup(auth, provider);
+    currentFbUser = cred.user;
+  }
+
+  const adminEmail = currentFbUser?.email || '';
+  if (!currentFbUser) {
+    throw new Error('Google Sign-In did not complete. Please sign in with the Firebase Admin email.');
+  }
+
+  const safeCol = async (colName: string) => {
+    try {
+      return await getDocs(collection(db, colName));
+    } catch (err: any) {
+      logFirestoreIssue(`Admin cloud recovery read failed for ${colName}`, err, OperationType.LIST, colName);
+      throw err;
+    }
+  };
+
+  const delSnap = await getDocs(collection(db, DELETED_USERS_COL)).catch(() => ({ forEach: () => {} } as any));
+  const deletedIds = new Set<string>();
+  const deletedNicks = new Set<string>();
+  delSnap.forEach((d: any) => {
+    const data = d.data();
+    if (data) {
+      if (data.userId) deletedIds.add(String(data.userId).trim());
+      if (d.id && String(d.id).startsWith('usr_')) deletedIds.add(String(d.id).trim());
+      if (data.nickname) deletedNicks.add(String(data.nickname).toLowerCase().replace(/^@+/, '').trim());
+    }
+  });
+
+  const [
+    usersSnap,
+    postsSnap,
+    commentsSnap,
+    followsSnap,
+    verifSnap,
+    mpApprovedSnap,
+    mpPendingSnap,
+    reportsSnap,
+    verifCandSnap,
+    helpDeskSnap,
+    notifsSnap,
+  ] = await Promise.all([
+    safeCol(USERS_COL),
+    safeCol(POSTS_COL),
+    safeCol(COMMENTS_COL),
+    safeCol(FOLLOWS_COL),
+    safeCol(VERIFICATIONS_COL),
+    safeCol(MARKETPLACE_APPROVED_COL),
+    safeCol(MARKETPLACE_PENDING_COL),
+    safeCol(REPORTS_COL),
+    safeCol(VERIF_CANDIDATES_COL),
+    safeCol(HELPDESK_COL),
+    safeCol(NOTIFICATIONS_COL),
+  ]);
+
+  const users: UserProfile[] = [];
+  usersSnap.forEach((d: any) => {
+    const raw = d.data() as UserProfile;
+    if (!raw || (!raw.nickname && !raw.studentEmail)) return;
+    const uId = String(raw.id || d.id).trim();
+    const uNick = String(raw.nickname || '').toLowerCase().replace(/^@+/, '').trim();
+    if (uId === 'usr_admin_modula' || uNick === 'modula') return;
+    if (isDemoUser(raw) || isDemoNickname(raw.nickname)) return;
+    if (deletedIds.has(uId) || (uNick && deletedNicks.has(uNick))) return;
+    const clean = stripSecretUserFieldsForFirestore({
+      ...raw,
+      id: uId,
+      isAdmin: false,
+      accountType: raw.accountType === 'Admin' ? 'Student' : raw.accountType || 'Student',
+    });
+    users.push(clean);
+  });
+
+  const posts: Post[] = [];
+  postsSnap.forEach((d: any) => {
+    const raw = d.data() as Post;
+    if (!raw) return;
+    const p: Post = { ...raw, id: raw.id || d.id };
+    if (!isDemoPost(p) && !p.id.startsWith('repost_') && !(p.isRepost && p.repostedPostId)) {
+      posts.push(p);
+    }
+  });
+
+  const comments: Comment[] = [];
+  commentsSnap.forEach((d: any) => {
+    const raw = d.data() as Comment;
+    if (!raw) return;
+    const c: Comment = { ...raw, id: raw.id || d.id };
+    if (!isDemoComment(c)) comments.push(c);
+  });
+
+  const follows: FollowRecord[] = [];
+  followsSnap.forEach((d: any) => {
+    const raw = d.data() as FollowRecord;
+    if (raw && raw.followerNickname && raw.followingNickname) {
+      follows.push({ ...raw, id: raw.id || d.id });
+    }
+  });
+
+  const verificationRequests: VerificationRequest[] = [];
+  verifSnap.forEach((d: any) => {
+    const raw = d.data() as VerificationRequest;
+    if (raw && raw.id && !isDemoVerificationRequest(raw)) verificationRequests.push(raw);
+  });
+
+  const marketplaceItems: MarketplaceItem[] = [];
+  mpApprovedSnap.forEach((d: any) => {
+    const raw = d.data() as MarketplaceItem;
+    if (raw && raw.id && !isDemoMarketplaceItem(raw)) marketplaceItems.push(raw);
+  });
+
+  const pendingMarketplaceItems: MarketplaceItem[] = [];
+  mpPendingSnap.forEach((d: any) => {
+    const raw = d.data() as MarketplaceItem;
+    if (raw && raw.id && !isDemoMarketplaceItem(raw)) pendingMarketplaceItems.push(raw);
+  });
+
+  const reports: Report[] = [];
+  reportsSnap.forEach((d: any) => {
+    const raw = d.data() as Report;
+    if (raw && raw.id) reports.push(raw);
+  });
+
+  const verifCandidates: any[] = [];
+  verifCandSnap.forEach((d: any) => {
+    const raw = d.data();
+    if (raw) verifCandidates.push({ ...raw, id: raw.id || d.id });
+  });
+
+  const helpDeskInquiries: HelpDeskInquiry[] = [];
+  helpDeskSnap.forEach((d: any) => {
+    const raw = d.data() as HelpDeskInquiry;
+    if (raw && raw.id) helpDeskInquiries.push(raw);
+  });
+
+  const notifications: Record<string, CampusNotification[]> = {};
+  notifsSnap.forEach((d: any) => {
+    const raw = d.data() as CampusNotification;
+    if (!raw) return;
+    const nId = String(raw.id || d.id);
+    if (raw.type === 'DIRECT_MESSAGE' || nId.startsWith('notif_dm_')) return;
+    const rawTarget = String(raw.targetNickname || '').trim();
+    if (!rawTarget) return;
+    const bucket = rawTarget === '__all__' ? '__all__' : rawTarget.toLowerCase().replace(/^@+/, '');
+    if (!bucket) return;
+    if (!notifications[bucket]) notifications[bucket] = [];
+    notifications[bucket].push({ ...raw, id: nId, targetNickname: bucket });
+  });
+
+  return {
+    adminEmail,
+    users: mergeUsers([], users),
+    posts,
+    comments,
+    follows,
+    verificationRequests,
+    marketplaceItems,
+    pendingMarketplaceItems,
+    reports,
+    verifCandidates,
+    helpDeskInquiries,
+    notifications,
+  };
+}
+
+
 
 
 

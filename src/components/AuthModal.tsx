@@ -125,6 +125,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [loginAuthStage, setLoginAuthStage] = useState<'idle' | 'authenticating' | 'confirmed'>('idle');
+  const [needsPasswordResetIdentifier, setNeedsPasswordResetIdentifier] = useState('');
 
   // Forgot Password Recovery Flow State (No OTP)
   const [forgotStep, setForgotStep] = useState<'IDENTIFY' | 'VERIFY_SECURITY' | 'NEW_PASSWORD'>('IDENTIFY');
@@ -344,6 +345,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setNeedsPasswordResetIdentifier('');
     setLoginAuthStage('idle');
 
     const trimmedIdentifier = loginIdentifier.trim();
@@ -384,6 +386,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setLoginAuthStage('idle');
         if (res.status === 403 && data?.isPending) {
           setAccountNoticeType('PENDING');
+        }
+        if (data?.needsPasswordReset) {
+          setNeedsPasswordResetIdentifier(String(data.identifier || trimmedIdentifier));
         }
         setErrorMessage(data?.error || 'Incorrect username or password. Please try again.');
         return;
@@ -621,6 +626,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <Info size={16} className="text-rose-600 shrink-0 mt-0.5" />
                 <span className="leading-relaxed">{errorMessage}</span>
               </div>
+              {needsPasswordResetIdentifier && mode === 'LOGIN' && (
+                <div className="pt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotIdentifierInput(needsPasswordResetIdentifier);
+                      setForgotStep('IDENTIFY');
+                      setNeedsPasswordResetIdentifier('');
+                      setErrorMessage('');
+                      setResetSuccessMessage('');
+                      setMode('FORGOT_PASSWORD');
+                    }}
+                    className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <KeyRound size={14} />
+                    <span>Set / Restore Password Now</span>
+                  </button>
+                </div>
+              )}
               {(matricConflictDetected || errorMessage.includes('already associated with an account')) ? (
                 <div className="pt-2 border-t border-rose-200/80 space-y-2">
                   <div className="flex items-center gap-1.5 text-rose-900 font-bold">

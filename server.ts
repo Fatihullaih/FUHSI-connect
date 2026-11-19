@@ -1790,6 +1790,26 @@ app.post('/api/auth/login', async (req, res) => {
 
     const isAdminTarget = Boolean(matched.isAdmin || String(matched.id) === 'usr_admin_modula');
 
+    if (!matched.passwordHash && !isAdminTarget) {
+      appendAuditLog({
+        event: 'LOGIN_PASSWORD_RESET_REQUIRED',
+        actorId: String(matched.id),
+        actorNickname: String(matched.nickname || `@${cleanUsername}`),
+        actorIsAdmin: false,
+        ip,
+        userAgent,
+        status: 'DENY',
+        details: 'Account profile restored without passwordHash; identity-verified password reset required.',
+      });
+      return res.status(401).json({
+        success: false,
+        needsPasswordReset: true,
+        identifier: String(matched.studentEmail || matched.nickname || ''),
+        error:
+          'Your account profile was restored, but your password needs to be set again before logging in. Click "Set / Restore Password Now" below to verify your details and create a new password.',
+      });
+    }
+
     if (!verifyPassword(trimmedPassword, matched.passwordHash)) {
       appendAuditLog({
         event: isAdminTarget ? 'ADMIN_LOGIN_FAILED' : 'LOGIN_FAILED',
@@ -2166,7 +2186,7 @@ app.post('/api/auth/verify-reset-identity', (req, res) => {
       });
     }
 
-    const registeredPhone = String(matchedUser.emergencyHomePhone || '').replace(/\D/g, '');
+    const registeredPhone = String(matchedUser.emergencyHomePhone || matchedUser.phoneNumber || '').replace(/\D/g, '');
     const enteredPhone = String(phone || '').replace(/\D/g, '');
     if (!registeredPhone || !enteredPhone || registeredPhone !== enteredPhone) {
       return res.status(401).json({
@@ -2412,6 +2432,61 @@ app.post('/api/admin/rotate-password', requireAdmin, (req: AuthedRequest, res) =
     reauthRequired: true,
     message: 'Admin password rotated and all sessions revoked. Please log in with your new password.',
   });
+});
+
+app.post('/api/admin/users/:userId/reset-password', requireAdmin, (req: AuthedRequest, res) => {
+  try {
+    const rawUserId = String(req.params.userId || '').trim();
+    const newPassword = String(req.body?.newPassword || '').trim();
+    if (!rawUserId) {
+      return res.status(400).json({ success: false, error: 'User ID is required.' });
+    }
+    if (newPassword.length < 4) {
+      return res.status(400).json({ success: false, error: 'Temporary password must be at least 4 characters.' });
+    }
+
+    const idx = (activeDb.users || []).findIndex((u: any) => u && String(u.id) === rawUserId);
+    if (idx === -1) {
+      return res.status(404).json({ success: false, error: 'Student/guest account not found.' });
+    }
+
+    const target = activeDb.users[idx];
+    if (target.isAdmin || String(target.id) === 'usr_admin_modula' || normalizeServerHandle(target.nickname) === 'modula') {
+      return res.status(403).json({ success: false, error: 'Use Rotate Password for Administrator account.' });
+    }
+
+    activeDb.users[idx] = {
+      ...target,
+      passwordHash: hashPassword(newPassword),
+      sessionVersion: (Number(target.sessionVersion) || 1) + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    delete activeDb.users[idx].password;
+    delete activeDb.users[idx].savedPassword;
+
+    revokeAllSessionsForUser(String(target.id), 'Admin issued temporary password reset');
+    persistServerDb();
+
+    appendAuditLog({
+      event: 'ADMIN_RESET_USER_PASSWORD',
+      actorId: String(req.sessionUser?.id || 'usr_admin_modula'),
+      actorNickname: String(req.sessionUser?.nickname || '@modula'),
+      actorIsAdmin: true,
+      targetId: String(target.id),
+      ip: getClientIp(req),
+      userAgent: getUserAgent(req),
+      status: 'INFO',
+      details: `Admin set a new password for ${target.nickname || target.id} and revoked prior sessions.`,
+    });
+
+    return res.json({
+      success: true,
+      message: `Password updated for ${target.nickname || target.id}.`,
+    });
+  } catch (err: any) {
+    console.error('[Admin Reset User Password] Error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to reset user password.' });
+  }
 });
 
 // ============================================================================
@@ -3168,7 +3243,11 @@ app.post('/api/db/sync', requireAuth, (req: AuthedRequest, res) => {
         const inNick = normalizeServerHandle(incoming.nickname);
         if (deletedIds.has(inId) || deletedNicks.has(inNick)) continue;
 
-        const existing = inId ? userMap.get(inId) : undefined;
+        const existing =
+          (inId ? userMap.get(inId) : undefined) ||
+          (inNick
+            ? Array.from(userMap.values()).find((u: any) => normalizeServerHandle(u?.nickname) === inNick)
+            : undefined);
         if (existing) {
           let authoritativeNick = existing.nickname;
           const exNickClean = normalizeServerHandle(existing.nickname);

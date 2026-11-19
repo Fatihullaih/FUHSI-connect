@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Post, Report, VerificationRequest, MarketplaceItem, UserProfile, BadgeType, CampusNotification } from '../types';
 import { getStoredUsers, saveStoredUsers, isGuestAccount, isModulaAccount, markUserPermanentlyDeleted, purgeAccountPermanently, purgeAccountPermanentlyAsync, updateUserBadgeAndVerification } from '../utils/userDbUtils';
 import { pushServerDbSync, fetchServerDb, mergeUsers } from '../utils/apiSync';
-import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore } from '../lib/firestoreSync';
+import { deleteUserFromFirestore, subscribeVerificationFee, saveVerificationFeeToFirestore, saveUserToFirestore, saveUsersBatchToFirestore, saveVerificationRequestToFirestore, adminRecoverAllFromFirestore } from '../lib/firestoreSync';
 import { Shield, Lock, Search, Eye, CheckCircle2, XCircle, AlertTriangle, MessageSquare, Send, Award, RefreshCw, Key, Check, UserCheck, ShoppingBag, PhoneCall, AlertCircle, Mail, ShieldAlert, Info, Trash2, ChevronLeft, ChevronRight, X, GraduationCap, Building2, User, Loader2, Megaphone } from 'lucide-react';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { getUserBadgeInfo } from '../utils/verificationUtils';
@@ -212,6 +212,91 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
     }
   };
 
+  const [isRecoveringCloud, setIsRecoveringCloud] = useState(false);
+  const [cloudRecoverySummary, setCloudRecoverySummary] = useState<string | null>(null);
+  const [adminTempPassword, setAdminTempPassword] = useState('');
+  const [isResettingStudentPass, setIsResettingStudentPass] = useState(false);
+  const [studentPassResetMsg, setStudentPassResetMsg] = useState<string | null>(null);
+
+  const handleRestoreFromFirestoreCloud = async () => {
+    setSecurityActionError(null);
+    setSecurityActionStatus(null);
+    setCloudRecoverySummary(null);
+    setIsRecoveringCloud(true);
+    try {
+      const recovered = await adminRecoverAllFromFirestore();
+      await pushServerDbSync({
+        users: recovered.users,
+        posts: recovered.posts,
+        comments: recovered.comments,
+        follows: recovered.follows,
+        verificationRequests: recovered.verificationRequests,
+        marketplaceItems: recovered.marketplaceItems,
+        pendingMarketplaceItems: recovered.pendingMarketplaceItems,
+        reports: recovered.reports,
+        verifCandidates: recovered.verifCandidates,
+        helpDeskInquiries: recovered.helpDeskInquiries,
+        notifications: recovered.notifications,
+      });
+
+      const refreshed = await fetchServerDb();
+      if (refreshed?.users) {
+        saveStoredUsers(refreshed.users);
+        setAllUsersList(refreshed.users);
+      }
+      if (refreshed?.posts) {
+        try { localStorage.setItem('fuhsi_posts_db', JSON.stringify(refreshed.posts)); } catch {}
+      }
+      if (refreshed?.comments) {
+        try { localStorage.setItem('fuhsi_comments_db', JSON.stringify(refreshed.comments)); } catch {}
+      }
+      window.dispatchEvent(new CustomEvent('fuhsi_users_updated'));
+      void loadSecurityAuditLogs();
+
+      const summary = `Cloud recovery via ${recovered.adminEmail || 'Firebase Admin'} complete: ${recovered.users.length} account(s), ${recovered.posts.length} post(s), ${recovered.comments.length} comment(s), ${recovered.marketplaceItems.length} marketplace item(s), and ${recovered.verificationRequests.length} verification request(s) synced.`;
+      setCloudRecoverySummary(summary);
+      setSecurityActionStatus(summary);
+    } catch (err: any) {
+      const msg = String(err?.message || err || 'Could not restore from Firestore.');
+      setSecurityActionError(
+        msg.includes('permission') || msg.includes('Missing or insufficient')
+          ? 'Permission denied by Firestore rules. Please sign in with your Firebase Admin Google account (adepojufatih33@gmail.com).'
+          : msg
+      );
+    } finally {
+      setIsRecoveringCloud(false);
+    }
+  };
+
+  const handleAdminResetStudentPassword = async (student: UserProfile) => {
+    setStudentPassResetMsg(null);
+    const trimmed = adminTempPassword.trim();
+    if (trimmed.length < 4) {
+      setStudentPassResetMsg('Enter at least 4 characters for the temporary password.');
+      return;
+    }
+    setIsResettingStudentPass(true);
+    try {
+      const res = await authFetch(`/api/admin/users/${encodeURIComponent(student.id)}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        setStudentPassResetMsg(data?.error || 'Failed to reset student password.');
+        return;
+      }
+      setAdminTempPassword('');
+      setStudentPassResetMsg(`Password updated for ${student.nickname}. They can now log in immediately.`);
+      void loadSecurityAuditLogs();
+    } catch {
+      setStudentPassResetMsg('Network error resetting student password.');
+    } finally {
+      setIsResettingStudentPass(false);
+    }
+  };
+
   // Identity Lookup State
   const [lookupQuery, setLookupQuery] = useState('');
   const [lookupResult, setLookupResult] = useState<UserProfile | null>(null);
@@ -302,6 +387,8 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       (bInfo.badgeType && bInfo.badgeType !== 'NONE' ? bInfo.badgeType : (u.badgeType && u.badgeType !== 'NONE' ? u.badgeType : 'BLUE')) as BadgeType
     );
     setStudentBadgeTitle(bInfo.badgeTitle || u.badgeTitle || '');
+    setAdminTempPassword('');
+    setStudentPassResetMsg(null);
   };
 
   const handleUpdateStudentAcademicData = (student: UserProfile, targetLevel?: string, targetDept?: string) => {
@@ -959,6 +1046,27 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
             {isRotatingPassword ? 'Rotating...' : 'Rotate Password'}
           </button>
         </form>
+
+        <div className="p-3.5 rounded-xl bg-teal-50/80 border border-teal-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="text-xs space-y-0.5">
+            <div className="font-extrabold text-teal-950">Restore Accounts & Campus Data from Firebase Cloud</div>
+            <p className="text-[11px] text-teal-800 leading-relaxed">
+              Sign in with Google Admin (<strong>adepojufatih33@gmail.com</strong>) to recover accounts, posts, comments, and marketplace records stored in Firestore into the active server database.
+            </p>
+            {cloudRecoverySummary && (
+              <p className="text-[11px] font-bold text-emerald-800 pt-1">{cloudRecoverySummary}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleRestoreFromFirestoreCloud()}
+            disabled={isRecoveringCloud}
+            className="px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-extrabold text-xs flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
+          >
+            {isRecoveringCloud ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            <span>{isRecoveringCloud ? 'Restoring...' : 'Restore from Firebase Cloud'}</span>
+          </button>
+        </div>
 
         {auditError && (
           <div className="text-xs text-rose-700 font-semibold">{auditError}</div>
@@ -2597,6 +2705,37 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Admin Password Recovery Helper for Student/Guest Account */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                <div className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
+                  <Key size={14} className="text-teal-700" />
+                  <span>Set / Reset Account Password (Admin)</span>
+                </div>
+                <p className="text-[11px] text-slate-600">
+                  If this student&apos;s account was restored from Firestore without a password hash or they forgot their password, assign a temporary password here.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2 text-xs">
+                  <input
+                    type="text"
+                    value={adminTempPassword}
+                    onChange={(e) => setAdminTempPassword(e.target.value)}
+                    placeholder="New temporary password (4+ chars)"
+                    className="flex-1 rounded-xl border border-slate-300 px-3 py-2 bg-white text-slate-900"
+                  />
+                  <button
+                    type="button"
+                    disabled={isResettingStudentPass || adminTempPassword.trim().length < 4}
+                    onClick={() => void handleAdminResetStudentPassword(student)}
+                    className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-extrabold cursor-pointer shrink-0"
+                  >
+                    {isResettingStudentPass ? 'Saving...' : 'Set Password'}
+                  </button>
+                </div>
+                {studentPassResetMsg && (
+                  <div className="text-[11px] font-bold text-teal-800">{studentPassResetMsg}</div>
+                )}
+              </div>
 
               {/* Actions toolbar inside modal */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
