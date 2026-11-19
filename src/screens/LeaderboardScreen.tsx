@@ -1,6 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { UserProfile, Post, Comment, Report } from '../types';
-import { EMPTY_USER_PROFILE } from '../data/initialData';
+
+const EMPTY_USER_PROFILE: UserProfile = {
+  id: '',
+  nickname: '',
+  accountType: 'Student',
+  department: '',
+  level: '',
+  bio: '',
+  isVerified: false,
+  isApproved: false,
+  isAdmin: false,
+};
 import { VerificationBadge } from '../components/VerificationBadge';
 import { AvatarIcon } from '../components/AvatarIcon';
 import { isDemoUser, isDemoNickname } from '../utils/postGenerator';

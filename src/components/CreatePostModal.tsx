@@ -3,8 +3,19 @@ import { PostCategory, UserProfile } from '../types';
 import { compressImageFile } from '../utils/imageUtils';
 import { isGuestAccount } from '../utils/userDbUtils';
 import { VerificationModal } from './VerificationModal';
-import { EMPTY_USER_PROFILE } from '../data/initialData';
 import { LinkifiedText, tokenizeTextForLinks } from './LinkifiedText';
+
+const EMPTY_USER_PROFILE: UserProfile = {
+  id: '',
+  nickname: '',
+  accountType: 'Student',
+  department: '',
+  level: '',
+  bio: '',
+  isVerified: false,
+  isApproved: false,
+  isAdmin: false,
+};
 import { 
   X, 
   ArrowLeft,

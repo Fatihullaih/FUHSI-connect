@@ -1,13 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import {
-  EMPTY_USER_PROFILE,
-  INITIAL_POSTS,
-  INITIAL_COMMENTS,
-  INITIAL_MARKETPLACE_ITEMS,
-  INITIAL_PENDING_MARKETPLACE_ITEMS,
-  INITIAL_VERIFICATION_REQUESTS,
-  INITIAL_REPORTS,
-} from './data/initialData';
 import fuhsiLogo from './assets/images/fuhsi_logo_1785485694958.jpg';
 import { calculateUserPoints } from './utils/reputationUtils';
 import { useAdminPendingCounts } from './utils/adminAlertUtils';
@@ -357,6 +348,21 @@ const FullApp: React.FC = () => {
     setStoredTheme(nextTheme);
   };
 
+  const EMPTY_USER_PROFILE: UserProfile = {
+    id: '',
+    nickname: '',
+    accountType: 'Student',
+    department: '',
+    level: '',
+    bio: '',
+    isVerified: false,
+    isApproved: false,
+    isAdmin: false,
+    strikes: 0,
+    isBanned: false,
+    privacyMode: 'Nickname',
+  };
+
   // App Core State initialized strictly empty until server session verification succeeds
   const [userProfile, setUserProfile] = useState<UserProfile>(EMPTY_USER_PROFILE);
   const lastProfileSaveTimestampRef = useRef<number>(0);
@@ -368,7 +374,7 @@ const FullApp: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_COMMENTS;
+    return [];
   });
 
   const [posts, setPosts] = useState<Post[]>(() => {
@@ -414,7 +420,7 @@ const FullApp: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_POSTS;
+    return [];
   });
 
   const postsRef = useRef<Post[]>(posts);
@@ -439,7 +445,7 @@ const FullApp: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_MARKETPLACE_ITEMS;
+    return [];
   });
 
   const [pendingMarketplaceItems, setPendingMarketplaceItems] = useState<MarketplaceItem[]>(() => {
@@ -449,7 +455,7 @@ const FullApp: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_PENDING_MARKETPLACE_ITEMS;
+    return [];
   });
 
   const [verificationRequests, setVerificationRequests] = useState<VerificationRequest[]>(() => {
@@ -459,7 +465,7 @@ const FullApp: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_VERIFICATION_REQUESTS;
+    return [];
   });
 
   const [reports, setReports] = useState<Report[]>(() => {
@@ -469,7 +475,7 @@ const FullApp: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_REPORTS;
+    return [];
   });
 
   const [userBookmarksMap, setUserBookmarksMap] = useState<Record<string, string[]>>(() => {

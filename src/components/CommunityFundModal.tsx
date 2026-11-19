@@ -1,5 +1,18 @@
 import React, { useState } from 'react';
-import { INITIAL_COMMUNITY_FUND } from '../data/initialData';
+
+const COMMUNITY_FUND_SUMMARY: {
+  totalFundRaised: number;
+  currentMonthBalance: number;
+  activeDonorsCount: number;
+  lastAuditDate: string;
+  recentExpenditures: Array<{ id: string; description: string; category: string; date: string; amount: number }>;
+} = {
+  totalFundRaised: 0,
+  currentMonthBalance: 0,
+  activeDonorsCount: 0,
+  lastAuditDate: 'Current Cycle',
+  recentExpenditures: [],
+};
 import { 
   Heart, 
   ShieldCheck, 
@@ -116,15 +129,15 @@ export const CommunityFundModal: React.FC<CommunityFundModalProps> = ({
               <div className="grid grid-cols-3 gap-3">
                 <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-center">
                   <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Fund Raised</span>
-                  <span className="text-lg font-black text-teal-800">₦{INITIAL_COMMUNITY_FUND.totalFundRaised.toLocaleString()}</span>
+                  <span className="text-lg font-black text-teal-800">₦{COMMUNITY_FUND_SUMMARY.totalFundRaised.toLocaleString()}</span>
                 </div>
                 <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-center">
                   <span className="text-[10px] font-bold text-slate-500 uppercase block">Current Month Balance</span>
-                  <span className="text-lg font-black text-purple-800">₦{INITIAL_COMMUNITY_FUND.currentMonthBalance.toLocaleString()}</span>
+                  <span className="text-lg font-black text-purple-800">₦{COMMUNITY_FUND_SUMMARY.currentMonthBalance.toLocaleString()}</span>
                 </div>
                 <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-center">
                   <span className="text-[10px] font-bold text-slate-500 uppercase block">Active Student Donors</span>
-                  <span className="text-lg font-black text-amber-600">{INITIAL_COMMUNITY_FUND.activeDonorsCount} Supporters</span>
+                  <span className="text-lg font-black text-amber-600">{COMMUNITY_FUND_SUMMARY.activeDonorsCount} Supporters</span>
                 </div>
               </div>
 
@@ -136,7 +149,7 @@ export const CommunityFundModal: React.FC<CommunityFundModalProps> = ({
                     <span>Transparent Fund Allocation Breakdown</span>
                   </h3>
                   <span className="text-[11px] font-bold text-teal-800 bg-teal-100 px-2.5 py-0.5 rounded-full">
-                    {INITIAL_COMMUNITY_FUND.lastAuditDate}
+                    {COMMUNITY_FUND_SUMMARY.lastAuditDate}
                   </span>
                 </div>
 
@@ -190,7 +203,7 @@ export const CommunityFundModal: React.FC<CommunityFundModalProps> = ({
                   Recent Monthly Expenditures Log (Audited)
                 </h4>
                 <div className="space-y-2">
-                  {INITIAL_COMMUNITY_FUND.recentExpenditures.map((exp) => (
+                  {COMMUNITY_FUND_SUMMARY.recentExpenditures.map((exp) => (
                     <div key={exp.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
                       <div>
                         <span className="font-bold text-slate-900 block">{exp.description}</span>

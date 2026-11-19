@@ -9,7 +9,6 @@ import { getUserBadgeInfo } from '../utils/verificationUtils';
 import { FUHSI_DEPARTMENTS } from '../components/AuthModal';
 import { AdminTradeDesk } from '../components/AdminTradeDesk';
 import { AdminChatReportsDesk } from '../components/AdminChatReportsDesk';
-import { INITIAL_VERIFICATION_CANDIDATES } from '../data/initialData';
 import { sendUserNotification, sendBroadcastNotification, normalizeNickname } from '../utils/messagingUtils';
 import { useAdminPendingCounts } from '../utils/adminAlertUtils';
 import { authFetch } from '../utils/authSession';
@@ -89,7 +88,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_VERIFICATION_CANDIDATES || [];
+    return [];
   });
 
   useEffect(() => {

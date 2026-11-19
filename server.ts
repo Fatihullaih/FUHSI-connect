@@ -3,7 +3,6 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
-import { DEFAULT_SERVER_DB } from './src/data/serverDefaults';
 import {
   mergeUsers,
   mergePosts,
@@ -324,6 +323,32 @@ app.use('/api', (_req, res, next) => {
 // ============================================================================
 // SERVER DATABASE INITIALIZATION & STARTUP SECURITY MIGRATION
 // ============================================================================
+
+const DEFAULT_SERVER_DB = {
+  users: [] as any[],
+  posts: [] as any[],
+  comments: [] as any[],
+  marketplaceItems: [] as any[],
+  pendingMarketplaceItems: [] as any[],
+  verificationRequests: [] as any[],
+  reports: [] as any[],
+  verifCandidates: [] as any[],
+  sentEmails: [] as any[],
+  directMessages: [] as any[],
+  chatConversations: [] as any[],
+  chatReports: [] as any[],
+  chatRestrictions: [] as any[],
+  follows: [] as any[],
+  marketplaceReports: [] as any[],
+  helpDeskInquiries: [] as any[],
+  notifications: {} as Record<string, any[]>,
+  supersededUsernames: {} as Record<string, any>,
+  deletedUserIds: [] as string[],
+  deletedUserNicknames: [] as string[],
+  deletedPostIds: [] as string[],
+  deletedCommentIds: [] as string[],
+  verificationFee: 1500,
+};
 
 let activeDb: typeof DEFAULT_SERVER_DB = { ...DEFAULT_SERVER_DB };
 
