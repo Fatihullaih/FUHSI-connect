@@ -95,13 +95,22 @@ export function stripSensitiveUserFields<T extends Record<string, any>>(user: T)
   return copy;
 }
 
+export function resolveApiUrl(input: RequestInfo | URL): RequestInfo | URL {
+  const baseUrl = String((import.meta as any).env?.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (baseUrl && typeof input === 'string' && input.startsWith('/api/')) {
+    return `${baseUrl}${input}`;
+  }
+  return input;
+}
+
 export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const token = getSessionToken();
   const headers = new Headers(init.headers || {});
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
+  const resolvedInput = resolveApiUrl(input);
+  const urlStr = typeof resolvedInput === 'string' ? resolvedInput : resolvedInput instanceof URL ? resolvedInput.toString() : '';
   const isLoginOrPublicAuth =
     urlStr.includes('/api/auth/login') ||
     urlStr.includes('/api/auth/register') ||
@@ -109,7 +118,7 @@ export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}
     urlStr.includes('/api/auth/verify-reset-identity') ||
     urlStr.includes('/api/auth/reset-password');
 
-  const res = await fetch(input, {
+  const res = await fetch(resolvedInput, {
     ...init,
     headers,
     credentials: 'include',

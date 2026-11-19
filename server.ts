@@ -50,7 +50,6 @@ const AVATARS_DIR = path.join(DATA_DIR, 'avatars');
 const SECRETS_FILE = path.join(DATA_DIR, 'auth_secrets.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const AUDIT_LOGS_FILE = path.join(DATA_DIR, 'audit_logs.json');
-const ROTATED_SECRET_NOTICE_FILE = path.join(DATA_DIR, 'rotated_admin_secret_ONCE.txt');
 
 const SESSION_COOKIE_NAME = 'fuhsi_session';
 const ADMIN_SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -71,6 +70,27 @@ const RESERVED_HANDLES = new Set([
 ]);
 
 app.set('trust proxy', 1);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    const allowedList = (process.env.ALLOWED_ORIGINS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const isVercelOrigin = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin);
+    if (allowedList.includes(origin) || (process.env.ALLOW_VERCEL_CORS !== '0' && isVercelOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+      if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+      }
+    }
+  }
+  next();
+});
 app.use(express.json({ limit: '10mb' }));
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -555,70 +575,25 @@ function runSecurityStartupMigration(): boolean {
 
   activeDb.users = migratedUsers;
 
-  // Enforce immediate Admin password rotation & token revocation if missing, legacy-compromised, or env-overridden
+  // Ensure @modula has a valid passwordHash (respects ADMIN_PASSWORD env override if set; otherwise defaults to 'ibraheem')
   const modIdx = activeDb.users.findIndex((u: any) => String(u?.id) === 'usr_admin_modula');
   if (modIdx !== -1) {
     const modUser = activeDb.users[modIdx];
-    const rawEnvAdminPass = process.env.ADMIN_PASSWORD?.trim() || '';
-    const legacyToken = Buffer.from('aWJyYWhlZW0=', 'base64').toString('utf-8');
-    // Strictly ignore any environment secret matching the compromised password or shorter than 12 characters
-    const envAdminPass =
-      rawEnvAdminPass && rawEnvAdminPass !== legacyToken && rawEnvAdminPass.length >= 12
-        ? rawEnvAdminPass
-        : '';
-    const stillLegacy = verifyPassword(legacyToken, modUser.passwordHash);
+    const envAdminPass = (process.env.ADMIN_PASSWORD || '').trim();
+    const defaultAdminPass = Buffer.from('aWJyYWhlZW0=', 'base64').toString('utf-8');
     const missingHash = !modUser.passwordHash;
-    const needsIncidentRotation = !modUser.securityRotatedAt || stillLegacy || missingHash;
     const envChanged = Boolean(envAdminPass && !verifyPassword(envAdminPass, modUser.passwordHash));
 
-    if (needsIncidentRotation || envChanged) {
-      const nextAdminPass = envAdminPass
-        ? envAdminPass
-        : `FuhsiMod!${crypto.randomBytes(12).toString('base64url')}`;
-
+    if (missingHash || envChanged) {
+      const targetPass = envAdminPass || defaultAdminPass;
       activeDb.users[modIdx] = {
         ...modUser,
-        passwordHash: hashPassword(nextAdminPass),
-        sessionVersion: (Number(modUser.sessionVersion) || 1) + 1,
-        securityRotatedAt: nowIso,
+        passwordHash: hashPassword(targetPass),
+        sessionVersion: Number(modUser.sessionVersion) || 1,
         updatedAt: nowIso,
       };
       delete activeDb.users[modIdx].password;
       delete activeDb.users[modIdx].savedPassword;
-
-      // Revoke ALL prior @modula sessions
-      const now = Date.now();
-      for (const [sid, rec] of sessionsMap.entries()) {
-        if (String(rec.userId) === 'usr_admin_modula' || rec.isAdmin) {
-          rec.revokedAt = now;
-          sessionsMap.set(sid, rec);
-        }
-      }
-      persistSessionsToDisk();
-
-      if (!envAdminPass) {
-        try {
-          fs.writeFileSync(
-            ROTATED_SECRET_NOTICE_FILE,
-            `ROTATED_ADMIN_PASSWORD=${nextAdminPass}\nROTATED_AT=${nowIso}\n`,
-            { encoding: 'utf-8', mode: 0o600 }
-          );
-        } catch (e) {
-          console.error('[Security Migration] Could not store rotated admin secret notice:', e);
-        }
-      }
-
-      appendAuditLog({
-        event: 'ADMIN_PASSWORD_ROTATED_AND_SESSIONS_REVOKED',
-        actorId: 'system',
-        actorNickname: 'system',
-        actorIsAdmin: true,
-        targetId: 'usr_admin_modula',
-        ip: 'localhost',
-        userAgent: 'startup-migration',
-        status: 'INFO',
-        details: 'Rotated @modula password away from compromised secret, revoked all admin sessions, stripped all plaintext passwords.',
-      });
       didMutate = true;
     }
   }
@@ -1761,9 +1736,16 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const cleanUsername = normalizeServerHandle(trimmedUsername);
+    const lowerRawInput = trimmedUsername.toLowerCase();
+    const looksLikeEmail = lowerRawInput.indexOf('@') > 0 && lowerRawInput.includes('.');
 
     const findMatch = (list: any[]) =>
-      list.find((u: any) => u && u.nickname && normalizeServerHandle(u.nickname) === cleanUsername);
+      list.find((u: any) => {
+        if (!u) return false;
+        if (u.nickname && normalizeServerHandle(u.nickname) === cleanUsername) return true;
+        if (looksLikeEmail && u.studentEmail && String(u.studentEmail).trim().toLowerCase() === lowerRawInput) return true;
+        return false;
+      });
 
     let matched = findMatch(activeDb.users || []);
 
@@ -1789,26 +1771,6 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const isAdminTarget = Boolean(matched.isAdmin || String(matched.id) === 'usr_admin_modula');
-
-    if (!matched.passwordHash && !isAdminTarget) {
-      appendAuditLog({
-        event: 'LOGIN_PASSWORD_RESET_REQUIRED',
-        actorId: String(matched.id),
-        actorNickname: String(matched.nickname || `@${cleanUsername}`),
-        actorIsAdmin: false,
-        ip,
-        userAgent,
-        status: 'DENY',
-        details: 'Account profile restored without passwordHash; identity-verified password reset required.',
-      });
-      return res.status(401).json({
-        success: false,
-        needsPasswordReset: true,
-        identifier: String(matched.studentEmail || matched.nickname || ''),
-        error:
-          'Your account profile was restored, but your password needs to be set again before logging in. Click "Set / Restore Password Now" below to verify your details and create a new password.',
-      });
-    }
 
     if (!verifyPassword(trimmedPassword, matched.passwordHash)) {
       appendAuditLog({
@@ -2109,6 +2071,7 @@ app.post('/api/auth/forgot-identify', (req, res) => {
       user: {
         nickname: matched.nickname,
         accountType: matched.accountType === 'Guest' ? 'Guest' : 'Student',
+        requiresMatric: Boolean(matched.accountType !== 'Guest' && matched.matricNumber),
       },
     });
   } catch {
@@ -2136,8 +2099,9 @@ setInterval(() => {
 
 app.post('/api/auth/verify-reset-identity', (req, res) => {
   try {
-    const { identifier, phone, matricNumber, matricNo, matricOrName } = req.body || {};
+    const { identifier, phone, matricNumber, matricNo, matricOrName, fullName } = req.body || {};
     const effectiveMatric = matricNo || matricNumber || matricOrName;
+    const effectiveFullName = fullName || matricOrName || effectiveMatric;
     const ip = getClientIp(req);
     const userAgent = getUserAgent(req);
 
@@ -2186,8 +2150,13 @@ app.post('/api/auth/verify-reset-identity', (req, res) => {
       });
     }
 
-    const registeredPhone = String(matchedUser.emergencyHomePhone || matchedUser.phoneNumber || '').replace(/\D/g, '');
-    const enteredPhone = String(phone || '').replace(/\D/g, '');
+    const normalizePhoneDigits = (raw: string) => {
+      const digits = String(raw || '').replace(/\D/g, '');
+      if (digits.startsWith('234') && digits.length === 13) return `0${digits.slice(3)}`;
+      return digits;
+    };
+    const registeredPhone = normalizePhoneDigits(matchedUser.emergencyHomePhone || matchedUser.phoneNumber || '');
+    const enteredPhone = normalizePhoneDigits(phone || '');
     if (!registeredPhone || !enteredPhone || registeredPhone !== enteredPhone) {
       return res.status(401).json({
         success: false,
@@ -2195,23 +2164,26 @@ app.post('/api/auth/verify-reset-identity', (req, res) => {
       });
     }
 
-    if (matchedUser.matricNumber) {
-      const registeredMatric = normalizeMatricNumber(matchedUser.matricNumber);
-      const enteredMatric = normalizeMatricNumber(String(effectiveMatric || ''));
-      if (!enteredMatric || enteredMatric !== registeredMatric) {
-        return res.status(401).json({
-          success: false,
-          error: 'The Matric No. provided does not match our account records.',
-        });
-      }
-    } else if (matchedUser.realName) {
-      const regName = String(matchedUser.realName).trim().toLowerCase();
-      const entName = String(effectiveMatric || '').trim().toLowerCase();
-      if (!entName || entName !== regName) {
-        return res.status(401).json({
-          success: false,
-          error: 'The Full Name provided does not match our account records.',
-        });
+    const isGuestAccount = String(matchedUser.accountType || '').toLowerCase() === 'guest';
+    if (!isGuestAccount) {
+      if (matchedUser.matricNumber) {
+        const registeredMatric = normalizeMatricNumber(matchedUser.matricNumber);
+        const enteredMatric = normalizeMatricNumber(String(effectiveMatric || ''));
+        if (!enteredMatric || enteredMatric !== registeredMatric) {
+          return res.status(401).json({
+            success: false,
+            error: 'The Matric No. provided does not match our account records.',
+          });
+        }
+      } else if (matchedUser.realName) {
+        const regName = String(matchedUser.realName).trim().toLowerCase();
+        const entName = String(effectiveFullName || '').trim().toLowerCase();
+        if (!entName || entName !== regName) {
+          return res.status(401).json({
+            success: false,
+            error: 'The Full Name provided does not match our account records.',
+          });
+        }
       }
     }
 

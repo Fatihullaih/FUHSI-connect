@@ -125,12 +125,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [loginAuthStage, setLoginAuthStage] = useState<'idle' | 'authenticating' | 'confirmed'>('idle');
-  const [needsPasswordResetIdentifier, setNeedsPasswordResetIdentifier] = useState('');
 
   // Forgot Password Recovery Flow State (No OTP)
   const [forgotStep, setForgotStep] = useState<'IDENTIFY' | 'VERIFY_SECURITY' | 'NEW_PASSWORD'>('IDENTIFY');
   const [forgotIdentifierInput, setForgotIdentifierInput] = useState('');
-  const [forgotMatchedUser, setForgotMatchedUser] = useState<Partial<UserProfile> | null>(null);
+  const [forgotMatchedUser, setForgotMatchedUser] = useState<(Partial<UserProfile> & { requiresMatric?: boolean }) | null>(null);
   const [forgotPhoneInput, setForgotPhoneInput] = useState('');
   const [forgotMatricOrNameInput, setForgotMatricOrNameInput] = useState('');
   const [forgotResetToken, setForgotResetToken] = useState('');
@@ -345,7 +344,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
-    setNeedsPasswordResetIdentifier('');
     setLoginAuthStage('idle');
 
     const trimmedIdentifier = loginIdentifier.trim();
@@ -386,9 +384,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setLoginAuthStage('idle');
         if (res.status === 403 && data?.isPending) {
           setAccountNoticeType('PENDING');
-        }
-        if (data?.needsPasswordReset) {
-          setNeedsPasswordResetIdentifier(String(data.identifier || trimmedIdentifier));
         }
         setErrorMessage(data?.error || 'Incorrect username or password. Please try again.');
         return;
@@ -438,7 +433,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMessage('');
     const input = forgotIdentifierInput.trim();
     if (!input) {
-      setErrorMessage('Please enter your registered Email Address.');
+      setErrorMessage('Please enter your registered Email Address or Username.');
       return;
     }
 
@@ -453,7 +448,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const data = await res.json().catch(() => null);
 
       if (!res.ok || !data?.success || !data?.user) {
-        setErrorMessage(data?.error || 'No registered account was found with that Email Address.');
+        setErrorMessage(data?.error || 'No registered account was found with that Email Address or Username.');
         setIsSubmitting(false);
         return;
       }
@@ -476,15 +471,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     e.preventDefault();
     setErrorMessage('');
 
+    const isGuestResetTarget =
+      forgotMatchedUser?.accountType === 'Guest' || forgotMatchedUser?.requiresMatric === false;
     const phoneClean = forgotPhoneInput.trim().replace(/[\s-]/g, '');
-    const matricClean = forgotMatricOrNameInput.trim().toUpperCase();
+    const rawSecondInput = forgotMatricOrNameInput.trim();
+    const matricClean = rawSecondInput.toUpperCase();
 
     if (!phoneClean) {
       setErrorMessage('Please enter your registered phone number.');
       return;
     }
-    if (!matricClean) {
-      setErrorMessage('Please enter your Matric No. or registered full name.');
+    if (!isGuestResetTarget && !rawSecondInput) {
+      setErrorMessage('Please enter your Matric No.');
       return;
     }
 
@@ -497,8 +495,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         body: JSON.stringify({
           identifier: forgotIdentifierInput.trim(),
           phone: phoneClean,
-          matricNo: matricClean,
-          matricNumber: matricClean,
+          matricNo: isGuestResetTarget ? '' : matricClean,
+          matricNumber: isGuestResetTarget ? '' : matricClean,
+          fullName: isGuestResetTarget ? '' : rawSecondInput,
+          matricOrName: isGuestResetTarget ? '' : rawSecondInput,
         }),
       });
 
@@ -626,25 +626,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <Info size={16} className="text-rose-600 shrink-0 mt-0.5" />
                 <span className="leading-relaxed">{errorMessage}</span>
               </div>
-              {needsPasswordResetIdentifier && mode === 'LOGIN' && (
-                <div className="pt-1 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setForgotIdentifierInput(needsPasswordResetIdentifier);
-                      setForgotStep('IDENTIFY');
-                      setNeedsPasswordResetIdentifier('');
-                      setErrorMessage('');
-                      setResetSuccessMessage('');
-                      setMode('FORGOT_PASSWORD');
-                    }}
-                    className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-                  >
-                    <KeyRound size={14} />
-                    <span>Set / Restore Password Now</span>
-                  </button>
-                </div>
-              )}
               {(matricConflictDetected || errorMessage.includes('already associated with an account')) ? (
                 <div className="pt-2 border-t border-rose-200/80 space-y-2">
                   <div className="flex items-center gap-1.5 text-rose-900 font-bold">
@@ -1359,24 +1340,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <span>Password Recovery</span>
                     </p>
                     <p className="text-teal-800 font-medium">
-                      Enter your registered <strong>Email Address</strong> to locate your account and proceed with password reset.
+                      Enter your registered <strong>Email Address or Username</strong> to locate your account and proceed with password reset.
                     </p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-1">
-                      Email Address <span className="text-rose-500">*</span>
+                      Email Address or Username <span className="text-rose-500">*</span>
                     </label>
                     <div className="relative">
                       <Mail size={15} className="absolute left-3 top-2.5 text-slate-400" />
                       <input
-                        type="email"
+                        type="text"
                         value={forgotIdentifierInput}
                         onChange={(e) => {
                           setForgotIdentifierInput(e.target.value);
                           if (errorMessage) setErrorMessage('');
                         }}
-                        placeholder=""
+                        placeholder="e.g. name@gmail.com or @username"
                         className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
                         required
                         disabled={isSubmitting}
@@ -1482,26 +1463,28 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Matric No. */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-800 mb-1">
-                      Matric No. <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <GraduationCap size={15} className="absolute left-3 top-2.5 text-slate-400" />
-                      <input
-                        type="text"
-                        value={forgotMatricOrNameInput}
-                        onChange={(e) => {
-                          setForgotMatricOrNameInput(e.target.value);
-                          setErrorMessage('');
-                        }}
-                        placeholder=""
-                        className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
-                        required
-                      />
+                  {/* Matric No. (Students only — Guests verify by Registered Phone Number only) */}
+                  {!(forgotMatchedUser?.accountType === 'Guest' || forgotMatchedUser?.requiresMatric === false) && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-800 mb-1">
+                        Matric No. <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <GraduationCap size={15} className="absolute left-3 top-2.5 text-slate-400" />
+                        <input
+                          type="text"
+                          value={forgotMatricOrNameInput}
+                          onChange={(e) => {
+                            setForgotMatricOrNameInput(e.target.value);
+                            setErrorMessage('');
+                          }}
+                          placeholder="e.g. FUHSI/..."
+                          className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-teal-500 focus:outline-none"
+                          required
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {errorMessage && (
                     <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2">
@@ -1525,7 +1508,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                     <button
                       type="submit"
-                      disabled={isSubmitting || !forgotPhoneInput.trim() || !forgotMatricOrNameInput.trim()}
+                      disabled={
+                        isSubmitting ||
+                        !forgotPhoneInput.trim() ||
+                        (!(forgotMatchedUser?.accountType === 'Guest' || forgotMatchedUser?.requiresMatric === false) &&
+                          !forgotMatricOrNameInput.trim())
+                      }
                       className="py-2.5 px-3.5 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                       {isSubmitting ? (
