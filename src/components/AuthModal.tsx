@@ -385,7 +385,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (res.status === 403 && data?.isPending) {
           setAccountNoticeType('PENDING');
         }
-        setErrorMessage(data?.error || 'Incorrect username or password. Please try again.');
+        const fallbackMsg =
+          !data || res.status >= 500
+            ? 'Cannot reach the authentication server. If you are on Vercel, ensure BACKEND_API_URL is configured and your backend server is running.'
+            : 'Incorrect username or password. Please try again.';
+        setErrorMessage(data?.error || fallbackMsg);
         return;
       }
 
