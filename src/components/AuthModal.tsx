@@ -387,7 +387,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
         const fallbackMsg =
           !data || res.status >= 500
-            ? 'Cannot reach the authentication server. If you are on Vercel, ensure BACKEND_API_URL is configured and your backend server is running.'
+            ? 'Unable to connect to the server right now. Please refresh the page and try again.'
             : 'Incorrect username or password. Please try again.';
         setErrorMessage(data?.error || fallbackMsg);
         return;

@@ -2,6 +2,10 @@
   "cleanUrls": true,
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "/api?__api_path=$1"
+    },
+    {
       "source": "/post/(.*)",
       "destination": "/index.html"
     },
