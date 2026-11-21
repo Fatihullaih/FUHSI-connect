@@ -385,11 +385,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (res.status === 403 && data?.isPending) {
           setAccountNoticeType('PENDING');
         }
-        const fallbackMsg =
-          !data || res.status >= 500
-            ? 'Unable to connect to the server right now. Please refresh the page and try again.'
-            : 'Incorrect username or password. Please try again.';
-        setErrorMessage(data?.error || fallbackMsg);
+        setErrorMessage(data?.error || 'Incorrect username or password. Please try again.');
         return;
       }
 
