@@ -28,7 +28,7 @@ export function calculateAdminPendingCounts(
   // 1. Pending Student Accounts: Unapproved, non-admin, non-modula accounts
   const users = usersList && usersList.length > 0 ? usersList : getStoredUsers();
   const pendingStudents = users.filter((u) => {
-    if (u.isAdmin || u.nickname === '@modula') return false;
+    if (u.isAdmin || u.nickname === '@modula' || u.nickname === '@modular') return false;
     return !u.isApproved;
   }).length;
 

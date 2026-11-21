@@ -72,6 +72,7 @@ export function isDemoNickname(nick?: string | null): boolean {
     clean === 'adedeji' ||
     clean.startsWith('deji') ||
     clean === 'modula' ||
+    clean === 'modular' ||
     clean === 'fatih'
   ) {
     return false;
@@ -107,7 +108,7 @@ export function isDemoNickname(nick?: string | null): boolean {
 
 export function isDemoUser(u: Partial<UserProfile> | null | undefined): boolean {
   if (!u) return false;
-  if (u.isAdmin || u.nickname === '@modula' || u.id === 'usr_admin_modula') return false;
+  if (u.isAdmin || u.nickname === '@modula' || u.nickname === '@modular' || u.id === 'usr_admin_modula') return false;
 
   const emailLower = (u.studentEmail || '').toLowerCase();
   const matricUpper = (u.matricNumber || '').toUpperCase();

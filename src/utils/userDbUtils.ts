@@ -79,7 +79,7 @@ export function isUserPermanentlyDeleted(userOrIdentifier?: Partial<UserProfile>
   }
 
   // Admin cannot be deleted
-  if (targetId === 'usr_admin_modula' || targetNick === 'modula') return false;
+  if (targetId === 'usr_admin_modula' || targetNick === 'modula' || targetNick === 'modular') return false;
 
   // 1. Check permanent internal account ID
   if (targetId && deletedList.some((entry) => entry.id && String(entry.id).trim() === targetId)) {
@@ -232,8 +232,8 @@ export function purgeAccountPermanently(options: PurgeAccountOptions): PurgedDat
   const cleanEmail = options.studentEmail ? options.studentEmail.trim().toLowerCase() : '';
   const cleanMatric = options.matricNumber ? options.matricNumber.trim().toUpperCase() : '';
 
-  if (targetUserId === 'usr_admin_modula' || cleanNick === 'modula') {
-    throw new Error('Platform administrator (@modula) cannot be deleted.');
+  if (targetUserId === 'usr_admin_modula' || cleanNick === 'modula' || cleanNick === 'modular') {
+    throw new Error('Platform administrator cannot be deleted.');
   }
 
   // 1. Mark permanently deleted in tombstone
@@ -593,8 +593,8 @@ export async function purgeAccountPermanentlyAsync(options: PurgeAccountOptions)
   const cleanEmail = options.studentEmail ? options.studentEmail.trim().toLowerCase() : '';
   const cleanMatric = options.matricNumber ? options.matricNumber.trim().toUpperCase() : '';
 
-  if (targetUserId === 'usr_admin_modula' || cleanNick === 'modula') {
-    throw new Error('Platform administrator (@modula) cannot be deleted.');
+  if (targetUserId === 'usr_admin_modula' || cleanNick === 'modula' || cleanNick === 'modular') {
+    throw new Error('Platform administrator cannot be deleted.');
   }
 
   // 1. Run local cascade purge
@@ -683,15 +683,15 @@ export function isModulaAccount(userOrNickname?: Partial<UserProfile> | string |
   if (!userOrNickname) return false;
   if (typeof userOrNickname === 'string') {
     const clean = userOrNickname.trim().toLowerCase().replace(/^@/, '');
-    return clean === 'modula' || clean === 'usr_admin_modula';
+    return clean === 'modula' || clean === 'modular' || clean === 'usr_admin_modula';
   }
   if (typeof userOrNickname === 'object') {
-    if (userOrNickname.id === 'usr_admin_modula') return true;
+    if (userOrNickname.id === 'usr_admin_modula' || userOrNickname.isAdmin === true) return true;
     const nick = (userOrNickname.nickname || '').trim().toLowerCase().replace(/^@/, '');
-    if (nick === 'modula') return true;
+    if (nick === 'modula' || nick === 'modular') return true;
     if ((userOrNickname as any).authorNickname) {
       const aNick = (userOrNickname as any).authorNickname.trim().toLowerCase().replace(/^@/, '');
-      if (aNick === 'modula') return true;
+      if (aNick === 'modula' || aNick === 'modular') return true;
     }
   }
   return false;
@@ -751,7 +751,7 @@ export function filterOutModula<T extends Partial<UserProfile> | { nickname?: st
     const nick = (item as any).nickname || (item as any).authorNickname || (item as any).sellerNickname || '';
     if (isModulaAccount(nick)) return false;
     const clean = typeof nick === 'string' ? nick.trim().toLowerCase().replace(/^@/, '') : '';
-    if (clean === 'modula') return false;
+    if (clean === 'modula' || clean === 'modular') return false;
     const id = (item as any).id || '';
     if (id === 'usr_admin_modula') return false;
     return true;
@@ -770,7 +770,13 @@ export function formatJoinDate(user?: Partial<UserProfile> | null): string {
   }
 
   // Pre-existing administrator account
-  if (user.id === 'usr_admin_modula' || user.nickname === '@modula' || user.nickname === 'modula') {
+  if (
+    user.id === 'usr_admin_modula' ||
+    user.nickname === '@modula' ||
+    user.nickname === 'modula' ||
+    user.nickname === '@modular' ||
+    user.nickname === 'modular'
+  ) {
     return 'Sep 2024';
   }
 
@@ -1064,7 +1070,7 @@ export function isGuestAccount(userOrNickname?: Partial<UserProfile> | string | 
     return false;
   }
   const cleanNick = (userOrNickname || '').toLowerCase().replace(/^@/, '');
-  if (cleanNick === 'modula') return false;
+  if (cleanNick === 'modula' || cleanNick === 'modular') return false;
   try {
     if (typeof localStorage !== 'undefined') {
       const activeStr = localStorage.getItem('fuhsi_active_user');

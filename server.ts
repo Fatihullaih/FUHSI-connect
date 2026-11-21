@@ -56,6 +56,7 @@ const ADMIN_SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const STUDENT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const RESERVED_HANDLES = new Set([
+  'modular',
   'modula',
   'admin',
   'administrator',
@@ -482,13 +483,15 @@ function runSecurityStartupMigration(): boolean {
   const migratedUsers = usersList.map((rawUser: any) => {
     if (!rawUser) return rawUser;
     const u = { ...rawUser };
+    const cleanNick = normalizeServerHandle(u.nickname);
     const isModula =
-      String(u.id) === 'usr_admin_modula' || normalizeServerHandle(u.nickname) === 'modula';
+      String(u.id) === 'usr_admin_modula' || cleanNick === 'modula' || cleanNick === 'modular';
 
     if (isModula) {
       modulaFound = true;
       u.id = 'usr_admin_modula';
-      u.nickname = '@modula';
+      u.nickname = '@modular';
+      u.previousNicknames = Array.from(new Set([...(Array.isArray(u.previousNicknames) ? u.previousNicknames : []), '@modula']));
       u.accountType = 'Admin';
       u.isAdmin = true;
       u.isApproved = true;
@@ -499,7 +502,7 @@ function runSecurityStartupMigration(): boolean {
       u.level = '';
       u.matricNumber = '';
     } else {
-      // Strictly ensure no non-modula user carries accidental admin privileges
+      // Strictly ensure no non-admin user carries accidental admin privileges
       if (u.isAdmin || String(u.accountType).toLowerCase() === 'admin') {
         u.isAdmin = false;
         u.accountType = u.accountType === 'Guest' ? 'Guest' : 'Student';
@@ -548,7 +551,8 @@ function runSecurityStartupMigration(): boolean {
   if (!modulaFound) {
     migratedUsers.unshift({
       id: 'usr_admin_modula',
-      nickname: '@modula',
+      nickname: '@modular',
+      previousNicknames: ['@modula'],
       accountType: 'Admin',
       realName: 'Administrator',
       matricNumber: '',
@@ -556,7 +560,7 @@ function runSecurityStartupMigration(): boolean {
       emergencyHomePhone: '',
       department: '',
       level: '',
-      bio: 'Platform Administrator (@modula).',
+      bio: 'Platform Administrator (@modular).',
       avatarKey: '1',
       badgeType: 'GOLD',
       badgeTitle: 'Official Admin',
@@ -575,20 +579,21 @@ function runSecurityStartupMigration(): boolean {
 
   activeDb.users = migratedUsers;
 
-  // Ensure @modula has a valid passwordHash (respects ADMIN_PASSWORD env override if set; otherwise defaults to 'ibraheem')
+  // Ensure Admin (@modular) always preserves the configured password (defaults to 'ibraheem')
   const modIdx = activeDb.users.findIndex((u: any) => String(u?.id) === 'usr_admin_modula');
   if (modIdx !== -1) {
     const modUser = activeDb.users[modIdx];
     const envAdminPass = (process.env.ADMIN_PASSWORD || '').trim();
     const defaultAdminPass = Buffer.from('aWJyYWhlZW0=', 'base64').toString('utf-8');
-    const missingHash = !modUser.passwordHash;
-    const envChanged = Boolean(envAdminPass && !verifyPassword(envAdminPass, modUser.passwordHash));
+    const targetPass = envAdminPass || defaultAdminPass;
+    const needsPassSync = !modUser.passwordHash || !verifyPassword(targetPass, modUser.passwordHash);
 
-    if (missingHash || envChanged) {
-      const targetPass = envAdminPass || defaultAdminPass;
+    if (needsPassSync || modUser.nickname !== '@modular') {
       activeDb.users[modIdx] = {
         ...modUser,
-        passwordHash: hashPassword(targetPass),
+        nickname: '@modular',
+        previousNicknames: Array.from(new Set([...(Array.isArray(modUser.previousNicknames) ? modUser.previousNicknames : []), '@modula'])),
+        passwordHash: needsPassSync ? hashPassword(targetPass) : modUser.passwordHash,
         sessionVersion: Number(modUser.sessionVersion) || 1,
         updatedAt: nowIso,
       };
@@ -1552,7 +1557,7 @@ async function syncFirestoreToActiveDb() {
       if (data && (data.nickname || data.studentEmail)) {
         const uId = String(data.id || d.id);
         const uNick = normalizeServerHandle(data.nickname);
-        if (uId === 'usr_admin_modula' || uNick === 'modula') return; // Never let Firestore overwrite hardened Admin record
+        if (uId === 'usr_admin_modula' || uNick === 'modula' || uNick === 'modular') return; // Never let Firestore overwrite hardened Admin record
         if (fsDeletedIds.has(uId) || fsDeletedNicks.has(uNick)) {
           deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
         } else {
@@ -1736,12 +1741,14 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const cleanUsername = normalizeServerHandle(trimmedUsername);
+    const isAdminAlias = cleanUsername === 'modular' || cleanUsername === 'modula';
     const lowerRawInput = trimmedUsername.toLowerCase();
     const looksLikeEmail = lowerRawInput.indexOf('@') > 0 && lowerRawInput.includes('.');
 
     const findMatch = (list: any[]) =>
       list.find((u: any) => {
         if (!u) return false;
+        if (isAdminAlias && String(u.id) === 'usr_admin_modula') return true;
         if (u.nickname && normalizeServerHandle(u.nickname) === cleanUsername) return true;
         if (looksLikeEmail && u.studentEmail && String(u.studentEmail).trim().toLowerCase() === lowerRawInput) return true;
         return false;
@@ -1758,7 +1765,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     if (!matched) {
       appendAuditLog({
-        event: cleanUsername === 'modula' ? 'ADMIN_LOGIN_FAILED' : 'LOGIN_FAILED',
+        event: isAdminAlias ? 'ADMIN_LOGIN_FAILED' : 'LOGIN_FAILED',
         actorId: 'unknown',
         actorNickname: `@${cleanUsername}`,
         actorIsAdmin: false,
@@ -2038,7 +2045,7 @@ app.post('/api/auth/forgot-identify', (req, res) => {
       return res.status(400).json({ success: false, error: 'Please enter your Username or Email Address.' });
     }
 
-    if (cleanNick === 'modula' || cleanInput === 'usr_admin_modula') {
+    if (cleanNick === 'modula' || cleanNick === 'modular' || cleanInput === 'usr_admin_modula') {
       return res.status(403).json({
         success: false,
         error: 'Administrator password recovery cannot be performed via self-service. Rotate via authenticated Admin Console or server environment.',
@@ -2112,16 +2119,16 @@ app.post('/api/auth/verify-reset-identity', (req, res) => {
     const cleanInput = String(identifier).trim().toLowerCase();
     const cleanNick = cleanInput.replace(/^@+/, '');
 
-    if (cleanNick === 'modula' || cleanInput === 'usr_admin_modula') {
+    if (cleanNick === 'modula' || cleanNick === 'modular' || cleanInput === 'usr_admin_modula') {
       appendAuditLog({
         event: 'ADMIN_RESET_BLOCKED',
         actorId: 'anonymous',
-        actorNickname: '@modula',
+        actorNickname: '@modular',
         actorIsAdmin: false,
         ip,
         userAgent,
         status: 'DENY',
-        details: 'Attempted self-service identity verification against @modula.',
+        details: 'Attempted self-service identity verification against Admin account.',
       });
       return res.status(403).json({
         success: false,
@@ -2234,7 +2241,7 @@ app.post('/api/auth/reset-password', (req, res) => {
     const cleanInput = String(identifier).trim().toLowerCase();
     const cleanNick = cleanInput.replace(/^@+/, '');
 
-    if (cleanNick === 'modula' || cleanInput === 'usr_admin_modula') {
+    if (cleanNick === 'modula' || cleanNick === 'modular' || cleanInput === 'usr_admin_modula') {
       return res.status(403).json({
         success: false,
         error: 'Administrator password recovery cannot be performed via this endpoint.',
@@ -2423,7 +2430,12 @@ app.post('/api/admin/users/:userId/reset-password', requireAdmin, (req: AuthedRe
     }
 
     const target = activeDb.users[idx];
-    if (target.isAdmin || String(target.id) === 'usr_admin_modula' || normalizeServerHandle(target.nickname) === 'modula') {
+    if (
+      target.isAdmin ||
+      String(target.id) === 'usr_admin_modula' ||
+      normalizeServerHandle(target.nickname) === 'modula' ||
+      normalizeServerHandle(target.nickname) === 'modular'
+    ) {
       return res.status(403).json({ success: false, error: 'Use Rotate Password for Administrator account.' });
     }
 
@@ -2849,8 +2861,8 @@ app.post('/api/user/delete', requireAuth, (req: AuthedRequest, res) => {
     const cleanNick = nickname ? normalizeServerHandle(nickname) : normalizeServerHandle(caller.nickname);
     const cleanEmail = studentEmail ? String(studentEmail).trim().toLowerCase() : '';
 
-    if (rawId === 'usr_admin_modula' || cleanNick === 'modula') {
-      return res.status(400).json({ success: false, error: 'Platform administrator (@modula) cannot be deleted.' });
+    if (rawId === 'usr_admin_modula' || cleanNick === 'modula' || cleanNick === 'modular') {
+      return res.status(400).json({ success: false, error: 'Platform administrator cannot be deleted.' });
     }
 
     if (!caller.isAdmin && rawId !== String(caller.id)) {
@@ -2984,8 +2996,8 @@ app.post('/api/db/sync', requireAuth, (req: AuthedRequest, res) => {
           if (!incoming || typeof incoming !== 'object') continue;
           const inId = String(incoming.id || '').trim();
           const inNick = normalizeServerHandle(incoming.nickname);
-          if (inId === 'usr_admin_modula' || inNick === 'modula') {
-            return rejectForbidden('Cannot modify @modula administrator record.');
+          if (inId === 'usr_admin_modula' || inNick === 'modula' || inNick === 'modular') {
+            return rejectForbidden('Cannot modify administrator record.');
           }
           if (incoming.isAdmin === true || String(incoming.accountType || '').toLowerCase() === 'admin') {
             return rejectForbidden('Cannot self-assign or escalate Administrator privileges.');
@@ -3142,7 +3154,7 @@ app.post('/api/db/sync', requireAuth, (req: AuthedRequest, res) => {
         .filter((id: string) => id !== 'usr_admin_modula');
       const toDeleteNicks = (updates.deletedUserNicknames || [])
         .map((n: any) => normalizeServerHandle(n))
-        .filter((n: string) => n !== 'modula');
+        .filter((n: string) => n !== 'modula' && n !== 'modular');
 
       for (let i = 0; i < Math.max(toDeleteIds.length, toDeleteNicks.length); i++) {
         executePermanentUserDeletion(toDeleteIds[i] || '', toDeleteNicks[i] || '', '');

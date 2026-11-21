@@ -52,6 +52,7 @@ import {
   seedFirestoreInitialDataIfNeeded,
   purgeAllExceptAdminFromFirestore,
   cleanupModulaFirestoreDoc,
+  trySilentAdminRecoverFromFirestore,
 } from './lib/firestoreSync';
 import { initTheme, getStoredTheme, setStoredTheme, ThemeMode } from './utils/themeUtils';
 import { getUserBadgeInfo, normalizeBadgeColor } from './utils/verificationUtils';
@@ -1303,8 +1304,33 @@ const FullApp: React.FC = () => {
         } catch {}
       }
 
-      // 1. Sync Users List
+      // 1. Sync Users List (if server has 0 non-admin users and Firebase Admin is already signed in, auto-recover silently)
       if (Array.isArray(db.users) && db.users.length > 0) {
+        const nonAdminOnServer = db.users.filter((u) => u && !u.isAdmin && !isModulaAccount(u));
+        if (nonAdminOnServer.length === 0 && userProfile?.isAdmin) {
+          try {
+            const silentRecovered = await trySilentAdminRecoverFromFirestore();
+            if (silentRecovered && silentRecovered.users.length > 0) {
+              await pushServerDbSync({
+                users: silentRecovered.users,
+                posts: silentRecovered.posts,
+                comments: silentRecovered.comments,
+                follows: silentRecovered.follows,
+                verificationRequests: silentRecovered.verificationRequests,
+                marketplaceItems: silentRecovered.marketplaceItems,
+                pendingMarketplaceItems: silentRecovered.pendingMarketplaceItems,
+                reports: silentRecovered.reports,
+                verifCandidates: silentRecovered.verifCandidates,
+                helpDeskInquiries: silentRecovered.helpDeskInquiries,
+                notifications: silentRecovered.notifications,
+              });
+              const refreshedAfterRecovery = await fetchServerDb();
+              if (refreshedAfterRecovery && Array.isArray(refreshedAfterRecovery.users)) {
+                db.users = refreshedAfterRecovery.users;
+              }
+            }
+          } catch {}
+        }
         const validUsers = db.users.filter((u) => !isDemoUser(u) && !isDemoNickname(u.nickname));
         if (validUsers.length > 0) {
           const localStoredUsers = getStoredUsers();
@@ -4436,7 +4462,7 @@ const FullApp: React.FC = () => {
       lowerNick.includes('anonymous') ||
       lowerNick.includes('anon') ||
       (!isModulaAccount(userProfile) &&
-        ['modula', 'admin', 'administrator', 'superadmin', 'usr_admin_modula'].includes(cleanCheck))
+        ['modular', 'modula', 'admin', 'administrator', 'superadmin', 'usr_admin_modula'].includes(cleanCheck))
     ) {
       return 'Error: That username is reserved or not permitted. Please choose a unique student handle.';
     }

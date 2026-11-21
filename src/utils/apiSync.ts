@@ -119,7 +119,7 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
       const uId = u.id ? String(u.id).trim() : '';
       const uNick = u.nickname ? String(u.nickname).trim().toLowerCase().replace(/^@/, '') : '';
       const uEmail = u.studentEmail ? String(u.studentEmail).trim().toLowerCase() : '';
-      if (uId === 'usr_admin_modula' || uNick === 'modula') return false;
+      if (uId === 'usr_admin_modula' || uNick === 'modula' || uNick === 'modular') return false;
 
       return deleted.some((d) => {
         if (uId && d.id && String(d.id).trim() === uId) return true;
@@ -207,7 +207,7 @@ export function mergeUsers(a: UserProfile[] = [], b: UserProfile[] = []): UserPr
       }
 
       const targetNick = (primary.nickname || secondary.nickname || '').toLowerCase().replace(/^@/, '');
-      const isMod = targetNick === 'modula' && Boolean(primary.isAdmin || secondary.isAdmin);
+      const isMod = (targetNick === 'modula' || targetNick === 'modular') && Boolean(primary.isAdmin || secondary.isAdmin);
 
       const merged: UserProfile = {
         ...secondary,

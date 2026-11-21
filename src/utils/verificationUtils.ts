@@ -67,8 +67,14 @@ export function getUserBadgeInfo(nicknameOrId?: string, fallbackUser?: UserProfi
     user = fallbackUser;
   }
 
-  // Platform administrator (@modula) is always verified
-  if (clean === 'modula' || user?.nickname?.toLowerCase().replace(/^@/, '') === 'modula' || user?.isAdmin) {
+  // Platform administrator (@modular / @modula) is always verified
+  if (
+    clean === 'modula' ||
+    clean === 'modular' ||
+    user?.nickname?.toLowerCase().replace(/^@/, '') === 'modula' ||
+    user?.nickname?.toLowerCase().replace(/^@/, '') === 'modular' ||
+    user?.isAdmin
+  ) {
     const adminType = normalizeBadgeColor(user?.badgeType || fallbackUser?.badgeType || 'BLUE');
     const adminTitle = (user?.badgeTitle || fallbackUser?.badgeTitle || '').trim();
     return {

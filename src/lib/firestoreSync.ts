@@ -173,7 +173,7 @@ export function subscribeUsers(onUpdate: (users: UserProfile[]) => void) {
               const uId = u.id ? String(u.id).trim() : '';
               const uNick = u.nickname ? String(u.nickname).trim().toLowerCase().replace(/^@/, '') : '';
               const uEmail = u.studentEmail ? String(u.studentEmail).trim().toLowerCase() : '';
-              if (uId !== 'usr_admin_modula' && uNick !== 'modula') {
+              if (uId !== 'usr_admin_modula' && uNick !== 'modula' && uNick !== 'modular') {
                 const isDel = deleted.some((d: any) => {
                   if (uId && d.id && String(d.id).trim() === uId) return true;
                   if (uNick && d.nickname && String(d.nickname).trim().toLowerCase().replace(/^@/, '') === uNick) return true;
@@ -1172,7 +1172,7 @@ export async function purgeAllExceptAdminFromFirestore(): Promise<void> {
     const usersSnap = await getDocs(collection(db, USERS_COL));
     usersSnap.forEach((docSnap) => {
       const data = docSnap.data() as UserProfile;
-      if (!data.isAdmin && data.nickname !== '@modula') {
+      if (!data.isAdmin && data.nickname !== '@modula' && data.nickname !== '@modular') {
         deleteDoc(docSnap.ref).catch((err) => logFirestoreIssue('Error deleting user doc during purge', err));
       }
     });
@@ -1730,6 +1730,26 @@ export interface FirestoreCloudRecoveryResult {
 }
 
 /**
+ * Silently recovers non-demo records from Firestore when the Firebase Admin Google account
+ * (adepojufatih33@gmail.com) is already signed in, without triggering any popup.
+ */
+export async function trySilentAdminRecoverFromFirestore(): Promise<FirestoreCloudRecoveryResult | null> {
+  try {
+    const currentFbUser = auth.currentUser;
+    if (
+      !currentFbUser ||
+      !currentFbUser.emailVerified ||
+      String(currentFbUser.email || '').toLowerCase() !== 'adepojufatih33@gmail.com'
+    ) {
+      return null;
+    }
+    return await recoverCollectionsFromFirestore(currentFbUser.email || '');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Authenticates the Firebase Admin (adepojufatih33@gmail.com) via Google Sign-In popup
  * and recovers all non-demo records from Firestore into the central server database.
  */
@@ -1748,7 +1768,10 @@ export async function adminRecoverAllFromFirestore(): Promise<FirestoreCloudReco
   if (!currentFbUser) {
     throw new Error('Google Sign-In did not complete. Please sign in with the Firebase Admin email.');
   }
+  return await recoverCollectionsFromFirestore(adminEmail);
+}
 
+async function recoverCollectionsFromFirestore(adminEmail: string): Promise<FirestoreCloudRecoveryResult> {
   const safeCol = async (colName: string) => {
     try {
       return await getDocs(collection(db, colName));
@@ -1802,7 +1825,7 @@ export async function adminRecoverAllFromFirestore(): Promise<FirestoreCloudReco
     if (!raw || (!raw.nickname && !raw.studentEmail)) return;
     const uId = String(raw.id || d.id).trim();
     const uNick = String(raw.nickname || '').toLowerCase().replace(/^@+/, '').trim();
-    if (uId === 'usr_admin_modula' || uNick === 'modula') return;
+    if (uId === 'usr_admin_modula' || uNick === 'modula' || uNick === 'modular') return;
     if (isDemoUser(raw) || isDemoNickname(raw.nickname)) return;
     if (deletedIds.has(uId) || (uNick && deletedNicks.has(uNick))) return;
     const clean = stripSecretUserFieldsForFirestore({

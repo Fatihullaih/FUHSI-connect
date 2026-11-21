@@ -818,7 +818,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
       const storedList = getStoredUsers();
       const userToDelete = storedList.find((u) => (userId && u.id === userId) || (nick && u.nickname?.toLowerCase() === nick.toLowerCase()));
 
-      if (userToDelete?.isAdmin || nick === '@modula') {
+      if (userToDelete?.isAdmin || isModulaAccount(userToDelete)) {
         alert('The platform administrator account cannot be deleted.');
         return;
       }
@@ -1001,6 +1001,26 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
             </button>
           </div>
         </div>
+
+        {allUsersList.filter((u) => !u.isAdmin && !isModulaAccount(u)).length === 0 && (
+          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="text-xs space-y-0.5">
+              <div className="font-extrabold text-amber-950">Existing Accounts Need Cloud Sync on This Server</div>
+              <p className="text-[11px] text-amber-900 leading-relaxed">
+                This server currently only has the Admin account. Click the button to sign in with Google Admin (<strong>adepojufatih33@gmail.com</strong>) and restore all existing Student and Guest accounts from Firebase Cloud.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleRestoreFromFirestoreCloud()}
+              disabled={isRecoveringCloud}
+              className="px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-extrabold text-xs flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
+            >
+              {isRecoveringCloud ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              <span>{isRecoveringCloud ? 'Restoring...' : 'Restore Accounts Now'}</span>
+            </button>
+          </div>
+        )}
 
         {securityActionStatus && (
           <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold">
@@ -1388,7 +1408,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              All ({allUsersList.filter((u) => !u.isAdmin && u.nickname !== '@modula').length})
+              All ({allUsersList.filter((u) => !u.isAdmin && !isModulaAccount(u)).length})
             </button>
             <button
               onClick={() => { setActiveUserTab('PENDING'); setStudentCurrentPage(1); }}
@@ -1398,7 +1418,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Pending ({allUsersList.filter((u) => !u.isApproved && !u.isAdmin && u.nickname !== '@modula').length})
+              Pending ({allUsersList.filter((u) => !u.isApproved && !u.isAdmin && !isModulaAccount(u)).length})
             </button>
             <button
               onClick={() => { setActiveUserTab('APPROVED'); setStudentCurrentPage(1); }}
@@ -1408,7 +1428,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Approved ({allUsersList.filter((u) => u.isApproved && !u.isAdmin && u.nickname !== '@modula').length})
+              Approved ({allUsersList.filter((u) => u.isApproved && !u.isAdmin && !isModulaAccount(u)).length})
             </button>
             <button
               type="button"
@@ -1452,7 +1472,7 @@ export const ModerationScreen: React.FC<ModerationScreenProps> = ({
         {(() => {
           const cleanSearch = studentSearchQuery.trim().toLowerCase().replace(/^@/, '');
           const filteredStudents = allUsersList.filter((u) => {
-            if (u.isAdmin || u.nickname === '@modula') return false;
+            if (u.isAdmin || isModulaAccount(u)) return false;
             if (activeUserTab === 'PENDING' && u.isApproved) return false;
             if (activeUserTab === 'APPROVED' && !u.isApproved) return false;
 

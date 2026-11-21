@@ -150,6 +150,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
     const cleanHandleCheck = nickname.trim().toLowerCase().replace(/^@+/, '');
     if (
+      cleanHandleCheck === 'modular' ||
       cleanHandleCheck === 'modula' ||
       cleanHandleCheck === 'admin' ||
       cleanHandleCheck === 'administrator' ||

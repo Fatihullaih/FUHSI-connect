@@ -8,16 +8,24 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     res.end(
       JSON.stringify({
         success: false,
-        error:
-          'Backend API URL is not configured on Vercel. Set BACKEND_API_URL in your Vercel Project Environment Variables pointing to your running Express server.',
+        error: 'Server connection is not configured for this deployment.',
       })
     );
     return;
   }
 
   try {
-    const reqUrl = req.url || '/api';
-    const targetUrl = `${backendBase}${reqUrl.startsWith('/') ? reqUrl : `/${reqUrl}`}`;
+    const rawUrl = req.url || '/api';
+    const parsed = new URL(rawUrl, 'http://localhost');
+    const pathParam = parsed.searchParams.get('__api_path');
+    let forwardPath = rawUrl;
+    if (pathParam !== null) {
+      parsed.searchParams.delete('__api_path');
+      const qs = parsed.searchParams.toString();
+      const cleanPath = pathParam.replace(/^\/+/, '');
+      forwardPath = `/api/${cleanPath}${qs ? `?${qs}` : ''}`;
+    }
+    const targetUrl = `${backendBase}${forwardPath.startsWith('/') ? forwardPath : `/${forwardPath}`}`;
 
     const chunks: Buffer[] = [];
     for await (const chunk of req) {
@@ -56,7 +64,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     res.end(
       JSON.stringify({
         success: false,
-        error: err?.message || 'Failed to reach upstream backend server.',
+        error: err?.message || 'Unable to reach backend server.',
       })
     );
   }
